@@ -7,6 +7,8 @@ import 'services/drawing_provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/drawing_screen.dart';
 
+import 'services/server_input_handler.dart';
+
 void main() {
   runZonedGuarded(() {
     WidgetsFlutterBinding.ensureInitialized();
@@ -17,10 +19,14 @@ void main() {
       debugPrint('[Global Error] ${details.exceptionAsString()}');
     };
 
+    final connection = ConnectionProvider();
+    // Instantiate ServerInputHandler so it registers its listeners to ConnectionProvider
+    ServerInputHandler(connection);
+
     runApp(
       MultiProvider(
         providers: [
-          ChangeNotifierProvider(create: (_) => ConnectionProvider()),
+          ChangeNotifierProvider<ConnectionProvider>.value(value: connection),
           ChangeNotifierProvider(create: (_) => DrawingProvider()),
         ],
         child: const SuperDisplayApp(),
