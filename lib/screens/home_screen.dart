@@ -517,6 +517,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           );
         }
         final device = connection.discoveredDevices[index - 1];
+        final size = MediaQuery.of(context).size;
         return DeviceListTile(
           device: device,
           onTap: () async {
@@ -524,6 +525,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               device.ip,
               port: device.port,
               onPinRequired: () => _promptForPin(context),
+              screenWidth: size.width,
+              screenHeight: size.height,
             );
             if (success && context.mounted) {
               Navigator.of(context).pushNamed('/drawing');
@@ -686,10 +689,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         portController: _portController,
         onConnect: (ip, port) async {
           Navigator.pop(context);
+          final size = MediaQuery.of(context).size;
           final success = await connection.connectToServer(
             ip,
             port: port,
             onPinRequired: () => _promptForPin(context),
+            screenWidth: size.width,
+            screenHeight: size.height,
           );
           if (success && context.mounted) {
             Navigator.of(context).pushNamed('/drawing');
@@ -709,33 +715,62 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       builder: (context) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade600,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text('Settings', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 20),
-              ListTile(
-                leading: const Icon(Icons.info_outline, color: Color(0xFF6C63FF)),
-                title: const Text('About', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('SuperDisplay Clone v1.0', style: TextStyle(color: Colors.grey)),
-                trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-              ),
-              ListTile(
-                leading: const Icon(Icons.bug_report_outlined, color: Color(0xFF6C63FF)),
-                title: const Text('Protocol', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('WebSocket + UDP Discovery', style: TextStyle(color: Colors.grey)),
-                trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-              ),
-            ],
+          child: Consumer<ConnectionProvider>(
+            builder: (context, connection, _) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade600,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('Settings', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  SwitchListTile(
+                    activeColor: const Color(0xFF6C63FF),
+                    title: const Text('Stylus Support', style: TextStyle(color: Colors.white)),
+                    subtitle: const Text('Enable pressure sensitivity and pen inputs', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    value: connection.hasStylusSupportSetting,
+                    onChanged: (val) {
+                      connection.setStylusSupport(val);
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.compress, color: Color(0xFF6C63FF)),
+                    title: const Text('Max Pressure Level', style: TextStyle(color: Colors.white)),
+                    subtitle: Text('Current: ${connection.maxPressureSetting}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                    trailing: DropdownButton<double>(
+                      dropdownColor: const Color(0xFF1A1A2E),
+                      value: connection.maxPressureSetting,
+                      style: const TextStyle(color: Colors.white),
+                      underline: Container(),
+                      items: const [
+                        DropdownMenuItem(value: 1.0, child: Text('1.0 (Default)')),
+                        DropdownMenuItem(value: 1024.0, child: Text('1024 (Basic)')),
+                        DropdownMenuItem(value: 2048.0, child: Text('2048 (Medium)')),
+                        DropdownMenuItem(value: 4096.0, child: Text('4096 (High)')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          connection.setMaxPressure(val);
+                        }
+                      },
+                    ),
+                  ),
+                  const Divider(color: Colors.white12),
+                  const ListTile(
+                    leading: Icon(Icons.info_outline, color: Color(0xFF6C63FF)),
+                    title: Text('About', style: TextStyle(color: Colors.white)),
+                    subtitle: Text('SuperDisplay Clone v1.0', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
