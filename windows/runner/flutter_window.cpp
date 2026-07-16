@@ -1,6 +1,8 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <cmath>
+#include <algorithm>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -180,169 +182,189 @@ bool FlutterWindow::OnCreate() {
   input_channel->SetMethodCallHandler(
       [this](const flutter::MethodCall<flutter::EncodableValue>& call,
              std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-        if (call.method_name() == "initializePointerDevice") {
-          bool init_success = InitializePenDevice();
-          result->Success(flutter::EncodableValue(init_success));
-        } else if (call.method_name() == "injectPointerEvent") {
-          const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
-          if (!arguments) {
-            result->Error("InvalidArguments", "Arguments must be a map");
-            return;
-          }
-
-          int type = GetInt(*arguments, "type", 0);
-          double x = GetDouble(*arguments, "x", 0.0);
-          double y = GetDouble(*arguments, "y", 0.0);
-          double pressure = GetDouble(*arguments, "pressure", 0.5);
-          int pointerType = GetInt(*arguments, "pointerType", 0);
-          int pointerId = GetInt(*arguments, "pointerId", 0);
-          double tiltX = GetDouble(*arguments, "tiltX", 0.0);
-          double tiltY = GetDouble(*arguments, "tiltY", 0.0);
-          int buttons = GetInt(*arguments, "buttons", 0);
-
-          // Get active monitor info (DPI-aware and multi-monitor support)
-          RECT monitor_rect;
-          monitor_rect.left = 0;
-          monitor_rect.top = 0;
-          monitor_rect.right = GetSystemMetrics(SM_CXSCREEN);
-          monitor_rect.bottom = GetSystemMetrics(SM_CYSCREEN);
-
-          HWND hwnd = GetHandle();
-          if (hwnd) {
-            HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-            MONITORINFO mi = { 0 };
-            mi.cbSize = sizeof(mi);
-            if (GetMonitorInfo(hMonitor, &mi)) {
-              monitor_rect = mi.rcMonitor;
-            }
-          }
-
-          // Map normalized coords
-          int target_x = 0;
-          int target_y = 0;
-          if (g_customWidth > 0 && g_customHeight > 0) {
-            target_x = static_cast<int>(x * g_customWidth);
-            target_y = static_cast<int>(y * g_customHeight);
-          } else {
-            int monitor_width = monitor_rect.right - monitor_rect.left;
-            int monitor_height = monitor_rect.bottom - monitor_rect.top;
-            target_x = monitor_rect.left + static_cast<int>(x * monitor_width);
-            target_y = monitor_rect.top + static_cast<int>(y * monitor_height);
-          }
-
-          // Try pointer injection if available
-          if (InitializePenDevice()) {
-            POINTER_TYPE_INFO pointerInfo = {};
-            pointerInfo.type = PT_PEN;
-
-            POINTER_PEN_INFO& penInfo = pointerInfo.penInfo;
-            penInfo.pointerInfo.pointerType = PT_PEN;
-            penInfo.pointerInfo.pointerId = static_cast<UINT32>(pointerId);
-            penInfo.pointerInfo.ptPixelLocation.x = target_x;
-            penInfo.pointerInfo.ptPixelLocation.y = target_y;
-
-            DWORD pointerFlags = POINTER_FLAG_INRANGE;
-
-            // type mapping: 0 = down, 1 = move, 2 = up, 3 = cancel, 4 = hover
-            if (type == 0) {
-              pointerFlags |= POINTER_FLAG_DOWN | POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON;
-            } else if (type == 1) {
-              pointerFlags |= POINTER_FLAG_UPDATE | POINTER_FLAG_INCONTACT;
-              if (buttons & 1) {
-                pointerFlags |= POINTER_FLAG_FIRSTBUTTON;
-              }
-            } else if (type == 2) {
-              pointerFlags |= POINTER_FLAG_UP;
-            } else if (type == 3) {
-              pointerFlags |= POINTER_FLAG_UP | POINTER_FLAG_CANCELED;
-            } else if (type == 4) {
-              pointerFlags |= POINTER_FLAG_UPDATE;
-            }
-
-            if (buttons & 2) {
-              pointerFlags |= POINTER_FLAG_SECONDBUTTON;
-              penInfo.penFlags |= PEN_FLAG_BARREL;
-            }
-
-            if (pointerType == 3) { // Eraser
-              penInfo.penFlags |= PEN_FLAG_ERASER | PEN_FLAG_INVERTED;
-            }
-
-            penInfo.pointerInfo.pointerFlags = pointerFlags;
-
-            // Set Pressure
-            penInfo.pressure = static_cast<UINT32>(pressure * 1024.0);
-            penInfo.penMask |= PEN_MASK_PRESSURE;
-
-            // Set Tilt
-            penInfo.tiltX = static_cast<INT32>(tiltX);
-            penInfo.tiltY = static_cast<INT32>(tiltY);
-            penInfo.penMask |= PEN_MASK_TILT_X | PEN_MASK_TILT_Y;
-
-            BOOL success = pInjectSyntheticPointerInput(g_penDevice, &pointerInfo, 1);
-            if (success) {
-              result->Success(flutter::EncodableValue(true));
+        try {
+          if (call.method_name() == "initializePointerDevice") {
+            bool init_success = InitializePenDevice();
+            result->Success(flutter::EncodableValue(init_success));
+          } else if (call.method_name() == "injectPointerEvent") {
+            const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
+            if (!arguments) {
+              result->Error("InvalidArguments", "Arguments must be a map");
               return;
+            }
+
+            int type = GetInt(*arguments, "type", 0);
+            double x = GetDouble(*arguments, "x", 0.0);
+            double y = GetDouble(*arguments, "y", 0.0);
+            double pressure = GetDouble(*arguments, "pressure", 0.5);
+            int pointerType = GetInt(*arguments, "pointerType", 0);
+            int pointerId = GetInt(*arguments, "pointerId", 0);
+            double tiltX = GetDouble(*arguments, "tiltX", 0.0);
+            double tiltY = GetDouble(*arguments, "tiltY", 0.0);
+            int buttons = GetInt(*arguments, "buttons", 0);
+
+            // Clamp inputs to safe bounds (Bug 60)
+            double clamped_x = std::max(0.0, std::min(1.0, x));
+            double clamped_y = std::max(0.0, std::min(1.0, y));
+            double clamped_pressure = std::max(0.0, std::min(1.0, pressure));
+
+            // Get active monitor info (DPI-aware and multi-monitor support)
+            RECT monitor_rect;
+            monitor_rect.left = 0;
+            monitor_rect.top = 0;
+            monitor_rect.right = GetSystemMetrics(SM_CXSCREEN);
+            monitor_rect.bottom = GetSystemMetrics(SM_CYSCREEN);
+
+            HWND hwnd = GetHandle();
+            if (hwnd) {
+              HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+              MONITORINFO mi = { 0 };
+              mi.cbSize = sizeof(mi);
+              if (GetMonitorInfo(hMonitor, &mi)) {
+                monitor_rect = mi.rcMonitor;
+              }
+            }
+
+            // Map normalized coords using std::lround for rounding correctness (Bug 59)
+            int target_x = 0;
+            int target_y = 0;
+            if (g_customWidth > 0 && g_customHeight > 0) {
+              target_x = static_cast<int>(std::lround(clamped_x * g_customWidth));
+              target_y = static_cast<int>(std::lround(clamped_y * g_customHeight));
             } else {
+              int monitor_width = monitor_rect.right - monitor_rect.left;
+              int monitor_height = monitor_rect.bottom - monitor_rect.top;
+              target_x = monitor_rect.left + static_cast<int>(std::lround(clamped_x * monitor_width));
+              target_y = monitor_rect.top + static_cast<int>(std::lround(clamped_y * monitor_height));
+            }
+
+            // Try pointer injection if available
+            if (InitializePenDevice()) {
+              POINTER_TYPE_INFO pointerInfo = {};
+              pointerInfo.type = PT_PEN;
+
+              POINTER_PEN_INFO& penInfo = pointerInfo.penInfo;
+              penInfo.pointerInfo.pointerType = PT_PEN;
+              penInfo.pointerInfo.pointerId = static_cast<UINT32>(pointerId);
+              penInfo.pointerInfo.ptPixelLocation.x = target_x;
+              penInfo.pointerInfo.ptPixelLocation.y = target_y;
+
+              DWORD pointerFlags = POINTER_FLAG_INRANGE;
+
+              // type mapping: 0 = down, 1 = move, 2 = up, 3 = cancel, 4 = hover
+              if (type == 0) {
+                pointerFlags |= POINTER_FLAG_DOWN | POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON;
+              } else if (type == 1) {
+                pointerFlags |= POINTER_FLAG_UPDATE | POINTER_FLAG_INCONTACT;
+                if (buttons & 1) {
+                  pointerFlags |= POINTER_FLAG_FIRSTBUTTON;
+                }
+              } else if (type == 2) {
+                pointerFlags |= POINTER_FLAG_UP;
+              } else if (type == 3) {
+                pointerFlags |= POINTER_FLAG_UP | POINTER_FLAG_CANCELED;
+              } else if (type == 4) {
+                pointerFlags |= POINTER_FLAG_UPDATE;
+              }
+
+              if (buttons & 2) {
+                pointerFlags |= POINTER_FLAG_SECONDBUTTON;
+                penInfo.penFlags |= PEN_FLAG_BARREL;
+              }
+
+              if (pointerType == 3) { // Eraser
+                penInfo.penFlags |= PEN_FLAG_ERASER | PEN_FLAG_INVERTED;
+              }
+
+              penInfo.pointerInfo.pointerFlags = pointerFlags;
+
+              // Set Pressure
+              penInfo.pressure = static_cast<UINT32>(clamped_pressure * 1024.0);
+              penInfo.penMask |= PEN_MASK_PRESSURE;
+
+              // Set Tilt
+              penInfo.tiltX = static_cast<INT32>(tiltX);
+              penInfo.tiltY = static_cast<INT32>(tiltY);
+              penInfo.penMask |= PEN_MASK_TILT_X | PEN_MASK_TILT_Y;
+
+              BOOL success = pInjectSyntheticPointerInput(g_penDevice, &pointerInfo, 1);
+              if (success) {
+                result->Success(flutter::EncodableValue(true));
+                return;
+              } else {
+                char dbg[256];
+                sprintf_s(dbg, "InjectSyntheticPointerInput failed. Error: %lu\n", GetLastError());
+                OutputDebugStringA(dbg);
+              }
+            }
+
+            // Fallback to SendInput mouse emulation (Bug 65, 66, 67)
+            INPUT input = {};
+            input.type = INPUT_MOUSE;
+
+            int virtual_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            int virtual_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            int virtual_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            int virtual_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+            double normalized_x = 0.0;
+            double normalized_y = 0.0;
+            if (virtual_width > 0 && virtual_height > 0) {
+              normalized_x = static_cast<double>(target_x - virtual_left) / virtual_width;
+              normalized_y = static_cast<double>(target_y - virtual_top) / virtual_height;
+            }
+
+            input.mi.dx = static_cast<LONG>(normalized_x * 65535.0);
+            input.mi.dy = static_cast<LONG>(normalized_y * 65535.0);
+            input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESKTOP;
+
+            if (type == 0) {
+              if (buttons & 1) input.mi.dwFlags |= MOUSEEVENTF_LEFTDOWN;
+              if (buttons & 2) input.mi.dwFlags |= MOUSEEVENTF_RIGHTDOWN;
+              if (buttons & 4) input.mi.dwFlags |= MOUSEEVENTF_MIDDLEDOWN;
+              if (input.mi.dwFlags == (MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESKTOP)) {
+                input.mi.dwFlags |= MOUSEEVENTF_LEFTDOWN;
+              }
+            } else if (type == 2 || type == 3) {
+              // Release all buttons for up/cancel
+              input.mi.dwFlags |= MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP;
+            } else {
+              input.mi.dwFlags |= MOUSEEVENTF_MOVE;
+            }
+
+            UINT sent = SendInput(1, &input, sizeof(INPUT));
+            if (sent == 0) {
               char dbg[256];
-              sprintf_s(dbg, "InjectSyntheticPointerInput failed. Error: %lu\n", GetLastError());
+              sprintf_s(dbg, "SendInput failed. Error: %lu\n", GetLastError());
               OutputDebugStringA(dbg);
             }
-          }
-
-          // Fallback to SendInput mouse emulation
-          INPUT input = {};
-          input.type = INPUT_MOUSE;
-
-          int virtual_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-          int virtual_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-          int virtual_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-          int virtual_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-
-          double normalized_x = 0.0;
-          double normalized_y = 0.0;
-          if (virtual_width > 0 && virtual_height > 0) {
-            normalized_x = static_cast<double>(target_x - virtual_left) / virtual_width;
-            normalized_y = static_cast<double>(target_y - virtual_top) / virtual_height;
-          }
-
-          input.mi.dx = static_cast<LONG>(normalized_x * 65535.0);
-          input.mi.dy = static_cast<LONG>(normalized_y * 65535.0);
-          input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESKTOP;
-
-          if (type == 0) {
-            if (buttons & 2) {
-              input.mi.dwFlags |= MOUSEEVENTF_RIGHTDOWN;
-            } else {
-              input.mi.dwFlags |= MOUSEEVENTF_LEFTDOWN;
+            result->Success(flutter::EncodableValue(sent > 0));
+          } else if (call.method_name() == "setScreenResolution") {
+            const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
+            if (arguments) {
+              g_customWidth = GetInt(*arguments, "width", 0);
+              g_customHeight = GetInt(*arguments, "height", 0);
             }
-          } else if (type == 2 || type == 3) {
-            if (buttons & 2) {
-              input.mi.dwFlags |= MOUSEEVENTF_RIGHTUP;
-            } else {
-              input.mi.dwFlags |= MOUSEEVENTF_LEFTUP;
+            result->Success(flutter::EncodableValue(true));
+          } else if (call.method_name() == "disposePointerDevice") {
+            if (g_penDevice && pDestroySyntheticPointerDevice) {
+              pDestroySyntheticPointerDevice(g_penDevice);
+              g_penDevice = nullptr;
             }
+            // Release mouse buttons fallback on dispose to prevent stuck state
+            INPUT release_input = {};
+            release_input.type = INPUT_MOUSE;
+            release_input.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP;
+            SendInput(1, &release_input, sizeof(INPUT));
+
+            result->Success(flutter::EncodableValue(true));
           } else {
-            input.mi.dwFlags |= MOUSEEVENTF_MOVE;
+            result->NotImplemented();
           }
-
-          UINT sent = SendInput(1, &input, sizeof(INPUT));
-          result->Success(flutter::EncodableValue(sent > 0));
-        } else if (call.method_name() == "setScreenResolution") {
-          const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
-          if (arguments) {
-            g_customWidth = GetInt(*arguments, "width", 0);
-            g_customHeight = GetInt(*arguments, "height", 0);
-          }
-          result->Success(flutter::EncodableValue(true));
-        } else if (call.method_name() == "disposePointerDevice") {
-          if (g_penDevice && pDestroySyntheticPointerDevice) {
-            pDestroySyntheticPointerDevice(g_penDevice);
-            g_penDevice = nullptr;
-          }
-          result->Success(flutter::EncodableValue(true));
-        } else {
-          result->NotImplemented();
+        } catch (const std::exception& e) {
+          result->Error("NativeException", e.what());
+        } catch (...) {
+          result->Error("NativeException", "Unknown native error occurred");
         }
       });
 
