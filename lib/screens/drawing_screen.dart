@@ -199,6 +199,10 @@ class _DrawingScreenState extends State<DrawingScreen> {
     PointerType pointerType = PointerType.finger;
     if (event.kind == PointerDeviceKind.stylus) {
       pointerType = PointerType.stylus;
+      final connection = context.read<ConnectionProvider>();
+      if (!connection.hasStylusSupportSetting) {
+        connection.setStylusSupport(true);
+      }
     } else if (event.kind == PointerDeviceKind.mouse) {
       pointerType = PointerType.mouse;
     }
@@ -222,6 +226,10 @@ class _DrawingScreenState extends State<DrawingScreen> {
     PointerType pointerType = PointerType.finger;
     if (event.kind == PointerDeviceKind.stylus) {
       pointerType = PointerType.stylus;
+      final connection = context.read<ConnectionProvider>();
+      if (!connection.hasStylusSupportSetting) {
+        connection.setStylusSupport(true);
+      }
     } else if (event.kind == PointerDeviceKind.mouse) {
       pointerType = PointerType.mouse;
     }
