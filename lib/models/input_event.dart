@@ -16,6 +16,8 @@ enum InputEventType {
 }
 
 class InputEvent {
+  static const int binaryPacketLength = 11;
+
   final InputEventType type;
   final double x;          // normalized 0.0 - 1.0
   final double y;          // normalized 0.0 - 1.0
