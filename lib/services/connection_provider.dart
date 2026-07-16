@@ -12,6 +12,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/input_event.dart';
 
 enum ConnectionMode { server, client }
@@ -40,12 +41,15 @@ class DiscoveredDevice {
 }
 
 class ConnectionProvider extends ChangeNotifier {
+  static const int defaultServerPort = 9090;
+  static const int defaultDiscoveryPort = 9091;
+
   // --- State ---
   ConnectionState _state = ConnectionState.disconnected;
   ConnectionMode _mode = ConnectionMode.client;
   String _localIp = '';
   String _serverIp = '';
-  int _serverPort = 9090;
+  int _serverPort = defaultServerPort;
   String _errorMessage = '';
   String _connectedDeviceName = '';
   DeviceInfo? _remoteDeviceInfo;
@@ -55,18 +59,89 @@ class ConnectionProvider extends ChangeNotifier {
   String? _pairingPin;
   bool _isAuthenticated = false;
 
+  // --- Settings ---
+  bool _hasStylusSupportSetting = false;
+  double _maxPressureSetting = 1.0;
+  double _clientScreenWidth = 1080;
+  double _clientScreenHeight = 1920;
+  bool _isDisposed = false;
+
   // --- Network ---
   WebSocket? _socket;
   HttpServer? _httpServer;
   StreamSubscription? _socketSubscription;
-  RawDatagramSocket? _udpSocket;
+  RawDatagramSocket? _serverUdpSocket;
+  RawDatagramSocket? _clientUdpSocket;
   Timer? _discoveryTimer;
+  Timer? _discoveryTimeoutTimer;
   Timer? _reconnectTimer;
   Timer? _pingTimer;
   int _lastPingTimestamp = 0;
+  int _lastDataSentOrReceivedTime = 0;
   Completer<bool>? _authCompleter;
   Future<String?> Function()? _clientPinCallback;
   List<int>? _encryptionKey;
+
+  ConnectionProvider() {
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _hasStylusSupportSetting = prefs.getBool('stylus_supported') ?? false;
+      _maxPressureSetting = prefs.getDouble('max_pressure') ?? 1.0;
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error loading settings: $e');
+    }
+  }
+
+  Future<void> setStylusSupport(bool val) async {
+    if (_hasStylusSupportSetting != val) {
+      _hasStylusSupportSetting = val;
+      notifyListeners();
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('stylus_supported', val);
+      } catch (e) {
+        debugPrint('Error saving stylus settings: $e');
+      }
+      _sendUpdatedDeviceInfo();
+    }
+  }
+
+  Future<void> setMaxPressure(double val) async {
+    if (_maxPressureSetting != val) {
+      _maxPressureSetting = val;
+      notifyListeners();
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setDouble('max_pressure', val);
+      } catch (e) {
+        debugPrint('Error saving max pressure settings: $e');
+      }
+      _sendUpdatedDeviceInfo();
+    }
+  }
+
+  void _sendUpdatedDeviceInfo() {
+    if (isConnected && _mode == ConnectionMode.client) {
+      final deviceInfo = DeviceInfo(
+        deviceName: Platform.localHostname,
+        deviceModel: Platform.operatingSystem,
+        platform: Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'windows'),
+        screenWidth: _clientScreenWidth,
+        screenHeight: _clientScreenHeight,
+        hasStylusSupport: _hasStylusSupportSetting,
+        maxPressure: _maxPressureSetting,
+      );
+      _sendToServer({
+        'type': 'device_info',
+        'data': deviceInfo.toJson(),
+      });
+    }
+  }
 
   List<int> _crypt(List<int> data, List<int> key) {
     final result = List<int>.filled(data.length, 0);
@@ -97,11 +172,13 @@ class ConnectionProvider extends ChangeNotifier {
   String? get pairingPin => _pairingPin;
   bool get isAuthenticated => _isAuthenticated;
   bool get isConnected => _state == ConnectionState.connected;
+  bool get hasStylusSupportSetting => _hasStylusSupportSetting;
+  double get maxPressureSetting => _maxPressureSetting;
 
   // ==================== SERVER MODE ====================
 
   /// পিসিতে সার্ভার শুরু করে - মোবাইল কানেক্ট করবে
-  Future<bool> startServer({int port = 9090}) async {
+  Future<bool> startServer({int port = defaultServerPort}) async {
     try {
       _mode = ConnectionMode.server;
       _serverPort = port;
@@ -130,14 +207,12 @@ class ConnectionProvider extends ChangeNotifier {
       // Incoming connections গ্রহণ
       _httpServer!.listen(_handleIncomingConnection);
 
-      _setState(ConnectionState.discovering);
-      notifyListeners();
       debugPrint('[Server] সার্ভার শুরু হয়েছে: $_localIp:$port');
       return true;
-    } catch (e) {
+    } catch (e, stackTrace) {
       _errorMessage = 'সার্ভার শুরু করতে সমস্যা: $e';
       _setState(ConnectionState.error);
-      notifyListeners();
+      debugPrint('[Server] Error starting server: $e\n$stackTrace');
       return false;
     }
   }
@@ -170,12 +245,10 @@ class ConnectionProvider extends ChangeNotifier {
             _remoteDeviceInfo = null;
             _stopLatencyMeasurement();
             onClientDisconnected?.call();
-            notifyListeners();
           },
           onError: (error) {
             debugPrint('[Server] কানেকশন ত্রুটি: $error');
             _setState(ConnectionState.discovering);
-            notifyListeners();
           },
         );
 
@@ -185,6 +258,7 @@ class ConnectionProvider extends ChangeNotifier {
   }
 
   void _handleServerReceive(dynamic data) {
+    _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
     try {
       if (!_isAuthenticated) {
         if (data is String) {
@@ -212,48 +286,51 @@ class ConnectionProvider extends ChangeNotifier {
       }
 
       if (decryptedData is List<int>) {
-        // Binary mode (11 bytes event packet)
-        if (decryptedData.length == 11) {
+        // Binary mode (InputEvent.binaryPacketLength bytes event packet)
+        if (decryptedData.length == InputEvent.binaryPacketLength) {
           final event = InputEvent.fromBinary(decryptedData);
           onInputEventReceived?.call(event);
         } else {
           try {
             final str = utf8.decode(decryptedData);
             _handleServerReceiveJson(jsonDecode(str) as Map<String, dynamic>);
-          } catch (e) {
-            debugPrint('[Server] Failed to decode decrypted packet: $e');
+          } catch (e, stackTrace) {
+            debugPrint('[Server] Failed to decode decrypted packet: $e\n$stackTrace');
           }
         }
       } else if (decryptedData is String) {
         _handleServerReceiveJson(jsonDecode(decryptedData) as Map<String, dynamic>);
       }
-    } catch (e) {
-      debugPrint('[Server] ডেটা পার্স ত্রুটি: $e');
+    } catch (e, stackTrace) {
+      debugPrint('[Server] ডেটা পার্স ত্রুটি: $e\n$stackTrace');
     }
   }
 
   void _handleServerReceiveJson(Map<String, dynamic> json) {
-    if (json.containsKey('type')) {
+    if (json.containsKey('type') && json['type'] is String) {
       final msgType = json['type'] as String;
 
       switch (msgType) {
         case 'device_info':
-          _remoteDeviceInfo = DeviceInfo.fromJson(
-            json['data'] as Map<String, dynamic>,
-          );
-          _connectedDeviceName = _remoteDeviceInfo!.deviceName;
-          _setState(ConnectionState.connected);
-          // কনফিগ পাঠানো (which will now be encrypted)
-          _sendToClient({
-            'type': 'server_config',
-            'data': _serverConfig.toJson(),
-          });
-          notifyListeners();
+          if (json['data'] is Map<String, dynamic>) {
+            _remoteDeviceInfo = DeviceInfo.fromJson(
+              json['data'] as Map<String, dynamic>,
+            );
+            _connectedDeviceName = _remoteDeviceInfo!.deviceName;
+            _setState(ConnectionState.connected);
+            // কনফিগ পাঠানো (which will now be encrypted)
+            _sendToClient({
+              'type': 'server_config',
+              'data': _serverConfig.toJson(),
+            });
+          }
           break;
 
         case 'input':
-          final event = InputEvent.fromJson(json['data']);
-          onInputEventReceived?.call(event);
+          if (json['data'] is Map<String, dynamic>) {
+            final event = InputEvent.fromJson(json['data'] as Map<String, dynamic>);
+            onInputEventReceived?.call(event);
+          }
           break;
 
         case 'ping':
@@ -266,11 +343,16 @@ class ConnectionProvider extends ChangeNotifier {
   void _sendToClient(dynamic data) {
     if (_socket != null) {
       final encoded = data is String ? data : jsonEncode(data);
-      if (_encryptionKey != null) {
-        final rawBytes = utf8.encode(encoded);
-        _socket!.add(_crypt(rawBytes, _encryptionKey!));
-      } else {
-        _socket!.add(encoded);
+      try {
+        if (_encryptionKey != null) {
+          final rawBytes = utf8.encode(encoded);
+          _socket!.add(_crypt(rawBytes, _encryptionKey!));
+        } else {
+          _socket!.add(encoded);
+        }
+        _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
+      } catch (e, stackTrace) {
+        debugPrint('[Server] Socket write exception: $e\n$stackTrace');
       }
     }
   }
@@ -282,11 +364,11 @@ class ConnectionProvider extends ChangeNotifier {
     _mode = ConnectionMode.client;
     _discoveredDevices.clear();
     _setState(ConnectionState.discovering);
-    notifyListeners();
 
     try {
       _localIp = await _getLocalIpAddress();
-      _udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      _clientUdpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      _clientUdpSocket!.broadcastEnabled = true;
 
       // Discovery request পাঠানো
       final discoveryMessage = jsonEncode({
@@ -294,23 +376,36 @@ class ConnectionProvider extends ChangeNotifier {
         'version': '1.0',
       });
 
+      final subnetBroadcast = _getSubnetBroadcast(_localIp);
+
       _discoveryTimer = Timer.periodic(
         const Duration(milliseconds: 500),
         (_) {
-          if (_udpSocket != null) {
-            _udpSocket!.send(
-              utf8.encode(discoveryMessage),
-              InternetAddress('255.255.255.255'),
-              9091, // Discovery port
-            );
+          if (_clientUdpSocket != null) {
+            try {
+              // Subnet broadcast
+              _clientUdpSocket!.send(
+                utf8.encode(discoveryMessage),
+                InternetAddress(subnetBroadcast),
+                defaultDiscoveryPort,
+              );
+              // Global broadcast
+              _clientUdpSocket!.send(
+                utf8.encode(discoveryMessage),
+                InternetAddress('255.255.255.255'),
+                defaultDiscoveryPort,
+              );
+            } catch (e) {
+              debugPrint('[Discovery] Error sending broadcast: $e');
+            }
           }
         },
       );
 
       // Responses শোনা
-      _udpSocket!.listen((event) {
+      _clientUdpSocket!.listen((event) {
         if (event == RawSocketEvent.read) {
-          final datagram = _udpSocket!.receive();
+          final datagram = _clientUdpSocket!.receive();
           if (datagram != null) {
             final message = utf8.decode(datagram.data);
             try {
@@ -319,41 +414,44 @@ class ConnectionProvider extends ChangeNotifier {
                 final device = DiscoveredDevice(
                   ip: datagram.address.address,
                   name: json['name'] as String? ?? 'Unknown',
-                  port: json['port'] as int? ?? 9090,
+                  port: json['port'] as int? ?? defaultServerPort,
                 );
-                // Duplicate check
-                if (!_discoveredDevices.any((d) => d.ip == device.ip)) {
+                // Duplicate check on ip and port
+                if (!_discoveredDevices.any((d) => d.ip == device.ip && d.port == device.port)) {
                   _discoveredDevices.add(device);
                   onDeviceDiscovered?.call(device);
                   notifyListeners();
-                  debugPrint('[Discovery] ডিভাইস পাওয়া গেছে: ${device.ip} (${device.name})');
+                  debugPrint('[Discovery] ডিভাইস পাওয়া গেছে: ${device.ip}:${device.port} (${device.name})');
                 }
               }
-            } catch (_) {}
+            } catch (e) {
+              debugPrint('[Discovery] Parse exception: $e');
+            }
           }
         }
       });
 
       // Duration শেষে discovery বন্ধ
-      Timer(Duration(seconds: durationSeconds), () {
+      _discoveryTimeoutTimer = Timer(Duration(seconds: durationSeconds), () {
         stopDiscovery();
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
       _errorMessage = 'Discovery শুরু করতে সমস্যা: $e';
       _setState(ConnectionState.error);
-      notifyListeners();
+      debugPrint('[Client] Discovery initialization failed: $e\n$stackTrace');
     }
   }
 
   void stopDiscovery() {
     _discoveryTimer?.cancel();
     _discoveryTimer = null;
-    _udpSocket?.close();
-    _udpSocket = null;
+    _discoveryTimeoutTimer?.cancel();
+    _discoveryTimeoutTimer = null;
+    _clientUdpSocket?.close();
+    _clientUdpSocket = null;
     if (_state == ConnectionState.discovering && _discoveredDevices.isEmpty) {
       _errorMessage = 'কোনো ডিভাইস পাওয়া যায়নি। একই WiFi-তে আছেন তো?';
       _setState(ConnectionState.error);
-      notifyListeners();
     }
   }
 
@@ -362,18 +460,29 @@ class ConnectionProvider extends ChangeNotifier {
   /// ম্যানুয়ালি IP দিয়ে কানেক্ট করা
   Future<bool> connectToServer(
     String ip, {
-    int port = 9090,
+    int port = defaultServerPort,
     required Future<String?> Function() onPinRequired,
+    double? screenWidth,
+    double? screenHeight,
+    bool isReconnecting = false,
   }) async {
     try {
       _serverIp = ip;
       _serverPort = port;
-      _setState(ConnectionState.connecting);
+
+      if (isReconnecting) {
+        _setState(ConnectionState.reconnecting);
+      } else {
+        _setState(ConnectionState.connecting);
+      }
+
       _errorMessage = '';
       _clientPinCallback = onPinRequired;
       _authCompleter = Completer<bool>();
       _isAuthenticated = false;
-      notifyListeners();
+
+      if (screenWidth != null) _clientScreenWidth = screenWidth;
+      if (screenHeight != null) _clientScreenHeight = screenHeight;
 
       // WebSocket connection
       final uri = 'ws://$ip:$port';
@@ -401,21 +510,23 @@ class ConnectionProvider extends ChangeNotifier {
       final success = await _authCompleter!.future;
       if (success) {
         _setState(ConnectionState.connected);
-        notifyListeners();
         return true;
       } else {
         if (_errorMessage.isEmpty) {
           _errorMessage = 'অথেন্টিকেশন ফেইল করেছে। সঠিক PIN দিন।';
         }
-        _setState(ConnectionState.error);
-        notifyListeners();
-        disconnect();
+        if (!isReconnecting) {
+          _setState(ConnectionState.error);
+          disconnect();
+        }
         return false;
       }
-    } catch (e) {
-      _errorMessage = 'কানেক্ট করতে সমস্যা: $e';
-      _setState(ConnectionState.error);
-      notifyListeners();
+    } catch (e, stackTrace) {
+      debugPrint('Error in connectToServer: $e\n$stackTrace');
+      if (!isReconnecting) {
+        _errorMessage = 'কানেক্ট করতে সমস্যা: $e';
+        _setState(ConnectionState.error);
+      }
       if (_authCompleter != null && !_authCompleter!.isCompleted) {
         _authCompleter!.complete(false);
       }
@@ -424,6 +535,7 @@ class ConnectionProvider extends ChangeNotifier {
   }
 
   void _handleClientReceive(dynamic data) {
+    _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
     try {
       dynamic decryptedData = data;
       if (_encryptionKey != null && data is List<int>) {
@@ -434,77 +546,83 @@ class ConnectionProvider extends ChangeNotifier {
         try {
           final str = utf8.decode(decryptedData);
           _handleClientReceiveJson(jsonDecode(str) as Map<String, dynamic>);
-        } catch (e) {
-          debugPrint('[Client] Failed to decode decrypted packet: $e');
+        } catch (e, stackTrace) {
+          debugPrint('[Client] Failed to decode decrypted packet: $e\n$stackTrace');
         }
       } else if (decryptedData is String) {
         _handleClientReceiveJson(jsonDecode(decryptedData) as Map<String, dynamic>);
       }
-    } catch (e) {
-      debugPrint('[Client] ডেটা পার্স ত্রুটি: $e');
+    } catch (e, stackTrace) {
+      debugPrint('[Client] ডেটা পার্স ত্রুটি: $e\n$stackTrace');
     }
   }
 
   void _handleClientReceiveJson(Map<String, dynamic> json) {
-    final msgType = json['type'] as String;
-    switch (msgType) {
-      case 'auth_challenge':
-        if (_lastSuccessfulPin != null) {
-          debugPrint('[Client] Auto-authenticating with cached PIN');
-          _sendToClient({
-            'type': 'auth_response',
-            'pin': _lastSuccessfulPin,
+    if (json.containsKey('type') && json['type'] is String) {
+      final msgType = json['type'] as String;
+      switch (msgType) {
+        case 'auth_challenge':
+          if (_lastSuccessfulPin != null) {
+            debugPrint('[Client] Auto-authenticating with cached PIN');
+            _sendToServer({
+              'type': 'auth_response',
+              'pin': _lastSuccessfulPin,
+            });
+          } else if (_clientPinCallback != null) {
+            _clientPinCallback!().then((pin) {
+              if (pin != null) {
+                _lastSuccessfulPin = pin; // Store provisionally, clear if auth_fail
+                _sendToServer({
+                  'type': 'auth_response',
+                  'pin': pin,
+                });
+              } else {
+                _errorMessage = 'অথেন্টিকেশন বাতিল করা হয়েছে।';
+                _authCompleter?.complete(false);
+              }
+            });
+          } else {
+            _authCompleter?.complete(false);
+          }
+          break;
+        case 'auth_success':
+          _isAuthenticated = true;
+          _encryptionKey = utf8.encode(_lastSuccessfulPin!); // Set encryption key
+          debugPrint('[Client] Authenticated successfully');
+          // Device info পাঠানো
+          final deviceInfo = DeviceInfo(
+            deviceName: Platform.localHostname,
+            deviceModel: Platform.operatingSystem,
+            platform: Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'windows'),
+            screenWidth: _clientScreenWidth,
+            screenHeight: _clientScreenHeight,
+            hasStylusSupport: _hasStylusSupportSetting,
+            maxPressure: _maxPressureSetting,
+          );
+          _sendToServer({
+            'type': 'device_info',
+            'data': deviceInfo.toJson(),
           });
-        } else if (_clientPinCallback != null) {
-          _clientPinCallback!().then((pin) {
-            if (pin != null) {
-              _lastSuccessfulPin = pin; // Store provisionally, clear if auth_fail
-              _sendToClient({
-                'type': 'auth_response',
-                'pin': pin,
-              });
-            } else {
-              _errorMessage = 'অথেন্টিকেশন বাতিল করা হয়েছে।';
-              _authCompleter?.complete(false);
-            }
-          });
-        } else {
+          _authCompleter?.complete(true);
+          break;
+        case 'auth_fail':
+          _errorMessage = json['reason'] as String? ?? 'Authentication failed';
+          _lastSuccessfulPin = null; // Clear cached PIN on failure
           _authCompleter?.complete(false);
-        }
-        break;
-      case 'auth_success':
-        _isAuthenticated = true;
-        _encryptionKey = utf8.encode(_lastSuccessfulPin!); // Set encryption key
-        debugPrint('[Client] Authenticated successfully');
-        // Device info পাঠানো
-        final deviceInfo = DeviceInfo(
-          deviceName: 'Mobile Tablet',
-          deviceModel: 'Flutter Device',
-          platform: Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'windows'),
-          screenWidth: 1080,
-          screenHeight: 1920,
-          hasStylusSupport: true,
-          maxPressure: 1.0,
-        );
-        _sendToClient({
-          'type': 'device_info',
-          'data': deviceInfo.toJson(),
-        });
-        _authCompleter?.complete(true);
-        break;
-      case 'auth_fail':
-        _errorMessage = json['reason'] as String? ?? 'Authentication failed';
-        _lastSuccessfulPin = null; // Clear cached PIN on failure
-        _authCompleter?.complete(false);
-        break;
-      case 'server_config':
-        _serverConfig = ServerConfig.fromJson(json['data']);
-        debugPrint('[Client] সার্ভার কনফিগ পাওয়া: port=${_serverConfig.port}');
-        notifyListeners();
-        break;
-      case 'pong':
-        _handlePong(json['ts'] as int);
-        break;
+          break;
+        case 'server_config':
+          if (json['data'] is Map<String, dynamic>) {
+            _serverConfig = ServerConfig.fromJson(json['data'] as Map<String, dynamic>);
+            debugPrint('[Client] সার্ভার কনফিগ পাওয়া: port=${_serverConfig.port}');
+            notifyListeners();
+          }
+          break;
+        case 'pong':
+          if (json['ts'] is int) {
+            _handlePong(json['ts'] as int);
+          }
+          break;
+      }
     }
   }
 
@@ -514,7 +632,6 @@ class ConnectionProvider extends ChangeNotifier {
     }
     if (_state == ConnectionState.connected || _state == ConnectionState.connecting) {
       _setState(ConnectionState.reconnecting);
-      notifyListeners();
 
       // আগের reconnect timer থাকলে বন্ধ করুন (prevent stacking)
       _reconnectTimer?.cancel();
@@ -534,21 +651,19 @@ class ConnectionProvider extends ChangeNotifier {
           _reconnectTimer = null;
           _errorMessage = 'রিকানেক্ট করতে ব্যর্থ হয়েছে।';
           _setState(ConnectionState.error);
-          notifyListeners();
           return;
         }
         debugPrint('[Client] রিকানেক্ট চেষ্টা $attempts/3...');
         _socketSubscription?.cancel();
         _socket = null;
-        _setState(ConnectionState.connecting);
+        
         connectToServer(
           _serverIp,
           port: _serverPort,
           onPinRequired: _clientPinCallback ?? () async => null,
+          isReconnecting: true,
         ).then((success) {
-          if (!success && _state == ConnectionState.reconnecting) {
-            // Already set error state
-          }
+          // Failure handling is done via states in connectToServer and this timer
         });
       });
     }
@@ -570,10 +685,33 @@ class ConnectionProvider extends ChangeNotifier {
       }));
     }
 
-    if (_encryptionKey != null) {
-      _socket!.add(_crypt(rawBytes, _encryptionKey!));
-    } else {
-      _socket!.add(rawBytes);
+    try {
+      if (_encryptionKey != null) {
+        _socket!.add(_crypt(rawBytes, _encryptionKey!));
+      } else {
+        _socket!.add(rawBytes);
+      }
+      _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
+    } catch (e, stackTrace) {
+      debugPrint('[Client] Input send exception: $e\n$stackTrace');
+      _handleDisconnection();
+    }
+  }
+
+  void _sendToServer(dynamic data) {
+    if (_socket != null) {
+      final encoded = data is String ? data : jsonEncode(data);
+      try {
+        if (_encryptionKey != null) {
+          final rawBytes = utf8.encode(encoded);
+          _socket!.add(_crypt(rawBytes, _encryptionKey!));
+        } else {
+          _socket!.add(encoded);
+        }
+        _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
+      } catch (e, stackTrace) {
+        debugPrint('[Client] Socket write exception: $e\n$stackTrace');
+      }
     }
   }
 
@@ -581,12 +719,10 @@ class ConnectionProvider extends ChangeNotifier {
 
   Future<void> _startDiscoveryBroadcast(int serverPort) async {
     try {
-      _udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 9091);
-
-      // Broadcast responses listen
-      _udpSocket!.listen((event) {
+      _serverUdpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, defaultDiscoveryPort);
+      _serverUdpSocket!.listen((event) {
         if (event == RawSocketEvent.read) {
-          final datagram = _udpSocket!.receive();
+          final datagram = _serverUdpSocket!.receive();
           if (datagram != null) {
             try {
               final message = utf8.decode(datagram.data);
@@ -595,24 +731,26 @@ class ConnectionProvider extends ChangeNotifier {
                 // Client কে respond করা
                 final response = jsonEncode({
                   'type': 'superdisplay_response',
-                  'name': 'My PC',
+                  'name': Platform.localHostname,
                   'port': serverPort,
                   'ip': _localIp,
                 });
-                _udpSocket!.send(
+                _serverUdpSocket!.send(
                   utf8.encode(response),
                   datagram.address,
                   datagram.port,
                 );
               }
-            } catch (_) {}
+            } catch (e, stackTrace) {
+              debugPrint('[Server] Discovery request parse error: $e\n$stackTrace');
+            }
           }
         }
       });
 
-      debugPrint('[Server] Discovery broadcast শুরু হয়েছে (port 9091)');
-    } catch (e) {
-      debugPrint('[Server] Discovery broadcast ত্রুটি: $e');
+      debugPrint('[Server] Discovery broadcast শুরু হয়েছে (port $defaultDiscoveryPort)');
+    } catch (e, stackTrace) {
+      debugPrint('[Server] Discovery broadcast ত্রুটি: $e\n$stackTrace');
     }
   }
 
@@ -621,13 +759,19 @@ class ConnectionProvider extends ChangeNotifier {
   void _startLatencyMeasurement() {
     _pingTimer?.cancel();
     _lastPingTimestamp = 0;
-    _pingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    // Ping adaptive (5 seconds interval when idle)
+    _pingTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_socket != null) {
-        final ts = DateTime.now().millisecondsSinceEpoch;
-        _lastPingTimestamp = ts;
-        final msg = jsonEncode({'type': 'ping', 'ts': ts});
+        final now = DateTime.now().millisecondsSinceEpoch;
+        // Skip ping if we recently communicated to save network traffic
+        if (now - _lastDataSentOrReceivedTime < 5000) {
+          return;
+        }
+
+        _lastPingTimestamp = now;
+        final msg = {'type': 'ping', 'ts': now};
         if (_mode == ConnectionMode.client) {
-          _socket!.add(msg);
+          _sendToServer(msg);
         } else {
           _sendToClient(msg);
         }
@@ -637,8 +781,8 @@ class ConnectionProvider extends ChangeNotifier {
 
   /// pong response পেলে লেটেন্সি ক্যালকুলেট করুন
   void _handlePong(int pingTs) {
-    if (_lastPingTimestamp > 0) {
-      final now = DateTime.now().millisecondsSinceEpoch;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (pingTs > 0 && now >= pingTs) {
       _latencyMs = (now - pingTs) ~/ 2; // RTT / 2 = one-way latency
       notifyListeners();
     }
@@ -653,13 +797,44 @@ class ConnectionProvider extends ChangeNotifier {
 
   // ==================== UTILITY ====================
 
+  String _getSubnetBroadcast(String ip) {
+    if (ip.isEmpty) return '255.255.255.255';
+    final parts = ip.split('.');
+    if (parts.length == 4) {
+      return '${parts[0]}.${parts[1]}.${parts[2]}.255';
+    }
+    return '255.255.255.255';
+  }
+
   Future<String> _getLocalIpAddress() async {
     try {
       final interfaces = await NetworkInterface.list(
         includeLoopback: false,
         type: InternetAddressType.IPv4,
       );
-      
+
+      // Prioritize physical/real interfaces by filtering out virtual ones
+      final realInterfaces = interfaces.where((interface) {
+        final name = interface.name.toLowerCase();
+        return !name.contains('vbox') &&
+               !name.contains('virtual') &&
+               !name.contains('vmware') &&
+               !name.contains('wsl') &&
+               !name.contains('docker') &&
+               !name.contains('loopback');
+      }).toList();
+
+      // Search real interfaces first
+      for (var interface in realInterfaces) {
+        for (var addr in interface.addresses) {
+          final ip = addr.address;
+          if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+            return ip;
+          }
+        }
+      }
+
+      // Fallback to any non-loopback private IP
       for (var interface in interfaces) {
         for (var addr in interface.addresses) {
           final ip = addr.address;
@@ -668,14 +843,14 @@ class ConnectionProvider extends ChangeNotifier {
           }
         }
       }
-      
+
       if (interfaces.isNotEmpty && interfaces.first.addresses.isNotEmpty) {
         return interfaces.first.addresses.first.address;
       }
-    } catch (e) {
-      debugPrint('Error getting local IP: $e');
+    } catch (e, stackTrace) {
+      debugPrint('Error getting local IP: $e\n$stackTrace');
     }
-    
+
     try {
       final info = NetworkInfo();
       final ip = await info.getWifiIP();
@@ -686,10 +861,13 @@ class ConnectionProvider extends ChangeNotifier {
   }
 
   void _setState(ConnectionState newState) {
-    _state = newState;
+    if (_state != newState) {
+      _state = newState;
+      notifyListeners();
+    }
   }
 
-  void disconnect() {
+  Future<void> disconnect() async {
     if (_authCompleter != null && !_authCompleter!.isCompleted) {
       _authCompleter!.complete(false);
     }
@@ -699,32 +877,49 @@ class ConnectionProvider extends ChangeNotifier {
     _reconnectTimer = null;
     _discoveryTimer?.cancel();
     _discoveryTimer = null;
+    _discoveryTimeoutTimer?.cancel();
+    _discoveryTimeoutTimer = null;
     _pingTimer?.cancel();
     _pingTimer = null;
-    _socketSubscription?.cancel();
-    _socket?.close();
-    _httpServer?.close();
-    _udpSocket?.close();
+    
+    await _socketSubscription?.cancel();
+    _socketSubscription = null;
+    
+    await _socket?.close();
     _socket = null;
+    
+    await _httpServer?.close();
     _httpServer = null;
-    _udpSocket = null;
+    
+    _serverUdpSocket?.close();
+    _serverUdpSocket = null;
+    
+    _clientUdpSocket?.close();
+    _clientUdpSocket = null;
+    
     _connectedDeviceName = '';
     _remoteDeviceInfo = null;
     _discoveredDevices.clear();
     _stopLatencyMeasurement();
     _setState(ConnectionState.disconnected);
-    notifyListeners();
     debugPrint('[Connection] ডিসকানেক্টেড');
   }
 
   void clearError() {
     _errorMessage = '';
     _setState(ConnectionState.disconnected);
-    notifyListeners();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_isDisposed) {
+      super.notifyListeners();
+    }
   }
 
   @override
   void dispose() {
+    _isDisposed = true;
     disconnect();
     super.dispose();
   }
