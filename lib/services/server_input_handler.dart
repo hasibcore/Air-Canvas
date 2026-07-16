@@ -5,6 +5,7 @@
 // 2. Debug mode: লোকাল ক্যানভাসে ভিজুয়ালাইজ করে
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../models/input_event.dart';
@@ -14,11 +15,20 @@ import 'windows_input_injection.dart';
 class ServerInputHandler {
   final ConnectionProvider _connection;
   bool _nativeInjectionAvailable = false;
-  final List<InputEvent> _recentEvents = [];
+
+  // Bug 132: Track initialization completion
+  Completer<bool>? _initCompleter;
+  bool get isNativeReady => _nativeInjectionAvailable;
+
+  // Bug 134: Ring buffer via Queue instead of List (O(1) remove from front)
+  final Queue<InputEvent> _recentEvents = Queue<InputEvent>();
   static const int _maxRecentEvents = 100;
 
   // Callbacks for UI updates
   void Function(InputEvent)? onEventReceived;
+
+  // Bug 135: Track disposed state
+  bool _isDisposed = false;
 
   ServerInputHandler(this._connection) {
     _setupCallbacks();
@@ -31,15 +41,33 @@ class ServerInputHandler {
     _connection.onClientDisconnected = _onClientDisconnected;
   }
 
-  Future<void> _initializeNativeInjection() async {
+  /// Bug 132: Initialization with Completer so callers can await readiness
+  Future<bool> _initializeNativeInjection() async {
+    if (_initCompleter != null) return _initCompleter!.future;
+    _initCompleter = Completer<bool>();
+
     if (Platform.isWindows) {
-      _nativeInjectionAvailable = await WindowsInputInjection.initialize();
-      if (_nativeInjectionAvailable) {
-        debugPrint('[InputHandler] Windows native injection সক্রিয়');
-      } else {
-        debugPrint('[InputHandler] Native injection পাওয়া যায়নি, debug mode ব্যবহার হবে');
+      try {
+        _nativeInjectionAvailable = await WindowsInputInjection.initialize();
+        if (_nativeInjectionAvailable) {
+          debugPrint('[InputHandler] Windows native injection সক্রিয়');
+        } else {
+          debugPrint('[InputHandler] Native injection পাওয়া যায়নি, debug mode ব্যবহার হবে');
+        }
+      } catch (e, stackTrace) {
+        debugPrint('[InputHandler] Native init error: $e\n$stackTrace');
+        _nativeInjectionAvailable = false;
       }
     }
+
+    _initCompleter!.complete(_nativeInjectionAvailable);
+    return _nativeInjectionAvailable;
+  }
+
+  /// Wait for initialization to finish (useful for callers that need to
+  /// ensure native injection is ready before sending events). (Bug 132)
+  Future<bool> ensureInitialized() {
+    return _initCompleter?.future ?? Future.value(false);
   }
 
   void _onClientConnected() {
@@ -60,26 +88,54 @@ class ServerInputHandler {
   }
 
   void _handleInputEvent(InputEvent event) {
-    // ইভেন্ট লগ/বাফার
+    if (_isDisposed) return;
+
+    // Bug 134: Ring buffer via Queue — O(1) removeFirst
     _recentEvents.add(event);
-    if (_recentEvents.length > _maxRecentEvents) {
-      _recentEvents.removeAt(0);
+    while (_recentEvents.length > _maxRecentEvents) {
+      _recentEvents.removeFirst();
     }
 
     // UI callback (debug canvas)
-    onEventReceived?.call(event);
+    try {
+      onEventReceived?.call(event);
+    } catch (e, stackTrace) {
+      debugPrint('[InputHandler] onEventReceived callback error: $e\n$stackTrace');
+    }
 
     // Native injection (Windows only)
+    // Bug 131: Properly handle the Future with unawaited + error zone
     if (_nativeInjectionAvailable && Platform.isWindows) {
-      WindowsInputInjection.injectEvent(event);
+      unawaited(
+        WindowsInputInjection.injectEvent(event).then((success) {
+          if (!success && kDebugMode) {
+            debugPrint('[InputHandler] Injection failed for event: ${event.type.name}');
+          }
+        }).catchError((Object e, StackTrace stackTrace) {
+          debugPrint('[InputHandler] Injection exception: $e\n$stackTrace');
+        }),
+      );
     }
   }
 
+  // Bug 134: Return unmodifiable List from Queue
   List<InputEvent> get recentEvents => List.unmodifiable(_recentEvents);
 
-  void dispose() {
-    if (Platform.isWindows) {
-      WindowsInputInjection.dispose();
+  // Bug 135: Properly await dispose and guard against double-dispose
+  Future<void> dispose() async {
+    if (_isDisposed) return;
+    _isDisposed = true;
+
+    // Clear callbacks
+    _connection.onInputEventReceived = null;
+    _connection.onClientConnected = null;
+    _connection.onClientDisconnected = null;
+    onEventReceived = null;
+
+    _recentEvents.clear();
+
+    if (Platform.isWindows && _nativeInjectionAvailable) {
+      await WindowsInputInjection.dispose();
     }
   }
 }
