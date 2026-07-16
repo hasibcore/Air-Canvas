@@ -1,16 +1,17 @@
-/// Windows Native Input Injection
-///
-/// এই কোড Windows-এ ট্যাবলেট ইনপুট ইনজেক্ট করে।
-/// Windows Pen/Tablet API (Windows Ink) ব্যবহার করে OS-level
-/// pointer input simulate করা হয়।
-///
-/// Implementation Strategy:
-/// - Dart side: MethodChannel এর মাধ্যমে native কোড কল করে
-/// - Native side (C++): Windows API (SendInput, CreateSyntheticPointerDevice) ব্যবহার
-///
-/// এই ফাইলটি রেফারেন্স - আসল implementation windows/runner/ এ থাকবে
+// Windows Native Input Injection
+//
+// এই কোড Windows-এ ট্যাবলেট ইনপুট ইনজেক্ট করে।
+// Windows Pen/Tablet API (Windows Ink) ব্যবহার করে OS-level
+// pointer input simulate করা হয়।
+//
+// Implementation Strategy:
+// - Dart side: MethodChannel এর মাধ্যমে native কোড কল করে
+// - Native side (C++): Windows API (SendInput, CreateSyntheticPointerDevice) ব্যবহার
+//
+// এই ফাইলটি রেফারেন্স - আসল implementation windows/runner/ এ থাকবে
 
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../models/input_event.dart';
 
@@ -24,10 +25,10 @@ class WindowsInputInjection {
       final result = await _channel.invokeMethod<bool>('initializePointerDevice');
       return result ?? false;
     } on PlatformException catch (e) {
-      print('Input injection init failed: ${e.message}');
+      debugPrint('Input injection init failed: ${e.message}');
       return false;
     } on MissingPluginException {
-      print('Native plugin not available - input injection disabled');
+      debugPrint('Native plugin not available - input injection disabled');
       return false;
     }
   }
@@ -48,7 +49,7 @@ class WindowsInputInjection {
       });
       return result ?? false;
     } on PlatformException catch (e) {
-      print('Event injection failed: ${e.message}');
+      debugPrint('Event injection failed: ${e.message}');
       return false;
     } on MissingPluginException {
       return false;

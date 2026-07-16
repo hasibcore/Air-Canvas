@@ -1,10 +1,10 @@
-/// কানেকশন স্টেট ম্যানেজার
-///
-/// এই প্রোভাইডার সমগ্র কানেকশন লাইফসাইকেল ম্যানেজ করে:
-/// 1. WiFi Discovery - UDP Broadcast দিয়ে সার্ভার খোঁজা
-/// 2. WebSocket Connection - সার্ভারে কানেক্ট করা
-/// 3. Handshake - ডিভাইস ইনফো ও কনফিগ এক্সচেঞ্জ
-/// 4. Reconnection - স্বয়ংক্রিয় রিকানেক্ট
+// কানেকশন স্টেট ম্যানেজার
+//
+// এই প্রোভাইডার সমগ্র কানেকশন লাইফসাইকেল ম্যানেজ করে:
+// 1. WiFi Discovery - UDP Broadcast দিয়ে সার্ভার খোঁজা
+// 2. WebSocket Connection - সার্ভারে কানেক্ট করা
+// 3. Handshake - ডিভাইস ইনফো ও কনফিগ এক্সচেঞ্জ
+// 4. Reconnection - স্বয়ংক্রিয় রিকানেক্ট
 
 import 'dart:async';
 import 'dart:convert';
@@ -489,7 +489,7 @@ class ConnectionProvider extends ChangeNotifier {
       debugPrint('[Client] সার্ভারে কানেক্টেড: $uri');
 
       // Incoming data listen
-      _socketSubscription?.cancel();
+      await _socketSubscription?.cancel();
       _socketSubscription = _socket!.listen(
         (data) => _handleClientReceive(data),
         onDone: () {
@@ -515,24 +515,24 @@ class ConnectionProvider extends ChangeNotifier {
           _errorMessage = 'অথেন্টিকেশন ফেইল করেছে। সঠিক PIN দিন।';
         }
         // সকেট লিক প্রতিরোধ করতে সকেট ও সাবস্ক্রিপশন বন্ধ করুন
-        _socketSubscription?.cancel();
+        await _socketSubscription?.cancel();
         _socketSubscription = null;
-        _socket?.close();
+        await _socket?.close();
         _socket = null;
         _isAuthenticated = false;
 
         if (!isReconnecting) {
           _setState(ConnectionState.error);
-          disconnect();
+          await disconnect();
         }
         return false;
       }
     } catch (e, stackTrace) {
       debugPrint('Error in connectToServer: $e\n$stackTrace');
       // সকেট লিক প্রতিরোধ করতে সকেট ও সাবস্ক্রিপশন বন্ধ করুন
-      _socketSubscription?.cancel();
+      await _socketSubscription?.cancel();
       _socketSubscription = null;
-      _socket?.close();
+      await _socket?.close();
       _socket = null;
       _isAuthenticated = false;
 

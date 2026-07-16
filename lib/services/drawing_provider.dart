@@ -1,10 +1,10 @@
-/// ড্রয়িং স্টেট ও লজিক ম্যানেজার
-///
-/// ক্যানভাসে ড্রয়িং সম্পর্কিত সব কিছু ম্যানেজ করে:
-/// - স্ট্রোক কালেকশন
-/// - প্রেশার সেনসিটিভিটি
-/// - ব্রাশ সেটিংস
-/// - অফলাইন ক্যানভাস রেন্ডারিং (client side mirror)
+// ড্রয়িং স্টেট ও লজিক ম্যানেজার
+//
+// ক্যানভাসে ড্রয়িং সম্পর্কিত সব কিছু ম্যানেজ করে:
+// - স্ট্রোক কালেকশন
+// - প্রেশার সেনসিটিভিটি
+// - ব্রাশ সেটিংস
+// - অফলাইন ক্যানভাস রেন্ডারিং (client side mirror)
 
 import 'package:flutter/material.dart';
 import '../models/input_event.dart';
@@ -144,7 +144,7 @@ class DrawingProvider extends ChangeNotifier {
   Offset? _lastPosition;
   double _canvasWidth = 1.0;
   double _canvasHeight = 1.0;
-  bool _pressureSmoothing = true;
+  final bool _pressureSmoothing = true;
   double _lastPressure = 0.0;
 
   // Smoothing buffer
@@ -310,7 +310,7 @@ class DrawingProvider extends ChangeNotifier {
   /// প্রেশার স্মুথিং (Exponential Moving Average)
   double _smoothPressure(double pressure) {
     if (!_pressureSmoothing) return pressure;
-    final alpha = 0.4; // Smoothing factor
+    const alpha = 0.4; // Smoothing factor
     _lastPressure = alpha * pressure + (1 - alpha) * _lastPressure;
     return _lastPressure;
   }

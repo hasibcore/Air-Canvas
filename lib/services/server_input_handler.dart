@@ -1,8 +1,8 @@
-/// Server-side input receiver service
-///
-/// সার্ভার (PC) তে ইনপুট ইভেন্ট রিসিভ করে প্রসেস করে:
-/// 1. Windows: Native API তে ইনজেক্ট করে (বাস্তব ট্যাবলেট ইনপুট)
-/// 2. Debug mode: লোকাল ক্যানভাসে ভিজুয়ালাইজ করে
+// Server-side input receiver service
+//
+// সার্ভার (PC) তে ইনপুট ইভেন্ট রিসিভ করে প্রসেস করে:
+// 1. Windows: Native API তে ইনজেক্ট করে (বাস্তব ট্যাবলেট ইনপুট)
+// 2. Debug mode: লোকাল ক্যানভাসে ভিজুয়ালাইজ করে
 
 import 'dart:async';
 import 'dart:io';
