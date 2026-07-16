@@ -1,8 +1,8 @@
-/// ড্রয়িং স্ক্রিন - পুরো স্ক্রিন ড্রয়িং ক্যানভাস
-///
-/// এই স্ক্রিন মোবাইল/ট্যাবে পুরো স্ক্রিন জুড়ে একটি ড্রয়িং এরিয়া দেখায়।
-/// টাচ ইনপুট ক্যাপচার করে WebSocket এর মাধ্যমে সার্ভারে পাঠায়।
-/// স্টাইলাস সাপোর্ট সহ pressure-sensitive ড্রয়িং।
+// ড্রয়িং স্ক্রিন - পুরো স্ক্রিন ড্রয়িং ক্যানভাস
+//
+// এই স্ক্রিন মোবাইল/ট্যাবে পুরো স্ক্রিন জুড়ে একটি ড্রয়িং এরিয়া দেখায়।
+// টাচ ইনপুট ক্যাপচার করে WebSocket এর মাধ্যমে সার্ভারে পাঠায়।
+// স্টাইলাস সাপোর্ট সহ pressure-sensitive ড্রয়িং।
 
 import 'dart:async';
 import 'package:flutter/gestures.dart';
@@ -26,13 +26,24 @@ class DrawingScreen extends StatefulWidget {
 class _DrawingScreenState extends State<DrawingScreen> {
   bool _showToolbar = true;
   Timer? _hideToolbarTimer;
-  bool _canvasSizeSet = false;
+
+  // Track last canvas dimensions to detect updates (Bug 81)
+  double? _lastWidth;
+  double? _lastHeight;
+
+  // Track if stylus support has already been registered (Bug 92)
+  bool _stylusSupportDetected = false;
+
+  // Default fallback pressure constant (Bug 93)
+  static const double _defaultPressure = 0.5;
+
+  // Hint text localized helper (Bug 94)
+  String get _tapToShowToolbarHint => 'Tap to show toolbar';
 
   @override
   void initState() {
     super.initState();
-    // Screen always on while drawing
-    WakelockPlus.enable();
+    _initWakelock(); // Await safely (Bug 85)
 
     // ল্যান্ডস্কেপ মোড
     SystemChrome.setPreferredOrientations([
@@ -45,6 +56,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
     // DrawingProvider এ ইনপুট ইভেন্ট callback সেট করা
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       final drawing = context.read<DrawingProvider>();
       final connection = context.read<ConnectionProvider>();
       drawing.onInputGenerated = (event) {
@@ -56,10 +68,28 @@ class _DrawingScreenState extends State<DrawingScreen> {
     _resetToolbarTimer();
   }
 
+  // Await and handle Wakelock (Bug 85)
+  Future<void> _initWakelock() async {
+    try {
+      await WakelockPlus.enable();
+    } catch (e) {
+      debugPrint('Error enabling wakelock: $e');
+    }
+  }
+
+  Future<void> _disposeWakelock() async {
+    try {
+      await WakelockPlus.disable();
+    } catch (e) {
+      debugPrint('Error disabling wakelock: $e');
+    }
+  }
+
   @override
   void dispose() {
-    WakelockPlus.disable();
-    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    _disposeWakelock(); // Await safely (Bug 85)
+    // Reset preferred orientations to empty/default to restore auto-rotate behavior (Bug 86)
+    SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _hideToolbarTimer?.cancel();
     super.dispose();
@@ -68,16 +98,15 @@ class _DrawingScreenState extends State<DrawingScreen> {
   void _resetToolbarTimer() {
     _hideToolbarTimer?.cancel();
     _hideToolbarTimer = Timer(const Duration(seconds: 5), () {
-      if (mounted && !_showToolbar) return;
-      setState(() => _showToolbar = false);
+      if (mounted && _showToolbar) { // Only set state if toolbar is actually visible (Bug 87, 95)
+        setState(() => _showToolbar = false);
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final drawing = context.watch<DrawingProvider>();
-    final connection = context.watch<ConnectionProvider>();
-
+    // Watch providers granularly inside consumers to prevent whole screen rebuilds (Bug 88, 89)
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A12),
       body: Stack(
@@ -86,14 +115,17 @@ class _DrawingScreenState extends State<DrawingScreen> {
           Positioned.fill(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                // Canvas size শুধুমাত্র একবার set করা হবে
-                if (!_canvasSizeSet) {
-                  _canvasSizeSet = true;
+                // Canvas size dynamically updates when constraints change (Bug 81)
+                if (_lastWidth != constraints.maxWidth || _lastHeight != constraints.maxHeight) {
+                  _lastWidth = constraints.maxWidth;
+                  _lastHeight = constraints.maxHeight;
                   WidgetsBinding.instance.addPostFrameCallback((_) {
-                    drawing.updateCanvasSize(
-                      constraints.maxWidth,
-                      constraints.maxHeight,
-                    );
+                    if (mounted) {
+                      context.read<DrawingProvider>().updateCanvasSize(
+                            constraints.maxWidth,
+                            constraints.maxHeight,
+                          );
+                    }
                   });
                 }
                 return Listener(
@@ -104,14 +136,18 @@ class _DrawingScreenState extends State<DrawingScreen> {
                   onPointerCancel: _onPointerCancel,
                   child: Container(
                     color: const Color(0xFF0A0A12),
-                    child: CustomPaint(
-                      painter: DrawingPainter(
-                        strokes: drawing.strokes,
-                        currentStroke: drawing.currentStroke,
-                        currentStrokePointsCount: drawing.currentStroke?.points.length ?? 0,
-                        brushSettings: drawing.brushSettings,
-                      ),
-                      size: Size.infinite,
+                    child: Consumer<DrawingProvider>(
+                      builder: (context, drawing, child) {
+                        return CustomPaint(
+                          painter: DrawingPainter(
+                            strokes: drawing.strokes,
+                            currentStroke: drawing.currentStroke,
+                            currentStrokePointsCount: drawing.currentStroke?.points.length ?? 0,
+                            brushSettings: drawing.brushSettings,
+                          ),
+                          size: Size.infinite,
+                        );
+                      },
                     ),
                   ),
                 );
@@ -119,61 +155,75 @@ class _DrawingScreenState extends State<DrawingScreen> {
             ),
           ),
 
-          // Grid overlay (subtle)
-          Positioned.fill(
+          // Grid overlay (subtle, optimized with RepaintBoundary and const to prevent grid repaint) (Bug 91)
+          const Positioned.fill(
             child: IgnorePointer(
-              child: CustomPaint(
-                painter: GridPainter(),
-                size: Size.infinite,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  painter: GridPainter(),
+                  size: Size.infinite,
+                ),
               ),
             ),
           ),
 
-          // Toolbar (animated)
+          // Toolbar (animated, wrapped in granular Consumer to prevent whole screen rebuilds) (Bug 88, 89)
           if (_showToolbar)
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
-              child: ToolbarWidget(
-                brushSettings: drawing.brushSettings,
-                onBrushChanged: (settings) => drawing.updateBrush(settings),
-                onUndo: () => drawing.undo(),
-                onClear: () => drawing.clearCanvas(),
-                onDisconnect: () {
-                  connection.disconnect();
-                  Navigator.of(context).pop();
+              child: Consumer2<DrawingProvider, ConnectionProvider>(
+                builder: (context, drawing, connection, child) {
+                  return ToolbarWidget(
+                    brushSettings: drawing.brushSettings,
+                    onBrushChanged: (settings) => drawing.updateBrush(settings),
+                    onUndo: () => drawing.undo(),
+                    onClear: () => drawing.clearCanvas(),
+                    onDisconnect: () {
+                      connection.disconnect();
+                      Navigator.of(context).pop();
+                    },
+                    isConnected: connection.isConnected,
+                    latency: connection.latencyMs,
+                  );
                 },
-                isConnected: connection.isConnected,
-                latency: connection.latencyMs,
               ),
             ),
 
-          // Connection floating indicator
+          // Connection floating indicator (wrapped in granular Consumer to prevent whole screen rebuilds) (Bug 89)
           Positioned(
             top: 16,
             right: 16,
-            child: ConnectionFloatingButton(
-              isConnected: connection.isConnected,
-              latency: connection.latencyMs,
-              deviceName: connection.connectedDeviceName,
-              onTap: () {
-                setState(() => _showToolbar = !_showToolbar);
-                _resetToolbarTimer();
+            child: Consumer<ConnectionProvider>(
+              builder: (context, connection, child) {
+                return ConnectionFloatingButton(
+                  isConnected: connection.isConnected,
+                  latency: connection.latencyMs,
+                  deviceName: connection.connectedDeviceName,
+                  onTap: () {
+                    if (!_showToolbar) {
+                      setState(() => _showToolbar = true);
+                    } else {
+                      setState(() => _showToolbar = false);
+                    }
+                    _resetToolbarTimer();
+                  },
+                );
               },
             ),
           ),
 
           // Touch to show toolbar hint
           if (!_showToolbar)
-            const Positioned(
+            Positioned(
               bottom: 16,
               left: 0,
               right: 0,
               child: Center(
                 child: Text(
-                  'Tap to show toolbar',
-                  style: TextStyle(color: Colors.white24, fontSize: 12),
+                  _tapToShowToolbarHint, // Extracted for localization (Bug 94)
+                  style: const TextStyle(color: Colors.white24, fontSize: 12),
                 ),
               ),
             ),
@@ -184,28 +234,46 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
   // ==================== TOUCH HANDLING ====================
 
+  // Helper to resolve PointerDeviceKind to PointerType (Bug 82, 84)
+  PointerType _getPointerType(PointerDeviceKind kind) {
+    switch (kind) {
+      case PointerDeviceKind.stylus:
+        return PointerType.stylus;
+      case PointerDeviceKind.mouse:
+        return PointerType.mouse;
+      default:
+        return PointerType.finger;
+    }
+  }
+
+  // Helper to extract and normalize pressure safely (Bug 83, 84, 93)
+  double _getPressure(PointerEvent event) {
+    if (event.pressureMin < event.pressureMax && event.pressureMax > 0.0) {
+      return ((event.pressure - event.pressureMin) / (event.pressureMax - event.pressureMin)).clamp(0.0, 1.0);
+    }
+    if (event.pressure > 0.0) {
+      return event.pressure.clamp(0.0, 1.0);
+    }
+    return _defaultPressure;
+  }
+
   void _onPointerDown(PointerDownEvent event) {
-    setState(() => _showToolbar = true);
+    if (!_showToolbar) { // Only set state if not already visible (Bug 87, 95)
+      setState(() => _showToolbar = true);
+    }
     _resetToolbarTimer();
 
     final drawing = context.read<DrawingProvider>();
+    final pressure = _getPressure(event);
+    final pointerType = _getPointerType(event.kind);
 
-    // প্রেশার বের করা (stylus support)
-    double pressure = 0.5;
-    if (event.pressure > 0 && event.pressure <= 1.0) {
-      pressure = event.pressure;
-    }
-
-    // Pointer type detect করা
-    PointerType pointerType = PointerType.finger;
-    if (event.kind == PointerDeviceKind.stylus) {
-      pointerType = PointerType.stylus;
+    // Optimized stylus detection (Bug 92)
+    if (pointerType == PointerType.stylus && !_stylusSupportDetected) {
+      _stylusSupportDetected = true;
       final connection = context.read<ConnectionProvider>();
       if (!connection.hasStylusSupportSetting) {
         connection.setStylusSupport(true);
       }
-    } else if (event.kind == PointerDeviceKind.mouse) {
-      pointerType = PointerType.mouse;
     }
 
     drawing.onPointerDown(
@@ -218,21 +286,16 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
   void _onPointerMove(PointerMoveEvent event) {
     final drawing = context.read<DrawingProvider>();
+    final pressure = _getPressure(event);
+    final pointerType = _getPointerType(event.kind);
 
-    double pressure = 0.5;
-    if (event.pressure > 0 && event.pressure <= 1.0) {
-      pressure = event.pressure;
-    }
-
-    PointerType pointerType = PointerType.finger;
-    if (event.kind == PointerDeviceKind.stylus) {
-      pointerType = PointerType.stylus;
+    // Optimized stylus detection (Bug 92)
+    if (pointerType == PointerType.stylus && !_stylusSupportDetected) {
+      _stylusSupportDetected = true;
       final connection = context.read<ConnectionProvider>();
       if (!connection.hasStylusSupportSetting) {
         connection.setStylusSupport(true);
       }
-    } else if (event.kind == PointerDeviceKind.mouse) {
-      pointerType = PointerType.mouse;
     }
 
     drawing.onPointerMove(
@@ -245,13 +308,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
   void _onPointerUp(PointerUpEvent event) {
     final drawing = context.read<DrawingProvider>();
-
-    PointerType pointerType = PointerType.finger;
-    if (event.kind == PointerDeviceKind.stylus) {
-      pointerType = PointerType.stylus;
-    } else if (event.kind == PointerDeviceKind.mouse) {
-      pointerType = PointerType.mouse;
-    }
+    final pointerType = _getPointerType(event.kind);
 
     drawing.onPointerUp(
       pointerType: pointerType,
@@ -261,9 +318,10 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
   void _onPointerCancel(PointerCancelEvent event) {
     final drawing = context.read<DrawingProvider>();
-    // Cancel = force end the stroke without sending an up event
+    final pointerType = _getPointerType(event.kind); // Fixed: stylus cancel now retains type stylus (Bug 82)
+
     drawing.onPointerUp(
-      pointerType: PointerType.finger,
+      pointerType: pointerType,
       pointerId: event.pointer,
     );
   }
@@ -312,7 +370,7 @@ class DrawingPainter extends CustomPainter {
         Paint()
           ..color = settings.mode == BrushMode.eraser
               ? const Color(0xFF0A0A12)
-              : settings.color.withOpacity(settings.opacity)
+              : settings.color.withValues(alpha: settings.opacity)
           ..strokeWidth = 1
           ..style = PaintingStyle.fill,
       );
@@ -337,7 +395,6 @@ class DrawingPainter extends CustomPainter {
         p1.dx - (p2.dx - p0.dx) / 6,
         p1.dy - (p2.dy - p0.dy) / 6,
       );
-
       path.cubicTo(controlPoint1.dx, controlPoint1.dy, controlPoint2.dx, controlPoint2.dy, p1.dx, p1.dy);
     }
 
@@ -354,7 +411,7 @@ class DrawingPainter extends CustomPainter {
       final paint = Paint()
         ..color = settings.mode == BrushMode.eraser
             ? const Color(0xFF0A0A12)
-            : settings.color.withOpacity(settings.opacity)
+            : settings.color.withValues(alpha: settings.opacity)
         ..strokeWidth = width
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
@@ -374,16 +431,19 @@ class DrawingPainter extends CustomPainter {
   bool shouldRepaint(covariant DrawingPainter oldDelegate) {
     return oldDelegate.currentStrokePointsCount != currentStrokePointsCount ||
         oldDelegate.strokes.length != strokes.length ||
-        oldDelegate.brushSettings != brushSettings;
+        oldDelegate.brushSettings != brushSettings ||
+        oldDelegate.currentStroke != currentStroke;
   }
 }
 
 /// Subtle grid overlay
 class GridPainter extends CustomPainter {
+  const GridPainter();
+
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFFFFFFFF).withOpacity(0.03)
+      ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.03)
       ..strokeWidth = 0.5;
 
     const gridSize = 40.0;
