@@ -1,4 +1,4 @@
-/// কানেকশন স্ট্যাটাস বার - হোম স্ক্রিনে কানেকশন অবস্থা দেখায়
+// কানেকশন স্ট্যাটাস বার - হোম স্ক্রিনে কানেকশন অবস্থা দেখায়
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:provider/provider.dart';
 import '../services/connection_provider.dart';
@@ -47,9 +47,9 @@ class ConnectionStatusBar extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [

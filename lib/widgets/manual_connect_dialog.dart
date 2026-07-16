@@ -1,4 +1,4 @@
-/// ম্যানুয়াল কানেক্ট ডায়ালগ - IP ও Port দিয়ে কানেক্ট করা
+// ম্যানুয়াল কানেক্ট ডায়ালগ - IP ও Port দিয়ে কানেক্ট করা
 import 'package:flutter/material.dart';
 
 class ManualConnectDialog extends StatefulWidget {

@@ -1,4 +1,4 @@
-/// ড্রয়িং টুলবার - ব্রাশ সেটিংস, আন্ডো, ক্লিয়ার, ডিসকানেক্ট
+// ড্রয়িং টুলবার - ব্রাশ সেটিংস, আন্ডো, ক্লিয়ার, ডিসকানেক্ট
 import 'package:flutter/material.dart';
 import '../services/drawing_provider.dart';
 
@@ -56,7 +56,7 @@ class ToolbarWidget extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  '${brushSettings.baseWidth.toStringAsFixed(1)}',
+                  brushSettings.baseWidth.toStringAsFixed(1),
                   style: const TextStyle(color: Colors.white, fontSize: 12),
                 ),
               ],
@@ -105,7 +105,7 @@ class ToolbarWidget extends StatelessWidget {
                   icon: _getBrushModeIcon(),
                   tooltip: brushSettings.mode.name,
                   onTap: () {
-                    final modes = BrushMode.values;
+                    const modes = BrushMode.values;
                     final nextIndex = (modes.indexOf(brushSettings.mode) + 1) % modes.length;
                     onBrushChanged(brushSettings.copyWith(mode: modes[nextIndex]));
                   },
@@ -173,7 +173,7 @@ class ToolbarWidget extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: (color ?? const Color(0xFF6C63FF)).withOpacity(0.15),
+            color: (color ?? const Color(0xFF6C63FF)).withValues(alpha: 0.15),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, color: color ?? const Color(0xFF6C63FF), size: 20),

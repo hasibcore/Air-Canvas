@@ -1,4 +1,4 @@
-/// কানেকশন ফ্লোটিং বাটন - ড্রয়িং স্ক্রিনে কানেকশন স্ট্যাটাস দেখায়
+// কানেকশন ফ্লোটিং বাটন - ড্রয়িং স্ক্রিনে কানেকশন স্ট্যাটাস দেখায়
 import 'package:flutter/material.dart';
 
 class ConnectionFloatingButton extends StatelessWidget {
@@ -25,9 +25,9 @@ class ConnectionFloatingButton extends StatelessWidget {
         duration: const Duration(milliseconds: 300),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.15),
+          color: color.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withOpacity(0.3)),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

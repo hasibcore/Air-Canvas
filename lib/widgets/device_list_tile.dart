@@ -1,4 +1,4 @@
-/// ডিভাইস লিস্ট টাইল - আবিষ্কৃত ডিভাইস দেখানোর জন্য
+// ডিভাইস লিস্ট টাইল - আবিষ্কৃত ডিভাইস দেখানোর জন্য
 import 'package:flutter/material.dart';
 import '../services/connection_provider.dart';
 
@@ -34,7 +34,7 @@ class DeviceListTile extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF6C63FF).withOpacity(0.15),
+                    color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Icon(

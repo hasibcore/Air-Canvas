@@ -1,9 +1,9 @@
-/// হোম স্ক্রিন - সার্ভার/ক্লায়েন্ট মোড সিলেক্ট ও কানেকশন ম্যানেজমেন্ট
-///
-/// এই স্ক্রিন থেকে ইউজার:
-/// 1. পিসিতে সার্ভার শুরু করতে পারে
-/// 2. মোবাইল থেকে সার্ভার খুঁজে কানেক্ট করতে পারে
-/// 3. ম্যানুয়ালি IP দিয়ে কানেক্ট করতে পারে
+// হোম স্ক্রিন - সার্ভার/ক্লায়েন্ট মোড সিলেক্ট ও কানেকশন ম্যানেজমেন্ট
+//
+// এই স্ক্রিন থেকে ইউজার:
+// 1. পিসিতে সার্ভার শুরু করতে পারে
+// 2. মোবাইল থেকে সার্ভার খুঁজে কানেক্ট করতে পারে
+// 3. ম্যানুয়ালি IP দিয়ে কানেক্ট করতে পারে
 
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart';
@@ -108,7 +108,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF6C63FF).withOpacity(0.15),
+                  color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Icon(
@@ -186,10 +186,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
+              gradient: const LinearGradient(
                 colors: [
-                  const Color(0xFF1A1A2E),
-                  const Color(0xFF16213E),
+                  Color(0xFF1A1A2E),
+                  Color(0xFF16213E),
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -231,9 +231,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF6C63FF).withOpacity(0.15),
+                        color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFF6C63FF).withOpacity(0.3)),
+                        border: Border.all(color: const Color(0xFF6C63FF).withValues(alpha: 0.3)),
                       ),
                       child: Column(
                         children: [
@@ -266,9 +266,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.green.shade400.withOpacity(0.1),
+                      color: Colors.green.shade400.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.green.shade400.withOpacity(0.3)),
+                      border: Border.all(color: Colors.green.shade400.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       children: [
@@ -529,7 +529,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               screenHeight: size.height,
             );
             if (success && context.mounted) {
-              Navigator.of(context).pushNamed('/drawing');
+              await Navigator.of(context).pushNamed('/drawing');
             }
           },
         );
@@ -547,9 +547,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           children: [
             const Icon(Icons.check_circle, color: Colors.green, size: 64),
             const SizedBox(height: 20),
-            Text(
+            const Text(
               'Connected!',
-              style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+              style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
@@ -597,7 +597,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFF6C63FF).withOpacity(0.1),
+            color: const Color(0xFF6C63FF).withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, color: const Color(0xFF6C63FF), size: 20),
@@ -698,7 +698,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             screenHeight: size.height,
           );
           if (success && context.mounted) {
-            Navigator.of(context).pushNamed('/drawing');
+            await Navigator.of(context).pushNamed('/drawing');
           }
         },
       ),
@@ -732,7 +732,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   const Text('Settings', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   SwitchListTile(
-                    activeColor: const Color(0xFF6C63FF),
+                    activeThumbColor: const Color(0xFF6C63FF),
                     title: const Text('Stylus Support', style: TextStyle(color: Colors.white)),
                     subtitle: const Text('Enable pressure sensitivity and pen inputs', style: TextStyle(color: Colors.grey, fontSize: 12)),
                     value: connection.hasStylusSupportSetting,
