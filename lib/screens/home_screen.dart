@@ -13,6 +13,10 @@ import '../widgets/connection_status_bar.dart';
 import '../widgets/device_list_tile.dart';
 import '../widgets/manual_connect_dialog.dart';
 
+// Bug 140: Localization-ready app constants
+const String kAppName = 'SuperDisplay Clone';
+const String kAppTagline = 'Wireless Graphics Tablet';
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -23,7 +27,10 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late TabController _tabController;
   final TextEditingController _ipController = TextEditingController();
-  final TextEditingController _portController = TextEditingController(text: '9090');
+  // Bug 138: Use constant instead of hardcoded port
+  final TextEditingController _portController = TextEditingController(
+    text: ConnectionProvider.defaultServerPort.toString(),
+  );
 
   @override
   void initState() {
@@ -39,59 +46,69 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _tabController.dispose();
     _ipController.dispose();
     _portController.dispose();
+    // Bug 136: Restore orientation to default on dispose
+    SystemChrome.setPreferredOrientations([]);
     super.dispose();
   }
 
+  // Bug 137: Granular rebuild with Selector instead of context.watch
   @override
   Widget build(BuildContext context) {
-    final connection = context.watch<ConnectionProvider>();
-
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F1A),
       body: SafeArea(
-        child: Column(
-          children: [
-            // Header
-            _buildHeader(connection),
+        child: Selector<ConnectionProvider, ({ConnectionState state, bool isConnected})>(
+          selector: (_, cp) => (state: cp.state, isConnected: cp.isConnected),
+          builder: (context, sel, _) {
+            final connection = context.read<ConnectionProvider>();
+            return Column(
+              children: [
+                // Header — only rebuilds on localIp/pairingPin changes
+                Selector<ConnectionProvider, ({String localIp, String? pairingPin})>(
+                  selector: (_, cp) => (localIp: cp.localIp, pairingPin: cp.pairingPin),
+                  builder: (context, _, __) => _buildHeader(connection),
+                ),
 
-            // Connection Status Bar
-            const ConnectionStatusBar(),
+                // Connection Status Bar
+                const ConnectionStatusBar(),
 
-            // Content
-            Expanded(
-              child: connection.isConnected
-                  ? _buildConnectedView(connection)
-                  : TabBarView(
+                // Content
+                Expanded(
+                  child: sel.isConnected
+                      ? _buildConnectedView(connection)
+                      : TabBarView(
+                          controller: _tabController,
+                          children: [
+                            _buildServerTab(connection),
+                            _buildClientTab(connection),
+                          ],
+                        ),
+                ),
+
+                // Tab Bar
+                if (!sel.isConnected)
+                  Container(
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF1A1A2E),
+                      border: Border(
+                        top: BorderSide(color: Color(0xFF2A2A4A)),
+                      ),
+                    ),
+                    child: TabBar(
                       controller: _tabController,
-                      children: [
-                        _buildServerTab(connection),
-                        _buildClientTab(connection),
+                      indicatorColor: const Color(0xFF6C63FF),
+                      indicatorWeight: 3,
+                      labelColor: const Color(0xFF6C63FF),
+                      unselectedLabelColor: Colors.grey,
+                      tabs: const [
+                        Tab(text: 'SERVER (PC)', icon: Icon(Icons.computer)),
+                        Tab(text: 'CLIENT (Mobile)', icon: Icon(Icons.phone_android)),
                       ],
                     ),
-            ),
-
-            // Tab Bar
-            if (!connection.isConnected)
-              Container(
-                decoration: const BoxDecoration(
-                  color: Color(0xFF1A1A2E),
-                  border: Border(
-                    top: BorderSide(color: Color(0xFF2A2A4A)),
                   ),
-                ),
-                child: TabBar(
-                  controller: _tabController,
-                  indicatorColor: const Color(0xFF6C63FF),
-                  indicatorWeight: 3,
-                  labelColor: const Color(0xFF6C63FF),
-                  unselectedLabelColor: Colors.grey,
-                  tabs: const [
-                    Tab(text: 'SERVER (PC)', icon: Icon(Icons.computer)),
-                    Tab(text: 'CLIENT (Mobile)', icon: Icon(Icons.phone_android)),
-                  ],
-                ),
-              ),
-          ],
+              ],
+            );
+          },
         ),
       ),
     );
@@ -122,8 +139,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Bug 140: Use app constants
                     const Text(
-                      'SuperDisplay Clone',
+                      kAppName,
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 24,
@@ -132,7 +150,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
                     ),
                     Text(
-                      'Wireless Graphics Tablet',
+                      kAppTagline,
                       style: TextStyle(
                         color: Colors.grey.shade400,
                         fontSize: 13,
@@ -766,7 +784,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   const ListTile(
                     leading: Icon(Icons.info_outline, color: Color(0xFF6C63FF)),
                     title: Text('About', style: TextStyle(color: Colors.white)),
-                    subtitle: Text('SuperDisplay Clone v1.0', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    subtitle: Text('$kAppName v1.0', style: TextStyle(color: Colors.grey, fontSize: 12)),
                   ),
                 ],
               );
