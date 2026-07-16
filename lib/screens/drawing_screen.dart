@@ -136,18 +136,11 @@ class _DrawingScreenState extends State<DrawingScreen> {
                   onPointerCancel: _onPointerCancel,
                   child: Container(
                     color: const Color(0xFF0A0A12),
-                    child: Consumer<DrawingProvider>(
-                      builder: (context, drawing, child) {
-                        return CustomPaint(
-                          painter: DrawingPainter(
-                            strokes: drawing.strokes,
-                            currentStroke: drawing.currentStroke,
-                            currentStrokePointsCount: drawing.currentStroke?.points.length ?? 0,
-                            brushSettings: drawing.brushSettings,
-                          ),
-                          size: Size.infinite,
-                        );
-                      },
+                    child: CustomPaint(
+                      painter: DrawingPainter(
+                        drawingProvider: context.read<DrawingProvider>(),
+                      ),
+                      size: Size.infinite,
                     ),
                   ),
                 );
@@ -239,6 +232,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
     switch (kind) {
       case PointerDeviceKind.stylus:
         return PointerType.stylus;
+      case PointerDeviceKind.invertedStylus:
+        return PointerType.eraser;
       case PointerDeviceKind.mouse:
         return PointerType.mouse;
       default:
@@ -331,28 +326,23 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
 /// ড্রয়িং রেন্ডারার - সব স্ট্রোক ও কারেন্ট স্ট্রোক আঁকে
 class DrawingPainter extends CustomPainter {
-  final List<Stroke> strokes;
-  final Stroke? currentStroke;
-  final int currentStrokePointsCount;
-  final BrushSettings brushSettings;
+  final DrawingProvider drawingProvider;
 
   DrawingPainter({
-    required this.strokes,
-    this.currentStroke,
-    required this.currentStrokePointsCount,
-    required this.brushSettings,
-  });
+    required this.drawingProvider,
+  }) : super(repaint: drawingProvider.canvasNotifier);
 
   @override
   void paint(Canvas canvas, Size size) {
     // সব completed strokes আঁকা
-    for (final stroke in strokes) {
+    for (final stroke in drawingProvider.strokes) {
       _drawStroke(canvas, stroke, size);
     }
 
     // কারেন্ট (in-progress) স্ট্রোক আঁকা
-    if (currentStroke != null && currentStroke!.points.isNotEmpty) {
-      _drawStroke(canvas, currentStroke!, size);
+    final currentStroke = drawingProvider.currentStroke;
+    if (currentStroke != null && currentStroke.points.isNotEmpty) {
+      _drawStroke(canvas, currentStroke, size);
     }
   }
 
@@ -429,10 +419,7 @@ class DrawingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant DrawingPainter oldDelegate) {
-    return oldDelegate.currentStrokePointsCount != currentStrokePointsCount ||
-        oldDelegate.strokes.length != strokes.length ||
-        oldDelegate.brushSettings != brushSettings ||
-        oldDelegate.currentStroke != currentStroke;
+    return oldDelegate.drawingProvider != drawingProvider;
   }
 }
 
