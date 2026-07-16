@@ -13,6 +13,7 @@ enum InputEventType {
   pointerUp,
   pointerCancel,
   hover,
+  clear,
 }
 
 class InputEvent {
@@ -230,6 +231,7 @@ class InputEvent {
       case InputEventType.pointerUp: return 'up';
       case InputEventType.pointerCancel: return 'cancel';
       case InputEventType.hover: return 'hover';
+      case InputEventType.clear: return 'clear';
     }
   }
 
@@ -240,6 +242,7 @@ class InputEvent {
       case 'up': return InputEventType.pointerUp;
       case 'cancel': return InputEventType.pointerCancel;
       case 'hover': return InputEventType.hover;
+      case 'clear': return InputEventType.clear;
       default: return InputEventType.pointerMove;
     }
   }
