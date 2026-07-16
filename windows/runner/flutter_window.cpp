@@ -8,6 +8,78 @@
 #include <flutter/standard_method_codec.h>
 #include <flutter/encodable_value.h>
 
+#include <windows.h>
+#include <cstdio>
+
+// Macro definitions for pointer injection (compatibility layer)
+#ifndef PT_PEN
+#define PT_PEN 3
+#endif
+
+#ifndef POINTER_FEEDBACK_DEFAULT
+#define POINTER_FEEDBACK_DEFAULT 1
+#endif
+
+#ifndef POINTER_FLAG_INRANGE
+#define POINTER_FLAG_INRANGE 0x00000002
+#endif
+
+#ifndef POINTER_FLAG_INCONTACT
+#define POINTER_FLAG_INCONTACT 0x00000004
+#endif
+
+#ifndef POINTER_FLAG_DOWN
+#define POINTER_FLAG_DOWN 0x00010000
+#endif
+
+#ifndef POINTER_FLAG_UPDATE
+#define POINTER_FLAG_UPDATE 0x00020000
+#endif
+
+#ifndef POINTER_FLAG_UP
+#define POINTER_FLAG_UP 0x00040000
+#endif
+
+#ifndef POINTER_FLAG_CANCELED
+#define POINTER_FLAG_CANCELED 0x00080000
+#endif
+
+#ifndef POINTER_FLAG_FIRSTBUTTON
+#define POINTER_FLAG_FIRSTBUTTON 0x00000010
+#endif
+
+#ifndef POINTER_FLAG_SECONDBUTTON
+#define POINTER_FLAG_SECONDBUTTON 0x00000020
+#endif
+
+#ifndef PEN_FLAG_NONE
+#define PEN_FLAG_NONE 0x00000000
+#endif
+
+#ifndef PEN_FLAG_BARREL
+#define PEN_FLAG_BARREL 0x00000001
+#endif
+
+#ifndef PEN_FLAG_INVERTED
+#define PEN_FLAG_INVERTED 0x00000002
+#endif
+
+#ifndef PEN_FLAG_ERASER
+#define PEN_FLAG_ERASER 0x00000004
+#endif
+
+#ifndef PEN_MASK_PRESSURE
+#define PEN_MASK_PRESSURE 0x00000001
+#endif
+
+#ifndef PEN_MASK_TILT_X
+#define PEN_MASK_TILT_X 0x00000004
+#endif
+
+#ifndef PEN_MASK_TILT_Y
+#define PEN_MASK_TILT_Y 0x00000008
+#endif
+
 static double GetDouble(const flutter::EncodableMap& map, const std::string& key, double default_val) {
   auto it = map.find(flutter::EncodableValue(key));
   if (it != map.end()) {
@@ -34,6 +106,47 @@ static int GetInt(const flutter::EncodableMap& map, const std::string& key, int 
     }
   }
   return default_val;
+}
+
+// Custom resolution override parameters
+static int g_customWidth = 0;
+static int g_customHeight = 0;
+
+// Pointer injection dynamic loader variables and functions
+typedef HSYNTHETICPOINTERDEVICE(WINAPI* CreateSyntheticPointerDevice_t)(POINTER_INPUT_TYPE, ULONG, POINTER_FEEDBACK_MODE);
+typedef BOOL(WINAPI* InjectSyntheticPointerInput_t)(HSYNTHETICPOINTERDEVICE, const POINTER_TYPE_INFO*, ULONG);
+typedef void(WINAPI* DestroySyntheticPointerDevice_t)(HSYNTHETICPOINTERDEVICE);
+
+static CreateSyntheticPointerDevice_t pCreateSyntheticPointerDevice = nullptr;
+static InjectSyntheticPointerInput_t pInjectSyntheticPointerInput = nullptr;
+static DestroySyntheticPointerDevice_t pDestroySyntheticPointerDevice = nullptr;
+
+static HSYNTHETICPOINTERDEVICE g_penDevice = nullptr;
+static bool g_apisAttempted = false;
+static bool g_apisLoaded = false;
+
+static bool LoadPointerInjectionAPIs() {
+  if (g_apisAttempted) return g_apisLoaded;
+  g_apisAttempted = true;
+  
+  HMODULE hUser32 = GetModuleHandleA("user32.dll");
+  if (hUser32) {
+    pCreateSyntheticPointerDevice = (CreateSyntheticPointerDevice_t)GetProcAddress(hUser32, "CreateSyntheticPointerDevice");
+    pInjectSyntheticPointerInput = (InjectSyntheticPointerInput_t)GetProcAddress(hUser32, "InjectSyntheticPointerInput");
+    pDestroySyntheticPointerDevice = (DestroySyntheticPointerDevice_t)GetProcAddress(hUser32, "DestroySyntheticPointerDevice");
+  }
+  g_apisLoaded = (pCreateSyntheticPointerDevice != nullptr && 
+                  pInjectSyntheticPointerInput != nullptr && 
+                  pDestroySyntheticPointerDevice != nullptr);
+  return g_apisLoaded;
+}
+
+static bool InitializePenDevice() {
+  if (!LoadPointerInjectionAPIs()) return false;
+  if (g_penDevice) return true;
+  
+  g_penDevice = pCreateSyntheticPointerDevice(PT_PEN, 1, POINTER_FEEDBACK_DEFAULT);
+  return g_penDevice != nullptr;
 }
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -65,11 +178,11 @@ bool FlutterWindow::OnCreate() {
       &flutter::StandardMethodCodec::GetInstance());
 
   input_channel->SetMethodCallHandler(
-      [](const flutter::MethodCall<flutter::EncodableValue>& call,
-         std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
         if (call.method_name() == "initializePointerDevice") {
-          // Initialize pointer injection or just return true
-          result->Success(flutter::EncodableValue(true));
+          bool init_success = InitializePenDevice();
+          result->Success(flutter::EncodableValue(init_success));
         } else if (call.method_name() == "injectPointerEvent") {
           const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
           if (!arguments) {
@@ -81,43 +194,159 @@ bool FlutterWindow::OnCreate() {
           double x = GetDouble(*arguments, "x", 0.0);
           double y = GetDouble(*arguments, "y", 0.0);
           double pressure = GetDouble(*arguments, "pressure", 0.5);
+          int pointerType = GetInt(*arguments, "pointerType", 0);
+          int pointerId = GetInt(*arguments, "pointerId", 0);
+          double tiltX = GetDouble(*arguments, "tiltX", 0.0);
+          double tiltY = GetDouble(*arguments, "tiltY", 0.0);
           int buttons = GetInt(*arguments, "buttons", 0);
 
-          // Map to screen coordinates
-          int screen_width = GetSystemMetrics(SM_CXSCREEN);
-          int screen_height = GetSystemMetrics(SM_CYSCREEN);
-          int target_x = static_cast<int>(x * screen_width);
-          int target_y = static_cast<int>(y * screen_height);
+          // Get active monitor info (DPI-aware and multi-monitor support)
+          RECT monitor_rect;
+          monitor_rect.left = 0;
+          monitor_rect.top = 0;
+          monitor_rect.right = GetSystemMetrics(SM_CXSCREEN);
+          monitor_rect.bottom = GetSystemMetrics(SM_CYSCREEN);
 
-          // Move cursor
-          SetCursorPos(target_x, target_y);
-
-          // Send click/drag input
-          INPUT input = {0};
-          input.type = INPUT_MOUSE;
-          input.mi.dx = static_cast<LONG>(x * 65535.0);
-          input.mi.dy = static_cast<LONG>(y * 65535.0);
-          input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
-
-          if (type == 0) { // pointerDown
-            input.mi.dwFlags |= MOUSEEVENTF_LEFTDOWN;
-          } else if (type == 2) { // pointerUp
-            input.mi.dwFlags |= MOUSEEVENTF_LEFTUP;
+          HWND hwnd = GetHandle();
+          if (hwnd) {
+            HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+            MONITORINFO mi = { 0 };
+            mi.cbSize = sizeof(mi);
+            if (GetMonitorInfo(hMonitor, &mi)) {
+              monitor_rect = mi.rcMonitor;
+            }
           }
 
-          SendInput(1, &input, sizeof(INPUT));
+          // Map normalized coords
+          int target_x = 0;
+          int target_y = 0;
+          if (g_customWidth > 0 && g_customHeight > 0) {
+            target_x = static_cast<int>(x * g_customWidth);
+            target_y = static_cast<int>(y * g_customHeight);
+          } else {
+            int monitor_width = monitor_rect.right - monitor_rect.left;
+            int monitor_height = monitor_rect.bottom - monitor_rect.top;
+            target_x = monitor_rect.left + static_cast<int>(x * monitor_width);
+            target_y = monitor_rect.top + static_cast<int>(y * monitor_height);
+          }
 
-          result->Success(flutter::EncodableValue(true));
+          // Try pointer injection if available
+          if (InitializePenDevice()) {
+            POINTER_TYPE_INFO pointerInfo = {};
+            pointerInfo.type = PT_PEN;
+
+            POINTER_PEN_INFO& penInfo = pointerInfo.penInfo;
+            penInfo.pointerInfo.pointerType = PT_PEN;
+            penInfo.pointerInfo.pointerId = static_cast<UINT32>(pointerId);
+            penInfo.pointerInfo.ptPixelLocation.x = target_x;
+            penInfo.pointerInfo.ptPixelLocation.y = target_y;
+
+            DWORD pointerFlags = POINTER_FLAG_INRANGE;
+
+            // type mapping: 0 = down, 1 = move, 2 = up, 3 = cancel, 4 = hover
+            if (type == 0) {
+              pointerFlags |= POINTER_FLAG_DOWN | POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON;
+            } else if (type == 1) {
+              pointerFlags |= POINTER_FLAG_UPDATE | POINTER_FLAG_INCONTACT;
+              if (buttons & 1) {
+                pointerFlags |= POINTER_FLAG_FIRSTBUTTON;
+              }
+            } else if (type == 2) {
+              pointerFlags |= POINTER_FLAG_UP;
+            } else if (type == 3) {
+              pointerFlags |= POINTER_FLAG_UP | POINTER_FLAG_CANCELED;
+            } else if (type == 4) {
+              pointerFlags |= POINTER_FLAG_UPDATE;
+            }
+
+            if (buttons & 2) {
+              pointerFlags |= POINTER_FLAG_SECONDBUTTON;
+              penInfo.penFlags |= PEN_FLAG_BARREL;
+            }
+
+            if (pointerType == 3) { // Eraser
+              penInfo.penFlags |= PEN_FLAG_ERASER | PEN_FLAG_INVERTED;
+            }
+
+            penInfo.pointerInfo.pointerFlags = pointerFlags;
+
+            // Set Pressure
+            penInfo.pressure = static_cast<UINT32>(pressure * 1024.0);
+            penInfo.penMask |= PEN_MASK_PRESSURE;
+
+            // Set Tilt
+            penInfo.tiltX = static_cast<INT32>(tiltX);
+            penInfo.tiltY = static_cast<INT32>(tiltY);
+            penInfo.penMask |= PEN_MASK_TILT_X | PEN_MASK_TILT_Y;
+
+            BOOL success = pInjectSyntheticPointerInput(g_penDevice, &pointerInfo, 1);
+            if (success) {
+              result->Success(flutter::EncodableValue(true));
+              return;
+            } else {
+              char dbg[256];
+              sprintf_s(dbg, "InjectSyntheticPointerInput failed. Error: %lu\n", GetLastError());
+              OutputDebugStringA(dbg);
+            }
+          }
+
+          // Fallback to SendInput mouse emulation
+          INPUT input = {};
+          input.type = INPUT_MOUSE;
+
+          int virtual_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+          int virtual_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+          int virtual_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+          int virtual_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+          double normalized_x = 0.0;
+          double normalized_y = 0.0;
+          if (virtual_width > 0 && virtual_height > 0) {
+            normalized_x = static_cast<double>(target_x - virtual_left) / virtual_width;
+            normalized_y = static_cast<double>(target_y - virtual_top) / virtual_height;
+          }
+
+          input.mi.dx = static_cast<LONG>(normalized_x * 65535.0);
+          input.mi.dy = static_cast<LONG>(normalized_y * 65535.0);
+          input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESKTOP;
+
+          if (type == 0) {
+            if (buttons & 2) {
+              input.mi.dwFlags |= MOUSEEVENTF_RIGHTDOWN;
+            } else {
+              input.mi.dwFlags |= MOUSEEVENTF_LEFTDOWN;
+            }
+          } else if (type == 2 || type == 3) {
+            if (buttons & 2) {
+              input.mi.dwFlags |= MOUSEEVENTF_RIGHTUP;
+            } else {
+              input.mi.dwFlags |= MOUSEEVENTF_LEFTUP;
+            }
+          } else {
+            input.mi.dwFlags |= MOUSEEVENTF_MOVE;
+          }
+
+          UINT sent = SendInput(1, &input, sizeof(INPUT));
+          result->Success(flutter::EncodableValue(sent > 0));
         } else if (call.method_name() == "setScreenResolution") {
+          const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
+          if (arguments) {
+            g_customWidth = GetInt(*arguments, "width", 0);
+            g_customHeight = GetInt(*arguments, "height", 0);
+          }
           result->Success(flutter::EncodableValue(true));
         } else if (call.method_name() == "disposePointerDevice") {
+          if (g_penDevice && pDestroySyntheticPointerDevice) {
+            pDestroySyntheticPointerDevice(g_penDevice);
+            g_penDevice = nullptr;
+          }
           result->Success(flutter::EncodableValue(true));
         } else {
           result->NotImplemented();
         }
       });
 
-  // Keep a reference to the channel (in a real plugin, this would be a member, but here keeping it alive or registering it with messenger is enough)
+  // Keep a reference to the channel
   static auto static_channel = std::move(input_channel);
 
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
@@ -135,6 +364,10 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (g_penDevice && pDestroySyntheticPointerDevice) {
+    pDestroySyntheticPointerDevice(g_penDevice);
+    g_penDevice = nullptr;
+  }
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

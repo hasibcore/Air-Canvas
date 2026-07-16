@@ -52,6 +52,29 @@ class BrushSettings {
     smoothing: smoothing ?? this.smoothing,
     smoothingStrength: smoothingStrength ?? this.smoothingStrength,
   );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BrushSettings &&
+          runtimeType == other.runtimeType &&
+          color == other.color &&
+          baseWidth == other.baseWidth &&
+          pressureSensitivity == other.pressureSensitivity &&
+          opacity == other.opacity &&
+          mode == other.mode &&
+          smoothing == other.smoothing &&
+          smoothingStrength == other.smoothingStrength;
+
+  @override
+  int get hashCode =>
+      color.hashCode ^
+      baseWidth.hashCode ^
+      pressureSensitivity.hashCode ^
+      opacity.hashCode ^
+      mode.hashCode ^
+      smoothing.hashCode ^
+      smoothingStrength.hashCode;
 }
 
 class StrokePoint {

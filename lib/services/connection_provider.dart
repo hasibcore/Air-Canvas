@@ -76,7 +76,6 @@ class ConnectionProvider extends ChangeNotifier {
   Timer? _discoveryTimeoutTimer;
   Timer? _reconnectTimer;
   Timer? _pingTimer;
-  int _lastPingTimestamp = 0;
   int _lastDataSentOrReceivedTime = 0;
   Completer<bool>? _authCompleter;
   Future<String?> Function()? _clientPinCallback;
@@ -515,6 +514,13 @@ class ConnectionProvider extends ChangeNotifier {
         if (_errorMessage.isEmpty) {
           _errorMessage = 'অথেন্টিকেশন ফেইল করেছে। সঠিক PIN দিন।';
         }
+        // সকেট লিক প্রতিরোধ করতে সকেট ও সাবস্ক্রিপশন বন্ধ করুন
+        _socketSubscription?.cancel();
+        _socketSubscription = null;
+        _socket?.close();
+        _socket = null;
+        _isAuthenticated = false;
+
         if (!isReconnecting) {
           _setState(ConnectionState.error);
           disconnect();
@@ -523,6 +529,13 @@ class ConnectionProvider extends ChangeNotifier {
       }
     } catch (e, stackTrace) {
       debugPrint('Error in connectToServer: $e\n$stackTrace');
+      // সকেট লিক প্রতিরোধ করতে সকেট ও সাবস্ক্রিপশন বন্ধ করুন
+      _socketSubscription?.cancel();
+      _socketSubscription = null;
+      _socket?.close();
+      _socket = null;
+      _isAuthenticated = false;
+
       if (!isReconnecting) {
         _errorMessage = 'কানেক্ট করতে সমস্যা: $e';
         _setState(ConnectionState.error);
@@ -655,6 +668,8 @@ class ConnectionProvider extends ChangeNotifier {
         }
         debugPrint('[Client] রিকানেক্ট চেষ্টা $attempts/3...');
         _socketSubscription?.cancel();
+        _socketSubscription = null;
+        _socket?.close();
         _socket = null;
         
         connectToServer(
@@ -758,7 +773,6 @@ class ConnectionProvider extends ChangeNotifier {
 
   void _startLatencyMeasurement() {
     _pingTimer?.cancel();
-    _lastPingTimestamp = 0;
     // Ping adaptive (5 seconds interval when idle)
     _pingTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_socket != null) {
@@ -768,7 +782,6 @@ class ConnectionProvider extends ChangeNotifier {
           return;
         }
 
-        _lastPingTimestamp = now;
         final msg = {'type': 'ping', 'ts': now};
         if (_mode == ConnectionMode.client) {
           _sendToServer(msg);
@@ -791,7 +804,6 @@ class ConnectionProvider extends ChangeNotifier {
   void _stopLatencyMeasurement() {
     _pingTimer?.cancel();
     _pingTimer = null;
-    _lastPingTimestamp = 0;
     _latencyMs = 0;
   }
 

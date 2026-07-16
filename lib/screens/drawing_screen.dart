@@ -108,6 +108,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
                       painter: DrawingPainter(
                         strokes: drawing.strokes,
                         currentStroke: drawing.currentStroke,
+                        currentStrokePointsCount: drawing.currentStroke?.points.length ?? 0,
                         brushSettings: drawing.brushSettings,
                       ),
                       size: Size.infinite,
@@ -274,11 +275,13 @@ class _DrawingScreenState extends State<DrawingScreen> {
 class DrawingPainter extends CustomPainter {
   final List<Stroke> strokes;
   final Stroke? currentStroke;
+  final int currentStrokePointsCount;
   final BrushSettings brushSettings;
 
   DrawingPainter({
     required this.strokes,
     this.currentStroke,
+    required this.currentStrokePointsCount,
     required this.brushSettings,
   });
 
@@ -369,7 +372,7 @@ class DrawingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant DrawingPainter oldDelegate) {
-    return oldDelegate.currentStroke?.points.length != currentStroke?.points.length ||
+    return oldDelegate.currentStrokePointsCount != currentStrokePointsCount ||
         oldDelegate.strokes.length != strokes.length ||
         oldDelegate.brushSettings != brushSettings;
   }

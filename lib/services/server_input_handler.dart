@@ -14,7 +14,6 @@ import 'windows_input_injection.dart';
 class ServerInputHandler {
   final ConnectionProvider _connection;
   bool _nativeInjectionAvailable = false;
-  bool _debugMode = true; // ডিবাগ মোডে ক্যানভাসে দেখায়
   final List<InputEvent> _recentEvents = [];
   static const int _maxRecentEvents = 100;
 
