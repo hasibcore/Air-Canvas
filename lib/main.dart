@@ -29,7 +29,7 @@ void main() {
           ChangeNotifierProvider<ConnectionProvider>.value(value: connection),
           ChangeNotifierProvider(create: (_) => DrawingProvider()),
         ],
-        child: const SuperDisplayApp(),
+        child: const AirCanvasApp(),
       ),
     );
   }, (Object error, StackTrace stackTrace) {
@@ -37,13 +37,13 @@ void main() {
   });
 }
 
-class SuperDisplayApp extends StatelessWidget {
-  const SuperDisplayApp({super.key});
+class AirCanvasApp extends StatelessWidget {
+  const AirCanvasApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SuperDisplay Clone',
+      title: 'Air Canvas',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

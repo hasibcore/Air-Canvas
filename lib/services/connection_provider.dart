@@ -80,6 +80,7 @@ class ConnectionProvider extends ChangeNotifier {
   Completer<bool>? _authCompleter;
   Future<String?> Function()? _clientPinCallback;
   List<int>? _encryptionKey;
+  List<int>? _sessionKey;
 
   ConnectionProvider() {
     _loadSettings();
@@ -186,8 +187,9 @@ class ConnectionProvider extends ChangeNotifier {
       _isAuthenticated = false;
 
       // pairing pin জেনারেট করা
-      final rand = Random();
+      final rand = Random.secure();
       _pairingPin = (1000 + rand.nextInt(9000)).toString();
+      _sessionKey = List<int>.generate(32, (i) => rand.nextInt(256));
       debugPrint('[Server] Generated pairing PIN: $_pairingPin');
 
       // লোকাল IP বের করা
@@ -266,8 +268,14 @@ class ConnectionProvider extends ChangeNotifier {
             final pin = json['pin'] as String?;
             if (pin == _pairingPin) {
               _isAuthenticated = true;
-              _sendToClient({'type': 'auth_success'});
-              _encryptionKey = utf8.encode(_pairingPin!); // Set encryption key
+              // Temporarily set encryption key to PIN to securely send the new session key
+              _encryptionKey = utf8.encode(_pairingPin!);
+              _sendToClient({
+                'type': 'auth_success',
+                'session_key': base64Encode(_sessionKey!),
+              });
+              // Rotate to the new session key for all subsequent packets
+              _encryptionKey = _sessionKey;
               debugPrint('[Server] Client authenticated successfully');
             } else {
               _sendToClient({'type': 'auth_fail', 'reason': 'Incorrect pairing PIN'});
@@ -371,7 +379,7 @@ class ConnectionProvider extends ChangeNotifier {
 
       // Discovery request পাঠানো
       final discoveryMessage = jsonEncode({
-        'type': 'superdisplay_discovery',
+        'type': 'aircanvas_discovery',
         'version': '1.0',
       });
 
@@ -409,7 +417,7 @@ class ConnectionProvider extends ChangeNotifier {
             final message = utf8.decode(datagram.data);
             try {
               final json = jsonDecode(message) as Map<String, dynamic>;
-              if (json['type'] == 'superdisplay_response') {
+              if (json['type'] == 'aircanvas_response') {
                 final device = DiscoveredDevice(
                   ip: datagram.address.address,
                   name: json['name'] as String? ?? 'Unknown',
@@ -581,6 +589,7 @@ class ConnectionProvider extends ChangeNotifier {
               'type': 'auth_response',
               'pin': _lastSuccessfulPin,
             });
+            _encryptionKey = utf8.encode(_lastSuccessfulPin!); // Temporarily use PIN for auth_success decryption
           } else if (_clientPinCallback != null) {
             _clientPinCallback!().then((pin) {
               if (pin != null) {
@@ -589,6 +598,7 @@ class ConnectionProvider extends ChangeNotifier {
                   'type': 'auth_response',
                   'pin': pin,
                 });
+                _encryptionKey = utf8.encode(pin); // Temporarily use PIN for auth_success decryption
               } else {
                 _errorMessage = 'অথেন্টিকেশন বাতিল করা হয়েছে।';
                 _authCompleter?.complete(false);
@@ -600,8 +610,12 @@ class ConnectionProvider extends ChangeNotifier {
           break;
         case 'auth_success':
           _isAuthenticated = true;
-          _encryptionKey = utf8.encode(_lastSuccessfulPin!); // Set encryption key
-          debugPrint('[Client] Authenticated successfully');
+          if (json.containsKey('session_key')) {
+             _encryptionKey = base64Decode(json['session_key'] as String);
+          } else {
+             _encryptionKey = utf8.encode(_lastSuccessfulPin!); // Fallback
+          }
+          debugPrint('[Client] Authenticated successfully with rotated key');
           // Device info পাঠানো
           final deviceInfo = DeviceInfo(
             deviceName: Platform.localHostname,
@@ -619,6 +633,7 @@ class ConnectionProvider extends ChangeNotifier {
           _authCompleter?.complete(true);
           break;
         case 'auth_fail':
+          _encryptionKey = null; // Clear the temporary wrong PIN key
           _errorMessage = json['reason'] as String? ?? 'Authentication failed';
           _lastSuccessfulPin = null; // Clear cached PIN on failure
           _authCompleter?.complete(false);
@@ -742,10 +757,10 @@ class ConnectionProvider extends ChangeNotifier {
             try {
               final message = utf8.decode(datagram.data);
               final json = jsonDecode(message) as Map<String, dynamic>;
-              if (json['type'] == 'superdisplay_discovery') {
+              if (json['type'] == 'aircanvas_discovery') {
                 // Client কে respond করা
                 final response = jsonEncode({
-                  'type': 'superdisplay_response',
+                  'type': 'aircanvas_response',
                   'name': Platform.localHostname,
                   'port': serverPort,
                   'ip': _localIp,

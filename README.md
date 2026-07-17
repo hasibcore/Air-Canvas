@@ -1,4 +1,4 @@
-# superdisplay_clone
+# Air Canvas - High-Performance Wireless Graphics Tablet Bridge
 
 A new Flutter project.
 

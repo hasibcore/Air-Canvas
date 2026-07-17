@@ -14,7 +14,7 @@ import '../widgets/device_list_tile.dart';
 import '../widgets/manual_connect_dialog.dart';
 
 // Bug 140: Localization-ready app constants
-const String kAppName = 'SuperDisplay Clone';
+const String kAppName = 'Air Canvas';
 const String kAppTagline = 'Wireless Graphics Tablet';
 
 class HomeScreen extends StatefulWidget {
@@ -123,15 +123,36 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(10),
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF6C63FF).withValues(alpha: 0.3),
+                      blurRadius: 10,
+                      spreadRadius: 1,
+                    ),
+                  ],
                 ),
-                child: const Icon(
-                  Icons.draw,
-                  color: Color(0xFF6C63FF),
-                  size: 28,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.asset(
+                    'assets/logo.png',
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.draw,
+                        color: Color(0xFF6C63FF),
+                        size: 28,
+                      ),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 14),
@@ -512,7 +533,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           const SizedBox(height: 8),
           Text(
-            'Looking for SuperDisplay servers',
+            'Looking for Air Canvas servers',
             style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
           ),
         ],

@@ -5,6 +5,7 @@
 // স্টাইলাস সাপোর্ট সহ pressure-sensitive ড্রয়িং।
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -179,6 +180,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
                     },
                     isConnected: connection.isConnected,
                     latency: connection.latencyMs,
+                    canUndo: drawing.canUndo,
                   );
                 },
               ),
@@ -271,11 +273,21 @@ class _DrawingScreenState extends State<DrawingScreen> {
       }
     }
 
+    double tiltX = 0.0;
+    double tiltY = 0.0;
+    if (event.tilt > 0) {
+      tiltX = (event.tilt * math.cos(event.orientation)) * (180 / math.pi);
+      tiltY = (event.tilt * math.sin(event.orientation)) * (180 / math.pi);
+    }
+
     drawing.onPointerDown(
       event.position,
       pressure: pressure,
       pointerType: pointerType,
       pointerId: event.pointer,
+      tiltX: tiltX,
+      tiltY: tiltY,
+      buttons: event.buttons,
     );
   }
 
@@ -293,21 +305,31 @@ class _DrawingScreenState extends State<DrawingScreen> {
       }
     }
 
+    double tiltX = 0.0;
+    double tiltY = 0.0;
+    if (event.tilt > 0) {
+      tiltX = (event.tilt * math.cos(event.orientation)) * (180 / math.pi);
+      tiltY = (event.tilt * math.sin(event.orientation)) * (180 / math.pi);
+    }
+
     drawing.onPointerMove(
       event.position,
       pressure: pressure,
       pointerType: pointerType,
       pointerId: event.pointer,
+      tiltX: tiltX,
+      tiltY: tiltY,
+      buttons: event.buttons,
     );
   }
 
   void _onPointerUp(PointerUpEvent event) {
     final drawing = context.read<DrawingProvider>();
     final pointerType = _getPointerType(event.kind);
-
     drawing.onPointerUp(
       pointerType: pointerType,
       pointerId: event.pointer,
+      buttons: event.buttons,
     );
   }
 

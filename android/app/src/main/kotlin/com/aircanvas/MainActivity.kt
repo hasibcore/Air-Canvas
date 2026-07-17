@@ -1,4 +1,4 @@
-package com.superdisplay.superdisplay_clone
+package com.aircanvas
 
 import io.flutter.embedding.android.FlutterActivity
 

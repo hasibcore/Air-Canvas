@@ -38,7 +38,7 @@ class InjectionResult {
 /// Windows input injection service — singleton lifecycle (Bug 130)
 class WindowsInputInjection {
   // Bug 124: Channel name as constant
-  static const String _channelName = 'com.superdisplay/input';
+  static const String _channelName = 'com.aircanvas/input';
   static const MethodChannel _channel = MethodChannel(_channelName);
 
   // Bug 118: Default timeout for native calls

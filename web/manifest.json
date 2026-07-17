@@ -1,11 +1,11 @@
 {
-    "name": "superdisplay_clone",
-    "short_name": "superdisplay_clone",
+    "name": "Air Canvas",
+    "short_name": "Air Canvas",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Turns your phone/tablet into a wireless graphics tablet over WiFi.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

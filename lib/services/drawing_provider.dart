@@ -207,6 +207,9 @@ class DrawingProvider extends ChangeNotifier {
     double pressure = 0.5,
     PointerType pointerType = PointerType.finger,
     int pointerId = 0,
+    double tiltX = 0.0,
+    double tiltY = 0.0,
+    int buttons = 0,
   }) {
     if (pointerId < 0 || pointerId > 100) return; // Defensive pointerId check
     _isDrawing = true;
@@ -232,7 +235,10 @@ class DrawingProvider extends ChangeNotifier {
     _pressureBuffer.add(clampedPressure);
 
     // ইনপুট ইভেন্ট জেনারেট ও পাঠানো
-    _emitInputEvent(InputEventType.pointerDown, position, clampedPressure, pointerType, pointerId, now);
+    _emitInputEvent(
+      InputEventType.pointerDown, position, clampedPressure, pointerType, pointerId, now,
+      tiltX: tiltX, tiltY: tiltY, buttons: buttons,
+    );
 
     canvasNotifier.notify();
     notifyListeners();
@@ -243,6 +249,9 @@ class DrawingProvider extends ChangeNotifier {
     double pressure = 0.5,
     PointerType pointerType = PointerType.finger,
     int pointerId = 0,
+    double tiltX = 0.0,
+    double tiltY = 0.0,
+    int buttons = 0,
   }) {
     if (!_isDrawing || _currentStroke == null) return;
     if (pointerId < 0 || pointerId > 100) return; // Defensive pointerId check
@@ -271,7 +280,10 @@ class DrawingProvider extends ChangeNotifier {
     _lastPressure = smoothedPressure;
 
     // ইনপুট ইভেন্ট পাঠানো
-    _emitInputEvent(InputEventType.pointerMove, smoothedPosition, smoothedPressure, pointerType, pointerId, now);
+    _emitInputEvent(
+      InputEventType.pointerMove, smoothedPosition, smoothedPressure, pointerType, pointerId, now,
+      tiltX: tiltX, tiltY: tiltY, buttons: buttons,
+    );
 
     // Only notify the canvas repaint notifier (avoids rebuilding the entire widget tree/toolbar)
     canvasNotifier.notify();
@@ -281,6 +293,7 @@ class DrawingProvider extends ChangeNotifier {
   void onPointerUp({
     PointerType pointerType = PointerType.finger,
     int pointerId = 0,
+    int buttons = 0,
   }) {
     if (!_isDrawing || _currentStroke == null) return;
     if (pointerId < 0 || pointerId > 100) return; // Defensive pointerId check
@@ -312,7 +325,10 @@ class DrawingProvider extends ChangeNotifier {
 
     // ইনপুট ইভেন্ট পাঠানো
     if (_lastPosition != null) {
-      _emitInputEvent(InputEventType.pointerUp, _lastPosition!, 0.0, pointerType, pointerId, now);
+      _emitInputEvent(
+        InputEventType.pointerUp, _lastPosition!, 0.0, pointerType, pointerId, now,
+        buttons: buttons,
+      );
     }
 
     canvasNotifier.notify();
@@ -326,8 +342,11 @@ class DrawingProvider extends ChangeNotifier {
     double pressure,
     PointerType pointerType,
     int pointerId,
-    DateTime timestamp,
-  ) {
+    DateTime timestamp, {
+    double tiltX = 0.0,
+    double tiltY = 0.0,
+    int buttons = 0,
+  }) {
     final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
     final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
     final normalizedX = (position.dx / w).clamp(0.0, 1.0);
@@ -340,6 +359,9 @@ class DrawingProvider extends ChangeNotifier {
       pressure: pressure,
       pointerType: pointerType,
       pointerId: pointerId,
+      tiltX: tiltX,
+      tiltY: tiltY,
+      buttons: buttons,
       timestamp: timestamp,
     );
 
@@ -377,6 +399,9 @@ class DrawingProvider extends ChangeNotifier {
     _lastPressure = alpha * pressure + (1 - alpha) * _lastPressure;
     return _lastPressure.clamp(0.0, 1.0);
   }
+
+  /// Whether there are strokes available to undo (Bug 146)
+  bool get canUndo => _strokes.isNotEmpty;
 
   /// আন্ডো - শেষ স্ট্রোক মুছে ফেলা
   void undo() {

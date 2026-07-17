@@ -176,7 +176,7 @@ bool FlutterWindow::OnCreate() {
   // Register our custom input injection channel
   auto input_channel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       flutter_controller_->engine()->messenger(),
-      "com.superdisplay/input",
+      "com.aircanvas/input",
       &flutter::StandardMethodCodec::GetInstance());
 
   input_channel->SetMethodCallHandler(
@@ -245,7 +245,9 @@ bool FlutterWindow::OnCreate() {
 
               POINTER_PEN_INFO& penInfo = pointerInfo.penInfo;
               penInfo.pointerInfo.pointerType = PT_PEN;
-              penInfo.pointerInfo.pointerId = static_cast<UINT32>(pointerId);
+              // Synthethic devices with maxContacts=1 require pointerId to be exactly 0.
+              // Passing Flutter's raw pointerId (>0) causes ERROR_INVALID_PARAMETER (87).
+              penInfo.pointerInfo.pointerId = 0;
               penInfo.pointerInfo.ptPixelLocation.x = target_x;
               penInfo.pointerInfo.ptPixelLocation.y = target_y;
 

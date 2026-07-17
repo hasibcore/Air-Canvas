@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.superdisplay" "\0"
-            VALUE "FileDescription", "superdisplay_clone" "\0"
+            VALUE "CompanyName", "com.aircanvas" "\0"
+            VALUE "FileDescription", "Air Canvas" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "superdisplay_clone" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.superdisplay. All rights reserved." "\0"
-            VALUE "OriginalFilename", "superdisplay_clone.exe" "\0"
-            VALUE "ProductName", "superdisplay_clone" "\0"
+            VALUE "InternalName", "Air Canvas" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 com.aircanvas. All rights reserved." "\0"
+            VALUE "OriginalFilename", "air_canvas.exe" "\0"
+            VALUE "ProductName", "Air Canvas" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
