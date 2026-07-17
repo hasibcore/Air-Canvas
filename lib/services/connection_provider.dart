@@ -665,36 +665,45 @@ class ConnectionProvider extends ChangeNotifier {
       _reconnectTimer?.cancel();
       _reconnectTimer = null;
 
-      // Auto reconnect (3 attempts, 2 second intervals)
+      // Auto reconnect (3 attempts, 2 second intervals) with overlap prevention
       int attempts = 0;
-      _reconnectTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      bool reconnectInProgress = false;
+      _reconnectTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
         // যদি ইউজার আগেই disconnect করে ফেলে বা state পরিবর্তন হয়ে থাকে
         if (_state != ConnectionState.reconnecting) {
           timer.cancel();
           return;
         }
+
+        if (reconnectInProgress) return;
+
+        reconnectInProgress = true;
         attempts++;
         if (attempts > 3) {
           timer.cancel();
           _reconnectTimer = null;
-          _errorMessage = 'রিকানেক্ট করতে ব্যর্থ হয়েছে।';
-          _setState(ConnectionState.error);
+          _setError('রিকানেক্ট করতে ব্যর্থ হয়েছে।');
           return;
         }
+
         debugPrint('[Client] রিকানেক্ট চেষ্টা $attempts/3...');
-        _socketSubscription?.cancel();
-        _socketSubscription = null;
-        _socket?.close();
-        _socket = null;
-        
-        connectToServer(
-          _serverIp,
-          port: _serverPort,
-          onPinRequired: _clientPinCallback ?? () async => null,
-          isReconnecting: true,
-        ).then((success) {
-          // Failure handling is done via states in connectToServer and this timer
-        });
+        try {
+          await _socketSubscription?.cancel();
+          _socketSubscription = null;
+          await _socket?.close();
+          _socket = null;
+
+          await connectToServer(
+            _serverIp,
+            port: _serverPort,
+            onPinRequired: _clientPinCallback ?? () async => null,
+            isReconnecting: true,
+          );
+        } catch (e) {
+          debugPrint('[Client] Reconnect attempt failed: $e');
+        } finally {
+          reconnectInProgress = false;
+        }
       });
     }
   }
@@ -932,6 +941,12 @@ class ConnectionProvider extends ChangeNotifier {
     debugPrint('[Connection] ডিসকানেক্টেড');
   }
 
+  void _setError(String msg) {
+    _errorMessage = msg;
+    _setState(ConnectionState.error);
+    notifyListeners();
+  }
+
   void clearError() {
     _errorMessage = '';
     _setState(ConnectionState.disconnected);
@@ -947,7 +962,7 @@ class ConnectionProvider extends ChangeNotifier {
   @override
   void dispose() {
     _isDisposed = true;
-    disconnect();
+    unawaited(disconnect());
     super.dispose();
   }
 }
