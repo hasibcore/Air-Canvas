@@ -2,7 +2,45 @@
 
 **Air Canvas** transforms your Android phone/tablet or iOS device into a high-precision, low-latency wireless graphics tablet for Windows, macOS, and Linux over your local WiFi network.
 
+
 ---
+
+## 📥 Downloads Center (All Platforms & Architectures)
+
+> **Live GitHub Pages Download Landing Page**: [https://hasibcore.github.io/Air-Canvas/](https://hasibcore.github.io/Air-Canvas/)
+
+### 💻 Windows PC (Desktop Server App)
+| Architecture | Direct `.EXE` Installer | Portable `.ZIP` Package | Target System |
+| :--- | :--- | :--- | :--- |
+| **Windows x64 (64-bit)** | [💾 Download .EXE](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-x64.exe) | [📦 Download .ZIP](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-x64.zip) | Standard 64-bit Windows 10 & 11 PCs |
+| **Windows x86 (32-bit)** | [💾 Download .EXE](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-x86.exe) | [📦 Download .ZIP](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-x86.zip) | Legacy 32-bit Windows PCs |
+| **Windows ARM64 (ARM)** | [💾 Download .EXE](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-arm64.exe) | [📦 Download .ZIP](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-arm64.zip) | Surface Pro ARM & Snapdragon Laptops |
+
+---
+
+### 🍎 macOS / MacBook (Desktop Server App)
+| System | `.DMG` Installer | `.ZIP` Archive | Compatibility |
+| :--- | :--- | :--- | :--- |
+| **macOS Universal** | [🍏 Download .DMG](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-mac-universal.dmg) | [📦 Download .ZIP](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-mac-universal.zip) | Intel & Apple Silicon (M1/M2/M3/M4) |
+
+---
+
+### 📱 Mobile Apps (Smartphones)
+| Platform | Direct Download | Format | Description |
+| :--- | :--- | :--- | :--- |
+| **🤖 Android Phone** | [🤖 Download Android APK](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-android-phone.apk) | `.apk` | Android 7.0+ Smartphones |
+| **🍎 Apple iOS / iPhone** | [🍎 Download iOS IPA](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-ios-iphone.ipa) | `.ipa` | iOS 14.0+ iPhones |
+
+---
+
+### 🖊️ Tablet Client Apps (Active Stylus Tablets)
+| Platform | Direct Download | Format | Stylus / Pen Support |
+| :--- | :--- | :--- | :--- |
+| **🤖 Android Tablet** | [📱 Download Tablet APK](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-android-tablet.apk) | `.apk` | Samsung S-Pen, Xiaomi Pen, Active Stylus |
+| **🍎 Apple iPad (iPadOS)** | [🖊️ Download iPad IPA](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-ipados.ipa) | `.ipa` | Apple Pencil 1, 2, Pro & USB-C |
+
+---
+
 
 ## 📱 Platform Roles & Architecture
 
@@ -27,32 +65,49 @@ Air Canvas operates seamless cross-platform client-server communication:
 
 ---
 
-## 🚀 How to Build & Run for Each Platform
+## 🚀 Direct Downloads & Build Commands for Each Platform
 
-### 1. Build for Android (`.apk`)
+### 1. Android App & Tablet (`.apk`)
+> 📱 **Direct Download for Android Phone & Tablet**:
+- [🤖 Download Android Phone APK (`.apk`)](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-android-phone.apk)
+- [📱 Download Android Tablet APK (`.apk`)](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-android-tablet.apk)
+
 ```bash
-# Generate release APK
+# Developer Build Command (Generate release APK)
 flutter build apk --release
 
 # Output path: build/app/outputs/flutter-apk/app-release.apk
 ```
 
-### 2. Build for Windows (`.exe`)
+---
+
+### 2. Windows PC Receiver (`.exe` & `.zip`)
+> 💻 **Direct Downloads for Windows (Both EXE & ZIP Available)**:
+- **Windows x64 (64-bit)**: [💾 Download `.EXE`](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-x64.exe) | [📦 Download `.ZIP`](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-x64.zip)
+- **Windows x86 (32-bit)**: [💾 Download `.EXE`](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-x86.exe) | [📦 Download `.ZIP`](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-x86.zip)
+- **Windows ARM64 (ARM)**: [💾 Download `.EXE`](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-arm64.exe) | [📦 Download `.ZIP`](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-win-arm64.zip)
+
 ```bash
-# Generate Windows 64-bit release binary
+# Developer Build Command (Generate Windows release binary)
 flutter build windows --release
 
 # Output path: build/windows/x64/runner/Release/
 ```
 
-### 3. Build for iOS / macOS (`.ipa` / `.app`)
-```bash
-# Build for iOS
-flutter build ipa --release
+---
 
-# Build for macOS
+### 3. iOS / iPadOS & macOS (`.ipa` / `.dmg` / `.zip`)
+> 🍎 **Direct Downloads for Apple Devices**:
+- [🍎 Download iPhone iOS Package (`.ipa`)](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-ios-iphone.ipa)
+- [🖊️ Download iPad iPadOS Package (`.ipa`)](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-ipados.ipa)
+- [🍏 Download macOS Universal (`.dmg`)](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-mac-universal.dmg) | [📦 macOS (`.zip`)](https://github.com/hasibcore/Air-Canvas/releases/download/v1.0.0/AirCanvas-v1.0.0-mac-universal.zip)
+
+```bash
+# Developer Build Commands
+flutter build ipa --release
 flutter build macos --release
 ```
+
 
 ---
 
