@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -6,21 +7,26 @@ import 'services/connection_provider.dart';
 import 'services/drawing_provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/drawing_screen.dart';
-
 import 'services/server_input_handler.dart';
 
 void main() {
   runZonedGuarded(() {
     WidgetsFlutterBinding.ensureInitialized();
     
-    // Global Flutter error handler
+    // AC-004: Global Flutter framework error handler
     FlutterError.onError = (FlutterErrorDetails details) {
       FlutterError.presentError(details);
       debugPrint('[Global Error] ${details.exceptionAsString()}');
     };
 
+    // AC-004: Engine/Platform async error dispatcher handler
+    PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+      debugPrint('[PlatformDispatcher Error] $error\n$stack');
+      return true; // Error handled
+    };
+
+    // Lazy/clean server connection provider setup (AC-007)
     final connection = ConnectionProvider();
-    // Instantiate ServerInputHandler so it registers its listeners to ConnectionProvider
     ServerInputHandler(connection);
 
     runApp(
