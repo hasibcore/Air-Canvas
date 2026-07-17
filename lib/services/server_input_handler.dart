@@ -20,6 +20,18 @@ class ServerInputHandler {
   Completer<bool>? _initCompleter;
   bool get isNativeReady => _nativeInjectionAvailable;
 
+  // AC-025 & AC-026: Pending events during initialization
+  final List<InputEvent> _pendingInitEvents = [];
+  static const int _maxPendingInitEvents = 50;
+
+  // AC-027: Injection backpressure tracking
+  int _inFlightInjections = 0;
+  static const int _maxInFlightInjections = 10;
+
+  // AC-028: Rate-limited error logging
+  DateTime? _lastLogTime;
+  static const Duration _logRateLimit = Duration(seconds: 1);
+
   // Bug 134: Ring buffer via Queue instead of List (O(1) remove from front)
   final Queue<InputEvent> _recentEvents = Queue<InputEvent>();
   static const int _maxRecentEvents = 100;
@@ -61,6 +73,18 @@ class ServerInputHandler {
     }
 
     _initCompleter!.complete(_nativeInjectionAvailable);
+
+    // AC-026: Flush pending init events if native injection is ready
+    if (_nativeInjectionAvailable && _pendingInitEvents.isNotEmpty) {
+      final eventsToFlush = List<InputEvent>.from(_pendingInitEvents);
+      _pendingInitEvents.clear();
+      for (final event in eventsToFlush) {
+        _injectNativeEvent(event);
+      }
+    } else {
+      _pendingInitEvents.clear();
+    }
+
     return _nativeInjectionAvailable;
   }
 
@@ -85,6 +109,7 @@ class ServerInputHandler {
 
   void _onClientDisconnected() {
     _recentEvents.clear();
+    _pendingInitEvents.clear();
   }
 
   void _handleInputEvent(InputEvent event) {
@@ -103,18 +128,48 @@ class ServerInputHandler {
       debugPrint('[InputHandler] onEventReceived callback error: $e\n$stackTrace');
     }
 
+    // AC-025 & AC-026: If init is still in progress, queue event
+    if (_initCompleter != null && !_initCompleter!.isCompleted) {
+      if (_pendingInitEvents.length < _maxPendingInitEvents) {
+        _pendingInitEvents.add(event);
+      }
+      return;
+    }
+
     // Native injection (Windows only)
-    // Bug 131: Properly handle the Future with unawaited + error zone
     if (_nativeInjectionAvailable && Platform.isWindows) {
-      unawaited(
-        WindowsInputInjection.injectEvent(event).then((success) {
-          if (!success && kDebugMode) {
-            debugPrint('[InputHandler] Injection failed for event: ${event.type.name}');
-          }
-        }).catchError((Object e, StackTrace stackTrace) {
-          debugPrint('[InputHandler] Injection exception: $e\n$stackTrace');
-        }),
-      );
+      _injectNativeEvent(event);
+    }
+  }
+
+  // AC-027 & AC-028: Inject event with backpressure check and rate-limited logging
+  void _injectNativeEvent(InputEvent event) {
+    if (_inFlightInjections >= _maxInFlightInjections) {
+      // Drop excess move events under high backpressure
+      if (event.type == InputEventType.pointerMove) {
+        return;
+      }
+    }
+
+    _inFlightInjections++;
+    unawaited(
+      WindowsInputInjection.injectEvent(event).then((success) {
+        if (!success && kDebugMode) {
+          _logRateLimited('[InputHandler] Injection failed for event: ${event.type.name}');
+        }
+      }).catchError((Object e, StackTrace stackTrace) {
+        _logRateLimited('[InputHandler] Injection exception: $e\n$stackTrace');
+      }).whenComplete(() {
+        _inFlightInjections = (_inFlightInjections - 1).clamp(0, 100);
+      }),
+    );
+  }
+
+  void _logRateLimited(String message) {
+    final now = DateTime.now();
+    if (_lastLogTime == null || now.difference(_lastLogTime!) >= _logRateLimit) {
+      _lastLogTime = now;
+      debugPrint(message);
     }
   }
 
@@ -133,6 +188,7 @@ class ServerInputHandler {
     onEventReceived = null;
 
     _recentEvents.clear();
+    _pendingInitEvents.clear();
 
     if (Platform.isWindows && _nativeInjectionAvailable) {
       await WindowsInputInjection.dispose();
