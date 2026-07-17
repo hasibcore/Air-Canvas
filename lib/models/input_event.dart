@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 // ইনপুট ইভেন্ট মডেল - মোবাইল থেকে পিসিতে পাঠানোর জন্য
 
 enum PointerType {
@@ -39,12 +41,15 @@ class InputEvent {
     required double y,
     double pressure = 0.0,
     this.pointerType = PointerType.finger,
-    this.pointerId = 0,
+    int pointerId = 0,
     double tiltX = 0.0,
     double tiltY = 0.0,
-    this.buttons = 0,
+    int buttons = 0,
     DateTime? timestamp,
-  })  : x = x.isNaN || x.isInfinite ? 0.0 : x.clamp(0.0, 1.0), // Bug 43: Coordinate bounds
+  })  : assert(pointerId >= 0, 'pointerId must be non-negative'),
+        pointerId = pointerId.clamp(0, 255),
+        buttons = buttons.clamp(0, 255),
+        x = x.isNaN || x.isInfinite ? 0.0 : x.clamp(0.0, 1.0), // Bug 43: Coordinate bounds
         y = y.isNaN || y.isInfinite ? 0.0 : y.clamp(0.0, 1.0), // Bug 43: Coordinate bounds
         pressure = pressure.isNaN || pressure.isInfinite ? 0.0 : pressure.clamp(0.0, 1.0), // Bug 42: Pressure bounds
         tiltX = tiltX.isNaN || tiltX.isInfinite ? 0.0 : tiltX.clamp(-90.0, 90.0),
@@ -99,13 +104,13 @@ class InputEvent {
     final tyVal = _toDouble(json['ty']);
     final bVal = _toInt(json['b']);
 
-    // Bug 44: Timestamp bounds validation
+    // AC-008: Timestamp bounds validation (min year 2000-01-01, max future +1 day)
     DateTime timeVal = DateTime.now();
     final tsObj = json['ts'];
     if (tsObj is int && tsObj > 0) {
-      // Basic sanity check: reject timestamps too far in the future or past
-      final maxFuture = DateTime.now().millisecondsSinceEpoch + 86400000; // +1 day
-      if (tsObj < maxFuture) {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      const minTimestamp = 946684800000; // 2000-01-01
+      if (tsObj >= minTimestamp && tsObj <= nowMs + 86400000) {
         timeVal = DateTime.fromMillisecondsSinceEpoch(tsObj);
       }
     }
@@ -124,47 +129,42 @@ class InputEvent {
     );
   }
 
-  /// Binary format for ultra-low-latency mode (Bug 45: Endianness independent)
-  List<int> toBinary() {
-    final list = [
-      type.index,
-      ..._floatToUint16(x),
-      ..._floatToUint16(y),
-      (pressure * 255).round().clamp(0, 255),
-      pointerType.index,
-      pointerId.clamp(0, 255),
-      ((tiltX + 90) / 180 * 255).round().clamp(0, 255),
-      ((tiltY + 90) / 180 * 255).round().clamp(0, 255),
-      buttons.clamp(0, 255),
-      protocolVersion, // Byte 11: Version field (Bug 46)
-    ];
-
-    // Byte 12: Checksum (Bug 47: corrupted packet detection)
-    final sum = list.reduce((a, b) => a + b);
-    list.add(sum & 0xFF);
-    return list;
+  /// Binary format using Uint8List (AC-010: Zero dynamic list allocation for 120Hz streaming)
+  Uint8List toBinary() {
+    final bytes = Uint8List(binaryPacketLength);
+    bytes[0] = type.index;
+    final xBytes = _floatToUint16(x);
+    bytes[1] = xBytes[0];
+    bytes[2] = xBytes[1];
+    final yBytes = _floatToUint16(y);
+    bytes[3] = yBytes[0];
+    bytes[4] = yBytes[1];
+    bytes[5] = (pressure * 255).round().clamp(0, 255);
+    bytes[6] = pointerType.index;
+    bytes[7] = pointerId.clamp(0, 255);
+    bytes[8] = ((tiltX + 90) / 180 * 255).round().clamp(0, 255);
+    bytes[9] = ((tiltY + 90) / 180 * 255).round().clamp(0, 255);
+    bytes[10] = buttons.clamp(0, 255);
+    bytes[11] = protocolVersion;
+    bytes[12] = _computeCrc8(bytes, 12); // AC-009: CRC-8 Checksum
+    return bytes;
   }
 
-  /// Deserialization from binary format (Bug 45: Endianness independent)
-  static InputEvent fromBinary(List<int> data) {
-    if (data.length < binaryPacketLength) {
-      throw FormatException('Binary packet length too short (expected $binaryPacketLength, got ${data.length})');
-    }
+  /// Non-throwing binary parser for high-frequency network packets (AC-011)
+  static InputEvent? tryFromBinary(List<int> data) {
+    if (data.length < binaryPacketLength) return null;
 
-    // Bug 47: Verify Checksum
-    final expectedSum = data.take(binaryPacketLength - 1).reduce((a, b) => a + b) & 0xFF;
-    final actualSum = data[binaryPacketLength - 1];
-    if (expectedSum != actualSum) {
-      throw FormatException('Checksum mismatch: expected $expectedSum, got $actualSum');
-    }
+    // AC-009: CRC-8 verification
+    final expectedCrc = _computeCrc8(data, 12);
+    final actualCrc = data[12];
+    if (expectedCrc != actualCrc) return null;
 
-    // Bug 46: Verify protocol version
+    // Protocol version check
     final version = data[11];
     if (version != protocolVersion) {
-      // Future versions would parse differently. Currently we fallback gracefully.
+      // Fallback or ignore unsupported version
     }
 
-    // Bug 41: Graceful fallback for indices
     final tIdx = data[0];
     final typeVal = tIdx >= 0 && tIdx < InputEventType.values.length
         ? InputEventType.values[tIdx]
@@ -186,6 +186,34 @@ class InputEvent {
       tiltY: (data[9] / 255.0 * 180) - 90,
       buttons: data[10],
     );
+  }
+
+  /// Deserialization from binary format with exception handling
+  static InputEvent fromBinary(List<int> data) {
+    final event = tryFromBinary(data);
+    if (event == null) {
+      if (data.length < binaryPacketLength) {
+        throw FormatException('Binary packet length too short (expected $binaryPacketLength, got ${data.length})');
+      }
+      throw const FormatException('Checksum or format mismatch in binary packet');
+    }
+    return event;
+  }
+
+  /// AC-009: CRC-8 (SMBus polynomial 0x07) for robust error detection
+  static int _computeCrc8(List<int> data, int length) {
+    int crc = 0xFF;
+    for (int i = 0; i < length; i++) {
+      crc ^= data[i];
+      for (int j = 0; j < 8; j++) {
+        if ((crc & 0x80) != 0) {
+          crc = ((crc << 1) ^ 0x07) & 0xFF;
+        } else {
+          crc = (crc << 1) & 0xFF;
+        }
+      }
+    }
+    return crc;
   }
 
   // --- Helper Methods ---
