@@ -75,6 +75,7 @@ class ConnectionProvider extends ChangeNotifier {
   Timer? _discoveryTimer;
   Timer? _discoveryTimeoutTimer;
   Timer? _reconnectTimer;
+  bool _reconnectInProgress = false;
   Timer? _pingTimer;
   int _lastDataSentOrReceivedTime = 0;
   Completer<bool>? _authCompleter;
@@ -185,8 +186,7 @@ class ConnectionProvider extends ChangeNotifier {
       _setState(ConnectionState.discovering);
       _errorMessage = '';
       _isAuthenticated = false;
-      // নতুন সার্ভার সেশন শুরু: এনক্রিপশন কী রিসেট করুন যাতে হ্যান্ডশেক প্লেইনটেক্সটে শুরু হয়
-      _encryptionKey = null;
+      _encryptionKey = null; // নতুন সেশনের জন্য পুরনো এনক্রিপশন কী রিসেট করুন
 
       // pairing pin জেনারেট করা
       final rand = Random.secure();
@@ -230,9 +230,7 @@ class ConnectionProvider extends ChangeNotifier {
         }
         _socket = ws;
         _isAuthenticated = false;
-        // নতুন ক্লায়েন্ট কানেকশন: আগের সেশন কী থাকলে রিসেট করুন, নাহলে
-        // auth_challenge পুরনো কী দিয়ে এনক্রিপ্ট হয়ে যাবে এবং নতুন ক্লায়েন্ট পড়তে পারবে না
-        _encryptionKey = null;
+        _encryptionKey = null; // নতুন ক্লায়েন্টের জন্য পুরনো কী রিসেট
         debugPrint('[Server] ক্লায়েন্ট কানেক্টেড');
 
         // অথেন্টিকেশন চ্যালেঞ্জ পাঠানো
@@ -246,11 +244,11 @@ class ConnectionProvider extends ChangeNotifier {
           (data) => _handleServerReceive(data),
           onDone: () {
             debugPrint('[Server] ক্লায়েন্ট ডিসকানেক্টেড');
+            _isAuthenticated = false;
+            _encryptionKey = null; // ডিসকানেক্টে কী রিসেট, নাহলে পরের ক্লায়েন্ট ভুল কী পাবে
             _setState(ConnectionState.discovering);
             _connectedDeviceName = '';
             _remoteDeviceInfo = null;
-            _isAuthenticated = false;
-            _encryptionKey = null;
             _stopLatencyMeasurement();
             onClientDisconnected?.call();
           },
@@ -349,6 +347,13 @@ class ConnectionProvider extends ChangeNotifier {
 
         case 'ping':
           _sendToClient({'type': 'pong', 'ts': json['ts']});
+          break;
+
+        case 'pong':
+          // ক্লায়েন্ট থেকে pong পেলে সার্ভার-সাইড লেটেন্সি ক্যালকুলেট করুন
+          if (json['ts'] is int) {
+            _handlePong(json['ts'] as int);
+          }
           break;
       }
     }
@@ -494,10 +499,7 @@ class ConnectionProvider extends ChangeNotifier {
       _clientPinCallback = onPinRequired;
       _authCompleter = Completer<bool>();
       _isAuthenticated = false;
-      // নতুন কানেকশন/রিকানেক্ট: এনক্রিপশন কী রিসেট করুন যাতে auth হ্যান্ডশেক
-      // প্লেইনটেক্সটে শুরু হয় (রিকানেক্টে পুরনো সেশন কী দিয়ে auth_response এনক্রিপ্ট
-      // হয়ে গেলে সার্ভার সেটি গ্রহণ করে না এবং কানেকশন ব্যর্থ হয়)
-      _encryptionKey = null;
+      _encryptionKey = null; // প্রতিটি নতুন কানেকশনে পুরনো কী রিসেট
 
       if (screenWidth != null) _clientScreenWidth = screenWidth;
       if (screenHeight != null) _clientScreenHeight = screenHeight;
@@ -656,6 +658,10 @@ class ConnectionProvider extends ChangeNotifier {
             notifyListeners();
           }
           break;
+        case 'ping':
+          // সার্ভারের লেটেন্সি মাপার ping-এর উত্তরে pong পাঠান
+          _sendToServer({'type': 'pong', 'ts': json['ts']});
+          break;
         case 'pong':
           if (json['ts'] is int) {
             _handlePong(json['ts'] as int);
@@ -678,12 +684,14 @@ class ConnectionProvider extends ChangeNotifier {
 
       // Auto reconnect (3 attempts, 2 second intervals)
       int attempts = 0;
-      _reconnectTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      _reconnectTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
         // যদি ইউজার আগেই disconnect করে ফেলে বা state পরিবর্তন হয়ে থাকে
         if (_state != ConnectionState.reconnecting) {
           timer.cancel();
           return;
         }
+        // আগের রিকানেক্ট চেষ্টা এখনো চলমান থাকলে এই টিক স্কিপ করুন (overlap প্রতিরোধ)
+        if (_reconnectInProgress) return;
         attempts++;
         if (attempts > 3) {
           timer.cancel();
@@ -693,19 +701,23 @@ class ConnectionProvider extends ChangeNotifier {
           return;
         }
         debugPrint('[Client] রিকানেক্ট চেষ্টা $attempts/3...');
+        _reconnectInProgress = true;
         _socketSubscription?.cancel();
         _socketSubscription = null;
         _socket?.close();
         _socket = null;
         
-        connectToServer(
-          _serverIp,
-          port: _serverPort,
-          onPinRequired: _clientPinCallback ?? () async => null,
-          isReconnecting: true,
-        ).then((success) {
+        try {
+          await connectToServer(
+            _serverIp,
+            port: _serverPort,
+            onPinRequired: _clientPinCallback ?? () async => null,
+            isReconnecting: true,
+          );
           // Failure handling is done via states in connectToServer and this timer
-        });
+        } finally {
+          _reconnectInProgress = false;
+        }
       });
     }
   }
@@ -913,6 +925,7 @@ class ConnectionProvider extends ChangeNotifier {
     _encryptionKey = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _reconnectInProgress = false;
     _discoveryTimer?.cancel();
     _discoveryTimer = null;
     _discoveryTimeoutTimer?.cancel();

@@ -1,7 +1,10 @@
-/// HomeScreen for server/client selection and connection management.
-library;
+// হোম স্ক্রিন - সার্ভার/ক্লায়েন্ট মোড সিলেক্ট ও কানেকশন ম্যানেজমেন্ট
+//
+// এই স্ক্রিন থেকে ইউজার:
+// 1. পিসিতে সার্ভার শুরু করতে পারে
+// 2. মোবাইল থেকে সার্ভার খুঁজে কানেক্ট করতে পারে
+// 3. ম্যানুয়ালি IP দিয়ে কানেক্ট করতে পারে
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -735,8 +738,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ipController: _ipController,
         portController: _portController,
         onConnect: (ip, port) async {
-          Navigator.pop(context);
+          // context pop করার আগেই size নিন (pop করার পর context defunct হয়ে যায়)
           final size = MediaQuery.of(context).size;
+          Navigator.pop(context);
           final success = await connection.connectToServer(
             ip,
             port: port,

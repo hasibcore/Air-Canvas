@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:air_canvas/main.dart';
@@ -6,9 +5,7 @@ import 'package:air_canvas/services/connection_provider.dart';
 import 'package:air_canvas/services/drawing_provider.dart';
 
 void main() {
-  testWidgets('App renders HomeScreen without crash in desktop mode', (WidgetTester tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-
+  testWidgets('App renders HomeScreen without crash', (WidgetTester tester) async {
     await tester.pumpWidget(
       MultiProvider(
         providers: [
@@ -19,12 +16,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-
+    // হোম স্ক্রিনে টাইটেল থাকা উচিত
     expect(find.text('Air Canvas'), findsOneWidget);
+    // Server ও Client tab থাকা উচিত
     expect(find.text('SERVER (PC)'), findsOneWidget);
     expect(find.text('CLIENT (Mobile)'), findsOneWidget);
+    // Start Server button থাকা উচিত
     expect(find.text('Start Server'), findsOneWidget);
-
-    debugDefaultTargetPlatformOverride = null;
   });
 }
