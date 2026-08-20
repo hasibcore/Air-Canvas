@@ -1,0 +1,53 @@
+﻿Analyzing AirCanvas...                                          
+
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\models\input_event.dart:1:1 - dangling_library_doc_comments
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\screens\drawing_screen.dart:1:1 - dangling_library_doc_comments
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\screens\drawing_screen.dart:315:32 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\screens\drawing_screen.dart:357:30 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\screens\drawing_screen.dart:386:41 - deprecated_member_use
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\screens\home_screen.dart:1:1 - dangling_library_doc_comments
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\screens\home_screen.dart:111:50 - deprecated_member_use
+   info - Use 'const' with the constructor to improve performance. Try adding the 'const' keyword to the constructor invocation - lib\screens\home_screen.dart:189:25 - prefer_const_constructors
+   info - Use 'const' literals as arguments to constructors of '@immutable' classes. Try adding 'const' before the literal - lib\screens\home_screen.dart:190:25 - prefer_const_literals_to_create_immutables
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\screens\home_screen.dart:234:56 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\screens\home_screen.dart:236:75 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\screens\home_screen.dart:269:52 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\screens\home_screen.dart:271:71 - deprecated_member_use
+   info - Missing an 'await' for the 'Future' computed by this expression. Try adding an 'await' or wrapping the expression with 'unawaited' - lib\screens\home_screen.dart:532:37 - unawaited_futures
+   info - Use 'const' with the constructor to improve performance. Try adding the 'const' keyword to the constructor invocation - lib\screens\home_screen.dart:550:13 - prefer_const_constructors
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\screens\home_screen.dart:600:44 - deprecated_member_use
+   info - Missing an 'await' for the 'Future' computed by this expression. Try adding an 'await' or wrapping the expression with 'unawaited' - lib\screens\home_screen.dart:701:35 - unawaited_futures
+   info - 'activeColor' is deprecated and shouldn't be used. Use activeThumbColor instead. This feature was deprecated after v3.31.0-2.0.pre. Try replacing the use of the deprecated member with the replacement - lib\screens\home_screen.dart:735:21 - deprecated_member_use
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\services\connection_provider.dart:1:1 - dangling_library_doc_comments
+warning - The value of the field '_lastPingTimestamp' isn't used. Try removing the field, or using it - lib\services\connection_provider.dart:79:7 - unused_field
+   info - Missing an 'await' for the 'Future' computed by this expression. Try adding an 'await' or wrapping the expression with 'unawaited' - lib\services\connection_provider.dart:493:28 - unawaited_futures
+   info - Missing an 'await' for the 'Future' computed by this expression. Try adding an 'await' or wrapping the expression with 'unawaited' - lib\services\connection_provider.dart:519:30 - unawaited_futures
+   info - Missing an 'await' for the 'Future' computed by this expression. Try adding an 'await' or wrapping the expression with 'unawaited' - lib\services\connection_provider.dart:521:18 - unawaited_futures
+   info - Missing an 'await' for the 'Future' computed by this expression. Try adding an 'await' or wrapping the expression with 'unawaited' - lib\services\connection_provider.dart:527:11 - unawaited_futures
+   info - Missing an 'await' for the 'Future' computed by this expression. Try adding an 'await' or wrapping the expression with 'unawaited' - lib\services\connection_provider.dart:534:28 - unawaited_futures
+   info - Missing an 'await' for the 'Future' computed by this expression. Try adding an 'await' or wrapping the expression with 'unawaited' - lib\services\connection_provider.dart:536:16 - unawaited_futures
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\services\drawing_provider.dart:1:1 - dangling_library_doc_comments
+   info - The private field _pressureSmoothing could be 'final'. Try making the field 'final' - lib\services\drawing_provider.dart:147:8 - prefer_final_fields
+   info - Use 'const' for final variables initialized to a constant value. Try replacing 'final' with 'const' - lib\services\drawing_provider.dart:313:5 - prefer_const_declarations
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\services\server_input_handler.dart:1:1 - dangling_library_doc_comments
+   info - The private field _debugMode could be 'final'. Try making the field 'final' - lib\services\server_input_handler.dart:17:8 - prefer_final_fields
+warning - The value of the field '_debugMode' isn't used. Try removing the field, or using it - lib\services\server_input_handler.dart:17:8 - unused_field
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\services\windows_input_injection.dart:1:1 - dangling_library_doc_comments
+   info - Don't invoke 'print' in production code. Try using a logging framework - lib\services\windows_input_injection.dart:27:7 - avoid_print
+   info - Don't invoke 'print' in production code. Try using a logging framework - lib\services\windows_input_injection.dart:30:7 - avoid_print
+   info - Don't invoke 'print' in production code. Try using a logging framework - lib\services\windows_input_injection.dart:51:7 - avoid_print
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\widgets\connection_floating_button.dart:1:1 - dangling_library_doc_comments
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\widgets\connection_floating_button.dart:28:24 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\widgets\connection_floating_button.dart:30:43 - deprecated_member_use
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\widgets\connection_status_bar.dart:1:1 - dangling_library_doc_comments
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\widgets\connection_status_bar.dart:50:22 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\widgets\connection_status_bar.dart:52:41 - deprecated_member_use
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\widgets\device_list_tile.dart:1:1 - dangling_library_doc_comments
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\widgets\device_list_tile.dart:37:52 - deprecated_member_use
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\widgets\manual_connect_dialog.dart:1:1 - dangling_library_doc_comments
+   info - Dangling library doc comment. Add a 'library' directive after the library comment - lib\widgets\toolbar_widget.dart:1:1 - dangling_library_doc_comments
+   info - Unnecessary use of string interpolation. Try replacing the string literal with the variable name - lib\widgets\toolbar_widget.dart:59:19 - unnecessary_string_interpolations
+   info - Use 'const' for final variables initialized to a constant value. Try replacing 'final' with 'const' - lib\widgets\toolbar_widget.dart:108:21 - prefer_const_declarations
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement - lib\widgets\toolbar_widget.dart:176:55 - deprecated_member_use
+warning - Unused import: 'package:flutter/material.dart'. Try removing the import directive - test\widget_test.dart:1:8 - unused_import
+
