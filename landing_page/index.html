@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Air Canvas - High-Performance Wireless Graphics Tablet</title>
+    <meta name="description" content="Turn your phone or tablet into a high-precision, low-latency wireless graphics tablet for Windows, macOS, and Linux.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container nav-container">
+            <div class="logo">
+                <div class="logo-icon"><i class="fa-solid fa-paintbrush"></i></div>
+                <span>Air Canvas</span>
+            </div>
+            <ul class="nav-links">
+                <li><a href="#features">Features</a></li>
+                <li><a href="#how-it-works">How It Works</a></li>
+                <li><a href="#platforms">Platforms</a></li>
+                <li><a href="#faq">FAQ</a></li>
+                <li><a href="https://github.com/hasibcore/Air-Canvas" target="_blank" class="nav-btn"><i class="fa-brands fa-github"></i> Source</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <header class="hero">
+        <div id="particles-js"></div>
+        <div class="hero-bg-glow"></div>
+        <div class="container hero-content">
+            <div class="badge">v1.1.0 Released</div>
+            <h1>Draw on air.<br><span class="gradient-text">Connect. Create.</span></h1>
+            <p class="hero-subtitle">Turn your smartphone or tablet into a wireless drawing canvas for your PC. Real-time pressure-sensitive input over Wi-Fi — no wires, no lag.</p>
+            
+            <div class="download-group">
+                <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-windows-x64.zip" class="btn primary-btn"><i class="fa-brands fa-windows"></i> Windows (.exe)</a>
+                <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-release.apk" class="btn primary-btn android-btn"><i class="fa-brands fa-android"></i> Android (.apk)</a>
+                <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-linux.AppImage" class="btn outline-btn"><i class="fa-brands fa-linux"></i> Linux</a>
+                <a href="#" class="btn outline-btn"><i class="fa-brands fa-apple"></i> iOS</a>
+            </div>
+            
+            <div class="hero-image-container">
+                <div class="glass-mockup">
+                    <div class="mockup-header">
+                        <div class="dot red"></div>
+                        <div class="dot yellow"></div>
+                        <div class="dot green"></div>
+                    </div>
+                    <div class="mockup-body">
+                        <div class="mockup-canvas">
+                            <i class="fa-solid fa-pen-nib"></i>
+                            <p>Ready to Draw</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Features Section -->
+    <section id="features" class="features">
+        <div class="container">
+            <div class="section-header">
+                <h2>Designed for <span class="gradient-text">Creators</span></h2>
+                <p>Everything you need for a seamless drawing experience without the cables.</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fa-solid fa-bolt"></i></div>
+                    <h3>Ultra-Low Latency</h3>
+                    <p>Custom 32-byte UDP/WebSocket binary protocol ensures your strokes appear instantly.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fa-solid fa-bullseye"></i></div>
+                    <h3>Native Pen Injection</h3>
+                    <p>Translates touch and stylus data into native OS Pen events. Works out of the box with Photoshop, Blender, and Krita.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fa-solid fa-wifi"></i></div>
+                    <h3>Zero-Config Discovery</h3>
+                    <p>No IP addresses to type. Automatic UDP broadcast pairing connects your devices instantly across your WiFi network.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><i class="fa-solid fa-layer-group"></i></div>
+                    <h3>Pressure & Tilt Tracking</h3>
+                    <p>Full support for stylus pressure, tilt angles, and force touch (on supported devices).</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How it Works Section -->
+    <section id="how-it-works" class="how-it-works">
+        <div class="container">
+            <div class="section-header">
+                <h2>How <span class="gradient-text">It Works</span></h2>
+                <p>Seamless cross-platform client-server architecture.</p>
+            </div>
+            <div class="architecture-flow">
+                <div class="flow-card">
+                    <div class="flow-icon"><i class="fa-solid fa-mobile-screen-button"></i></div>
+                    <h3>1. Mobile Client</h3>
+                    <p>Acts as your high-precision tablet. Captures pressure, tilt, and palm-rejected strokes.</p>
+                </div>
+                <div class="flow-arrow"><i class="fa-solid fa-arrow-right-arrow-left"></i></div>
+                <div class="flow-card center-card">
+                    <div class="flow-icon"><i class="fa-solid fa-network-wired"></i></div>
+                    <h3>2. Local WiFi</h3>
+                    <p>Streams data via custom 32-byte UDP/WebSocket binary protocol at lightning speeds.</p>
+                </div>
+                <div class="flow-arrow"><i class="fa-solid fa-arrow-right-arrow-left"></i></div>
+                <div class="flow-card">
+                    <div class="flow-icon"><i class="fa-solid fa-desktop"></i></div>
+                    <h3>3. Desktop Server</h3>
+                    <p>Receives data and injects synthetic native pen input into your favorite creative apps.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Platforms Section -->
+    <section id="platforms" class="platforms">
+        <div class="container">
+            <div class="section-header">
+                <h2>Download for your <span class="gradient-text">Platform</span></h2>
+                <p>Air Canvas operates as a client on mobile/tablet and a server on desktop.</p>
+            </div>
+            
+            <div class="platform-tabs">
+                <button class="tab-btn active" onclick="switchTab('desktop')">Desktop (Server)</button>
+                <button class="tab-btn" onclick="switchTab('mobile')">Mobile (Client)</button>
+            </div>
+
+            <div class="platforms-grid" id="desktop-grid">
+                <!-- Windows -->
+                <div class="platform-card">
+                    <i class="fa-brands fa-windows platform-bg-icon"></i>
+                    <div class="platform-header">
+                        <i class="fa-brands fa-windows"></i>
+                        <h3>Windows</h3>
+                    </div>
+                    <p>Native `CreateSyntheticPointerDevice` injection.</p>
+                    <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-windows-x64.zip" class="btn outline-btn" target="_blank"><i class="fa-solid fa-download"></i> Download x64</a>
+                </div>
+                
+                <!-- macOS -->
+                <div class="platform-card">
+                    <i class="fa-brands fa-apple platform-bg-icon"></i>
+                    <div class="platform-header">
+                        <i class="fa-brands fa-apple"></i>
+                        <h3>macOS</h3>
+                    </div>
+                    <p>High-speed WebSocket listener with UDP Discovery.</p>
+                    <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-macos.dmg" class="btn outline-btn" target="_blank"><i class="fa-solid fa-download"></i> Download Universal</a>
+                </div>
+
+                <!-- Linux -->
+                <div class="platform-card">
+                    <i class="fa-brands fa-linux platform-bg-icon"></i>
+                    <div class="platform-header">
+                        <i class="fa-brands fa-linux"></i>
+                        <h3>Linux</h3>
+                    </div>
+                    <p>GTK Linux server receiver & auto pairing.</p>
+                    <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-linux.AppImage" class="btn outline-btn" target="_blank"><i class="fa-solid fa-download"></i> AppImage</a>
+                </div>
+            </div>
+
+            <div class="platforms-grid hidden" id="mobile-grid">
+                <!-- Android -->
+                <div class="platform-card">
+                    <i class="fa-brands fa-android platform-bg-icon"></i>
+                    <div class="platform-header">
+                        <i class="fa-brands fa-android"></i>
+                        <h3>Android</h3>
+                    </div>
+                    <p>High-rate stylus sampling & dynamic grid overlay.</p>
+                    <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-release.apk" class="btn outline-btn" target="_blank"><i class="fa-brands fa-android"></i> Download APK</a>
+                </div>
+
+                <!-- iOS -->
+                <div class="platform-card">
+                    <i class="fa-brands fa-app-store-ios platform-bg-icon"></i>
+                    <div class="platform-header">
+                        <i class="fa-brands fa-apple"></i>
+                        <h3>iOS / iPadOS</h3>
+                    </div>
+                    <p>Apple Pencil integration & force touch support.</p>
+                    <a href="#" class="btn outline-btn"><i class="fa-solid fa-download"></i> App Store (Coming Soon)</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- FAQ Section -->
+    <section id="faq" class="faq">
+        <div class="container">
+            <div class="section-header">
+                <h2>Frequently Asked <span class="gradient-text">Questions</span></h2>
+                <p>Got questions? We've got answers.</p>
+            </div>
+            <div class="faq-grid">
+                <div class="faq-item">
+                    <h3>Does it work with Photoshop and Blender?</h3>
+                    <p>Yes! Because Air Canvas injects native OS pen events, it works out of the box with any app that supports graphics tablets, including Photoshop, Illustrator, Krita, and Blender.</p>
+                </div>
+                <div class="faq-item">
+                    <h3>Do I need an active internet connection?</h3>
+                    <p>No. Air Canvas operates entirely over your local WiFi network. No data leaves your home, ensuring zero lag from internet routing.</p>
+                </div>
+                <div class="faq-item">
+                    <h3>What happens if I don't have a stylus?</h3>
+                    <p>You can still use Air Canvas with your finger! However, pressure and tilt features are only available if your device supports them (e.g., S-Pen or Apple Pencil).</p>
+                </div>
+                <div class="faq-item">
+                    <h3>Is there a cable option?</h3>
+                    <p>Currently, Air Canvas is optimized for wireless, low-latency performance using your local network router. USB tethering is not yet natively supported but can work via local network sharing.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container footer-content">
+            <div class="footer-brand">
+                <div class="logo">
+                    <div class="logo-icon"><i class="fa-solid fa-paintbrush"></i></div>
+                    <span>Air Canvas</span>
+                </div>
+                <p>Developed by Hasib Core.</p>
+            </div>
+            <div class="footer-links">
+                <a href="https://github.com/hasibcore/Air-Canvas" target="_blank"><i class="fa-brands fa-github"></i> GitHub</a>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/particles.js/2.0.0/particles.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

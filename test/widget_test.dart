@@ -1,10 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:air_canvas/main.dart';
 import 'package:air_canvas/services/connection_provider.dart';
 import 'package:air_canvas/services/drawing_provider.dart';
 
 void main() {
+  SharedPreferences.setMockInitialValues({});
   testWidgets('App renders HomeScreen without crash', (WidgetTester tester) async {
     await tester.pumpWidget(
       MultiProvider(

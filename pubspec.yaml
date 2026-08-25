@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.6
+  url_launcher: ^6.3.0
   web_socket_channel: ^2.4.0
   network_info_plus: ^4.1.0
   wakelock_plus: ^1.2.5
@@ -31,7 +32,7 @@ flutter:
     - assets/
 
 flutter_launcher_icons:
-  android: "launcher_icon"
+  android: true
   ios: true
   windows:
     generate: true

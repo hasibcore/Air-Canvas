@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/connection_provider.dart';
 import '../widgets/connection_status_bar.dart';
 import '../widgets/device_list_tile.dart';
@@ -819,6 +820,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         }
                       },
                     ),
+                  ),
+                  const Divider(color: Colors.white12),
+                  ListTile(
+                    leading: const Icon(Icons.language, color: Color(0xFF6C63FF)),
+                    title: const Text('Website', style: TextStyle(color: Colors.white)),
+                    subtitle: const Text('Visit our local website', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    onTap: () async {
+                      final Uri url = Uri.parse('http://localhost:3000'); // Change this URL to your actual local website URL
+                      if (!await launchUrl(url)) {
+                        debugPrint('Could not launch $url');
+                      }
+                    },
                   ),
                   const Divider(color: Colors.white12),
                   const ListTile(

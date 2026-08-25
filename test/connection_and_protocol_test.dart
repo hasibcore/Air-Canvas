@@ -1,8 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:air_canvas/models/input_event.dart';
 import 'package:air_canvas/services/connection_provider.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  SharedPreferences.setMockInitialValues({});
   group('InputEvent Binary & JSON Protocol Tests', () {
     test('Binary serialization and deserialization produces identical values', () {
       final original = InputEvent(
