@@ -67,7 +67,7 @@ class WindowsInputInjection {
   static bool? _nativeAvailable;
 
   /// Check if the current platform supports native injection (Bug 121, 127)
-  static bool get isPlatformSupported => Platform.isWindows;
+  static bool get isPlatformSupported => !kIsWeb && Platform.isWindows;
 
   /// Check if native injection has been initialized and is ready
   static bool get isReady => _isInitialized && !_isDisposed;
@@ -82,7 +82,7 @@ class WindowsInputInjection {
   static Future<bool> initialize() async {
     // Bug 121: Unsupported platform early return
     if (!isPlatformSupported) {
-      _log('[InputInjection] Unsupported platform: ${Platform.operatingSystem}');
+      _log('[InputInjection] Unsupported platform: ${kIsWeb ? 'web' : Platform.operatingSystem}');
       _nativeAvailable = false;
       return false;
     }

@@ -129,9 +129,9 @@ class ConnectionProvider extends ChangeNotifier {
   void _sendUpdatedDeviceInfo() {
     if (isConnected && _mode == ConnectionMode.client) {
       final deviceInfo = DeviceInfo(
-        deviceName: Platform.localHostname,
-        deviceModel: Platform.operatingSystem,
-        platform: Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'windows'),
+        deviceName: kIsWeb ? 'Web Browser' : Platform.localHostname,
+        deviceModel: kIsWeb ? 'Web' : Platform.operatingSystem,
+        platform: kIsWeb ? 'web' : (Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'windows')),
         screenWidth: _clientScreenWidth,
         screenHeight: _clientScreenHeight,
         hasStylusSupport: _hasStylusSupportSetting,
@@ -643,9 +643,9 @@ class ConnectionProvider extends ChangeNotifier {
           debugPrint('[Client] Authenticated successfully with rotated key');
           // Device info পাঠানো
           final deviceInfo = DeviceInfo(
-            deviceName: Platform.localHostname,
-            deviceModel: Platform.operatingSystem,
-            platform: Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'windows'),
+            deviceName: kIsWeb ? 'Web Browser' : Platform.localHostname,
+            deviceModel: kIsWeb ? 'Web' : Platform.operatingSystem,
+            platform: kIsWeb ? 'web' : (Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'windows')),
             screenWidth: _clientScreenWidth,
             screenHeight: _clientScreenHeight,
             hasStylusSupport: _hasStylusSupportSetting,
@@ -797,7 +797,7 @@ class ConnectionProvider extends ChangeNotifier {
                 // Client কে respond করা
                 final response = jsonEncode({
                   'type': 'aircanvas_response',
-                  'name': Platform.localHostname,
+                  'name': kIsWeb ? 'Web Device' : Platform.localHostname,
                   'port': serverPort,
                   'ip': _localIp,
                 });

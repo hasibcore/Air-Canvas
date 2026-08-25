@@ -46,7 +46,7 @@ class ServerInputHandler {
     if (_initCompleter != null) return _initCompleter!.future;
     _initCompleter = Completer<bool>();
 
-    if (Platform.isWindows) {
+    if (!kIsWeb && Platform.isWindows) {
       try {
         _nativeInjectionAvailable = await WindowsInputInjection.initialize();
         if (_nativeInjectionAvailable) {
@@ -74,7 +74,7 @@ class ServerInputHandler {
     final deviceInfo = _connection.remoteDeviceInfo;
     if (deviceInfo != null) {
       // ক্লায়েন্ট স্ক্রিন রেজুলেশন অনুযায়ী Windows স্ক্রিন ম্যাপিং সেট করা
-      if (Platform.isWindows && _nativeInjectionAvailable) {
+      if (!kIsWeb && Platform.isWindows && _nativeInjectionAvailable) {
         WindowsInputInjection.setScreenResolution(
           deviceInfo.screenWidth.toInt(),
           deviceInfo.screenHeight.toInt(),
@@ -105,7 +105,7 @@ class ServerInputHandler {
 
     // Native injection (Windows only)
     // Bug 131: Properly handle the Future with unawaited + error zone
-    if (_nativeInjectionAvailable && Platform.isWindows) {
+    if (_nativeInjectionAvailable && !kIsWeb && Platform.isWindows) {
       unawaited(
         WindowsInputInjection.injectEvent(event).then((success) {
           if (!success && kDebugMode) {
@@ -134,7 +134,7 @@ class ServerInputHandler {
 
     _recentEvents.clear();
 
-    if (Platform.isWindows && _nativeInjectionAvailable) {
+    if (!kIsWeb && Platform.isWindows && _nativeInjectionAvailable) {
       await WindowsInputInjection.dispose();
     }
   }
