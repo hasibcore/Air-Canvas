@@ -1,248 +1,811 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Air Canvas - High-Performance Wireless Graphics Tablet</title>
-    <meta name="description" content="Turn your phone or tablet into a high-precision, low-latency wireless graphics tablet for Windows, macOS, and Linux.">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="styles.css">
+  <base href="./">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="AirCanvas - Transform your mobile into a real-time wireless drawing canvas for your PC.">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <title>AirCanvas | Wireless Drawing & Control Surface</title>
+  <link rel="manifest" href="manifest.json">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--c:#00e5ff;--p:#00b4d8;--bg:#030c14;--card:rgba(0,229,255,.04);--border:rgba(0,229,255,.1)}
+html{scroll-behavior:smooth}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:#e2e8f0;overflow-x:hidden;cursor:none}
+
+/* CUSTOM CURSOR */
+#cursor{position:fixed;width:12px;height:12px;background:var(--c);border-radius:50%;pointer-events:none;z-index:9999;transform:translate(-50%,-50%);transition:transform .1s,background .2s;mix-blend-mode:screen}
+#cursor-ring{position:fixed;width:36px;height:36px;border:1.5px solid rgba(0,229,255,.5);border-radius:50%;pointer-events:none;z-index:9998;transform:translate(-50%,-50%);transition:all .15s ease}
+body:has(a:hover) #cursor{transform:translate(-50%,-50%) scale(2.5);background:var(--p)}
+body:has(a:hover) #cursor-ring{width:52px;height:52px;border-color:rgba(0,180,216,.6)}
+
+/* SPOTLIGHT */
+#spotlight{position:fixed;inset:0;pointer-events:none;z-index:0;background:radial-gradient(700px circle at 50% 50%,rgba(0,229,255,.07),transparent 70%);transition:opacity .3s}
+
+/* BG GRADIENT - MATCHING USER SCREENSHOT */
+body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 95% 75% at 15% 25%,#094969 0%,#06283b 45%,transparent 85%),radial-gradient(ellipse 80% 80% at 85% 85%,#07354d 0%,#03101a 60%,transparent 100%);pointer-events:none;z-index:0}
+
+/* NAV */
+nav{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:16px 48px;background:rgba(3,14,22,.8);backdrop-filter:blur(24px);border-bottom:1px solid var(--border)}
+.nav-brand{display:flex;align-items:center;gap:12px;text-decoration:none}
+.nav-logo{width:36px;height:36px;border-radius:10px;transition:transform .3s}
+.nav-brand:hover .nav-logo{transform:rotate(15deg) scale(1.1)}
+.nav-title{font-size:1.1rem;font-weight:800;color:#fff;letter-spacing:-.02em}
+.nav-links{display:flex;gap:6px}
+.nav-links a{padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:500;text-decoration:none;color:rgba(255,255,255,.6);transition:all .2s}
+.nav-links a:hover{color:#fff;background:rgba(255,255,255,.08)}
+.nav-cta{padding:8px 20px;border-radius:8px;font-weight:700;background:linear-gradient(135deg,var(--c),var(--p));color:#000!important;text-decoration:none;font-size:.85rem;transition:all .2s!important}
+.nav-cta:hover{opacity:.9;transform:translateY(-2px)!important;box-shadow:0 8px 24px rgba(0,229,255,.3)!important}
+
+/* HERO */
+.hero{position:relative;z-index:1;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:120px 24px 80px;text-align:center}
+.hero-inner{max-width:780px}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 18px;border-radius:999px;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.2);font-size:.78rem;font-weight:700;color:var(--c);letter-spacing:.08em;text-transform:uppercase;margin-bottom:30px}
+.badge-dot{width:6px;height:6px;border-radius:50%;background:var(--c);animation:blink 1.5s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+
+/* HERO LOGO - floats & follows cursor slightly */
+.hero-logo-wrap{position:relative;width:130px;height:130px;margin:0 auto 32px}
+.hero-logo{width:130px;height:130px;border-radius:30px;display:block;transition:transform .1s;box-shadow:0 0 60px rgba(0,229,255,.3),0 0 120px rgba(0,180,216,.2)}
+.logo-ring{position:absolute;inset:-12px;border-radius:42px;border:1px solid rgba(0,229,255,.25);animation:spin1 8s linear infinite}
+.logo-ring2{position:absolute;inset:-22px;border-radius:52px;border:1px dashed rgba(0,180,216,.25);animation:spin2 12s linear infinite}
+@keyframes spin1{to{transform:rotate(360deg)}}
+@keyframes spin2{to{transform:rotate(-360deg)}}
+
+h1{font-size:clamp(2.8rem,7vw,5rem);font-weight:900;line-height:1.05;letter-spacing:-.04em;color:#fff;margin-bottom:20px}
+h1 span{background:linear-gradient(90deg,var(--c),var(--p));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero-sub{font-size:1.1rem;color:rgba(255,255,255,.55);line-height:1.75;max-width:540px;margin:0 auto 44px}
+.hero-btns{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+
+/* MAGNETIC BUTTONS */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;border-radius:12px;font-size:.95rem;font-weight:700;text-decoration:none;transition:box-shadow .2s}
+.btn-primary{background:linear-gradient(135deg,var(--c),var(--p));color:#000;box-shadow:0 8px 32px rgba(0,229,255,.2)}
+.btn-primary:hover{box-shadow:0 12px 48px rgba(0,229,255,.45)}
+.btn-outline{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:#fff}
+.btn-outline:hover{background:rgba(255,255,255,.1);border-color:rgba(0,229,255,.4)}
+
+/* STATS */
+.stats{position:relative;z-index:1;display:flex;gap:48px;justify-content:center;flex-wrap:wrap;padding:60px 24px}
+.stat{text-align:center}
+.stat-num{font-size:2.6rem;font-weight:900;letter-spacing:-.04em;background:linear-gradient(135deg,var(--c),var(--p));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.stat-lbl{font-size:.82rem;color:rgba(255,255,255,.4);margin-top:4px}
+
+/* SECTIONS */
+section{position:relative;z-index:1;padding:80px 24px}
+.lbl{text-align:center;font-size:.78rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--c);margin-bottom:10px}
+.sec-title{text-align:center;font-size:clamp(1.8rem,4vw,2.6rem);font-weight:800;color:#fff;letter-spacing:-.03em;margin-bottom:52px}
+
+/* 3D TILT CARDS */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;max-width:1040px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:28px 24px;transition:border-color .3s;transform-style:preserve-3d;transform:perspective(1000px)}
+.card:hover{border-color:rgba(0,229,255,.35)}
+.card-icon{font-size:2rem;margin-bottom:14px}
+.card-title{font-size:.98rem;font-weight:700;color:#fff;margin-bottom:8px}
+.card-desc{font-size:.85rem;color:rgba(255,255,255,.5);line-height:1.65}
+
+/* DOWNLOAD TABS */
+.tab-bar{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:44px}
+.tab-btn{display:flex;align-items:center;gap:8px;padding:10px 20px;border-radius:999px;border:1px solid var(--border);background:rgba(255,255,255,.04);color:rgba(255,255,255,.6);font-size:.83rem;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
+.tab-btn:hover{background:rgba(0,229,255,.08);border-color:rgba(0,229,255,.3);color:#fff}
+.tab-btn.active{background:rgba(0,229,255,.12);border-color:rgba(0,229,255,.5);color:var(--c)}
+.tab-panel{display:none}.tab-panel.active{display:block}
+.plat-section{max-width:1040px;margin:0 auto 48px}
+.plat-title{display:flex;align-items:center;gap:12px;font-size:1.05rem;font-weight:700;color:#fff;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.plat-title-icon{width:32px;height:32px;background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.2);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem}
+.pkg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;max-width:1040px;margin:0 auto}
+.pkg-card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:22px;transition:all .25s;position:relative;overflow:hidden}
+.pkg-card:hover{border-color:rgba(0,229,255,.35);box-shadow:0 16px 48px rgba(0,229,255,.08)}
+.pkg-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(0,229,255,.04),transparent);opacity:0;transition:opacity .3s}
+.pkg-card:hover::before{opacity:1}
+.pkg-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.pkg-left{display:flex;align-items:center;gap:12px}
+.pkg-os-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.15)}
+.pkg-name{font-size:.95rem;font-weight:700;color:#fff}
+.pkg-sub{font-size:.75rem;color:rgba(255,255,255,.4);margin-top:2px}
+.pkg-arch{padding:3px 8px;border-radius:6px;font-size:.7rem;font-weight:700;background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.2);color:var(--c)}
+.pkg-desc{font-size:.8rem;color:rgba(255,255,255,.45);line-height:1.6;margin-bottom:16px}
+.pkg-btns{display:flex;gap:8px;flex-wrap:wrap}
+.pkg-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:9px;font-size:.78rem;font-weight:700;text-decoration:none;transition:all .2s}
+.pkg-btn-primary{background:var(--c);color:#000}
+.pkg-btn-primary:hover{box-shadow:0 6px 20px rgba(0,229,255,.4)}
+.pkg-btn-secondary{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#fff}
+.pkg-btn-secondary:hover{background:rgba(255,255,255,.12)}
+.pkg-meta{display:flex;gap:16px;margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06)}
+.pkg-meta-item{display:flex;align-items:center;gap:5px;font-size:.72rem;color:rgba(255,255,255,.35)}
+.pkg-meta-item .dot{width:6px;height:6px;border-radius:50%}
+.dot-green{background:#22c55e}
+.dot-yellow{background:#eab308}
+
+/* NAV EXTRA */
+.nav-github-btn{display:inline-flex;align-items:center;gap:8px;padding:8px 18px;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);color:#fff;font-size:.85rem;font-weight:600;text-decoration:none;transition:all .2s}
+.nav-github-btn:hover{background:rgba(255,255,255,.14);border-color:rgba(0,229,255,.4);transform:translateY(-1px)}
+
+/* VERSION HISTORY & CHANGELOG */
+.sec-header-wrap{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:8px}
+.sec-icon{width:38px;height:38px;background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.25);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;color:var(--c)}
+.sec-sub{text-align:center;font-size:.9rem;color:rgba(255,255,255,.55);max-width:640px;margin:0 auto 48px;line-height:1.6}
+
+.ver-list{max-width:960px;margin:0 auto;display:flex;flex-direction:column;gap:24px}
+.ver-card{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:20px;padding:30px 32px;transition:border-color .3s,box-shadow .3s}
+.ver-card:hover{border-color:rgba(0,229,255,.3);box-shadow:0 12px 40px rgba(0,229,255,.05)}
+.ver-card.current{border-color:rgba(0,229,255,.35);background:linear-gradient(135deg,rgba(0,229,255,.04),rgba(7,7,20,.6))}
+
+.ver-top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid rgba(255,255,255,.06)}
+.ver-title-wrap{display:flex;align-items:center;gap:12px}
+.ver-num{font-size:1.4rem;font-weight:800;color:#fff;letter-spacing:-.02em}
+.ver-badge{padding:4px 12px;border-radius:999px;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em}
+.ver-badge.current{background:var(--c);color:#070714}
+.ver-badge.prev{background:rgba(255,255,255,.1);color:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.15)}
+
+.ver-date{font-size:.84rem;color:rgba(255,255,255,.4);display:flex;align-items:center;gap:6px}
+
+.ver-items{display:flex;flex-direction:column;gap:12px}
+.ver-item{display:flex;align-items:flex-start;gap:12px;font-size:.88rem;color:rgba(255,255,255,.75);line-height:1.6}
+.ver-check{width:20px;height:20px;border-radius:50%;background:rgba(0,229,255,.15);border:1px solid rgba(0,229,255,.3);color:var(--c);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:900;flex-shrink:0;margin-top:2px}
+.ver-item code{background:rgba(0,229,255,.08);color:var(--c);padding:2px 6px;border-radius:4px;font-family:monospace;font-size:.82rem;border:1px solid rgba(0,229,255,.15)}
+
+/* COMPATIBILITY SECTION */
+.compat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px;max-width:1040px;margin:0 auto}
+.compat-card{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:18px;padding:24px;transition:all .3s}
+.compat-card:hover{border-color:rgba(168,85,247,.35);transform:translateY(-3px)}
+.compat-icon{font-size:2.2rem;margin-bottom:12px}
+.compat-name{font-size:1rem;font-weight:700;color:#fff;margin-bottom:4px}
+.compat-role{font-size:.78rem;font-weight:600;color:var(--p);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.compat-desc{font-size:.82rem;color:rgba(255,255,255,.5);line-height:1.6}
+
+/* SIMULATOR SECTION */
+.sim-wrap{max-width:960px;margin:0 auto;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:24px;padding:24px;position:relative;overflow:hidden}
+.sim-canvas-wrap{width:100%;height:360px;background:#05050f;border-radius:16px;position:relative;overflow:hidden;border:1px solid rgba(255,255,255,.08);cursor:crosshair}
+#sim-canvas{width:100%;height:100%;display:block}
+.sim-toolbar{display:flex;align-items:center;justify-content:space-between;margin-top:16px;flex-wrap:wrap;gap:12px}
+.sim-colors{display:flex;gap:10px;align-items:center}
+.sim-color{width:24px;height:24px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .2s}
+.sim-color.active{border-color:#fff;transform:scale(1.2)}
+.sim-clear-btn{padding:8px 16px;border-radius:8px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#fff;font-size:.8rem;font-weight:600;cursor:pointer;transition:all .2s}
+.sim-clear-btn:hover{background:rgba(255,255,255,.15)}
+
+/* CREATIVE SOFTWARE GRID */
+.software-section{max-width:1040px;margin:50px auto 20px;padding:0 20px;position:relative;z-index:1}
+.software-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px;margin-top:20px}
+.software-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:22px 14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;transition:all .3s cubic-bezier(.4,0,.2,1);backdrop-filter:blur(10px)}
+.software-card:hover{background:rgba(0,229,255,.06);border-color:rgba(0,229,255,.35);transform:translateY(-6px) scale(1.02);box-shadow:0 12px 30px rgba(0,229,255,.15)}
+.software-icon{width:40px;height:40px;color:var(--c);display:flex;align-items:center;justify-content:center;transition:transform .3s}
+.software-card:hover .software-icon{transform:scale(1.15) rotate(5deg);color:#fff}
+.software-name{font-size:.9rem;font-weight:700;color:#fff;letter-spacing:-.01em}
+
+/* FOOTER */
+footer{position:relative;z-index:1;text-align:center;padding:40px 24px;border-top:1px solid var(--border);font-size:.83rem;color:rgba(255,255,255,.3)}
+footer a{color:rgba(0,229,255,.6);text-decoration:none}
+
+/* CANVAS TRAIL */
+#trail-canvas{position:fixed;inset:0;pointer-events:none;z-index:9997}
+
+@media(max-width:600px){nav{padding:14px 20px}.nav-links{display:none}}
+</style>
 </head>
 <body>
-    <!-- Navigation -->
-    <nav class="navbar">
-        <div class="container nav-container">
-            <div class="logo">
-                <div class="logo-icon"><i class="fa-solid fa-paintbrush"></i></div>
-                <span>Air Canvas</span>
-            </div>
-            <ul class="nav-links">
-                <li><a href="#features">Features</a></li>
-                <li><a href="#how-it-works">How It Works</a></li>
-                <li><a href="#platforms">Platforms</a></li>
-                <li><a href="#faq">FAQ</a></li>
-                <li><a href="https://github.com/hasibcore/Air-Canvas" target="_blank" class="nav-btn"><i class="fa-brands fa-github"></i> Source</a></li>
-            </ul>
+
+<div id="cursor"></div>
+<div id="cursor-ring"></div>
+<div id="spotlight"></div>
+<canvas id="trail-canvas"></canvas>
+
+<nav>
+  <a class="nav-brand" href="#">
+    <img class="nav-logo" src="assets/logo.png" alt="AirCanvas">
+    <span class="nav-title">AirCanvas</span>
+  </a>
+  <div class="nav-links">
+    <a href="simulator.html" target="_blank">🎨 Web Studio</a>
+    <a href="#download">Downloads</a>
+    <a href="#versions">Version History</a>
+    <a href="#compatibility">Compatibility</a>
+  </div>
+  <a class="nav-github-btn" href="https://github.com/hasibcore/Air-Canvas" target="_blank">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+    GitHub
+  </a>
+</nav>
+
+<section class="hero">
+  <div class="hero-inner" id="hero-inner">
+    <div class="badge"><span class="badge-dot"></span>v1.1.0 Released &nbsp;·&nbsp; Open Source</div>
+    <div class="hero-logo-wrap" id="hero-logo-wrap">
+      <div class="logo-ring"></div>
+      <div class="logo-ring2"></div>
+      <img class="hero-logo" id="hero-logo" src="assets/logo.png" alt="AirCanvas Logo">
+    </div>
+    <h1>Draw on air.<br><span>Connect. Create.</span></h1>
+    <p class="hero-sub">Turn your smartphone or tablet into a wireless drawing canvas for your PC. Real-time pressure-sensitive input over Wi-Fi — no wires, no lag.</p>
+    <div class="hero-btns">
+      <a class="btn btn-primary magnetic" href="https://github.com/hasibcore/Air-Canvas/releases/latest">💾 Download for Windows</a>
+      <a class="btn btn-outline magnetic" href="https://github.com/hasibcore/Air-Canvas/releases/latest">📱 Download APK</a>
+      <a class="btn btn-outline magnetic" href="https://github.com/hasibcore/Air-Canvas" target="_blank">⭐ Star on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<div class="stats">
+  <div class="stat"><div class="stat-num" data-target="6">0</div><div class="stat-lbl">Platforms Supported</div></div>
+  <div class="stat"><div class="stat-num">&lt;5ms</div><div class="stat-lbl">Input Latency (LAN)</div></div>
+  <div class="stat"><div class="stat-num" data-target="53">0</div><div class="stat-lbl">Bugs Fixed in v1.0</div></div>
+  <div class="stat"><div class="stat-num">100%</div><div class="stat-lbl">Open Source</div></div>
+</div>
+
+<section id="features">
+  <p class="lbl">Why AirCanvas?</p>
+  <h2 class="sec-title">Everything you need to draw wirelessly</h2>
+  <div class="grid" id="feat-grid">
+    <div class="card tilt-card"><div class="card-icon">✏️</div><div class="card-title">Pressure-Sensitive Drawing</div><div class="card-desc">Stylus and finger pressure transmitted in real-time for a natural drawing feel on your PC canvas.</div></div>
+    <div class="card tilt-card"><div class="card-icon">⚡</div><div class="card-title">Ultra-Low Latency</div><div class="card-desc">Binary WebSocket protocol delivers &lt;5ms average input latency on a local Wi-Fi network.</div></div>
+    <div class="card tilt-card"><div class="card-icon">🔒</div><div class="card-title">Secure PIN Auth</div><div class="card-desc">4-digit PIN challenge-response with rotating session keys protects every connection.</div></div>
+    <div class="card tilt-card"><div class="card-icon">📡</div><div class="card-title">Auto Network Discovery</div><div class="card-desc">UDP subnet broadcast finds nearby servers — no manual IP entry needed.</div></div>
+    <div class="card tilt-card"><div class="card-icon">🖥️</div><div class="card-title">Windows Input Injection</div><div class="card-desc">Injects real Win32 touch & stylus events, works with any drawing app natively.</div></div>
+    <div class="card tilt-card"><div class="card-icon">🌐</div><div class="card-title">Cross-Platform</div><div class="card-desc">Flutter-powered client runs on Android, iOS, macOS, Linux — any device becomes a tablet.</div></div>
+  </div>
+</section>
+
+<section id="download">
+  <p class="lbl">Get AirCanvas</p>
+  <h2 class="sec-title">Available on all platforms</h2>
+
+  <!-- TAB BAR -->
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="all">⊞ All Packages</button>
+    <button class="tab-btn" data-tab="windows">🪟 Windows PC</button>
+    <button class="tab-btn" data-tab="macos">🍎 macOS / MacBook</button>
+    <button class="tab-btn" data-tab="linux">🐧 Linux PC</button>
+    <button class="tab-btn" data-tab="mobile">📱 Mobile Apps</button>
+    <button class="tab-btn" data-tab="tablets">📟 Tablets</button>
+  </div>
+
+  <!-- ALL    <!-- Windows -->
+    <div class="plat-section">
+      <div class="plat-title"><div class="plat-title-icon">🪟</div> Windows PC (Desktop Server Receiver)</div>
+      <div class="pkg-grid">
+        <div class="pkg-card tilt-card">
+          <div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🪟</div><div><div class="pkg-name">Windows x64</div><div class="pkg-sub">Windows 10 &amp; 11 (64-bit Desktop PCs)</div></div></div><span class="pkg-arch">64-B</span></div>
+          <p class="pkg-desc">Single-file Windows installer with built-in desktop shortcut registration and portable server receiver.</p>
+          <div class="pkg-btns">
+            <a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ .EXE Installer</a>
+            <a class="pkg-btn pkg-btn-secondary" href="https://github.com/hasibcore/Air-Canvas/releases">📄 .ZIP Portable</a>
+          </div>
+          <div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-green"></span>x86-64 Intel/AMD</span><span class="pkg-meta-item"><span class="dot dot-green"></span>Ready Binary</span></div>
         </div>
-    </nav>
-
-    <!-- Hero Section -->
-    <header class="hero">
-        <div id="particles-js"></div>
-        <div class="hero-bg-glow"></div>
-        <div class="container hero-content">
-            <div class="badge">v1.1.0 Released</div>
-            <h1>Draw on air.<br><span class="gradient-text">Connect. Create.</span></h1>
-            <p class="hero-subtitle">Turn your smartphone or tablet into a wireless drawing canvas for your PC. Real-time pressure-sensitive input over Wi-Fi — no wires, no lag.</p>
-            
-            <div class="download-group">
-                <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-windows-x64.zip" class="btn primary-btn"><i class="fa-brands fa-windows"></i> Windows (.exe)</a>
-                <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-release.apk" class="btn primary-btn android-btn"><i class="fa-brands fa-android"></i> Android (.apk)</a>
-                <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-linux.AppImage" class="btn outline-btn"><i class="fa-brands fa-linux"></i> Linux</a>
-                <a href="#" class="btn outline-btn"><i class="fa-brands fa-apple"></i> iOS</a>
-            </div>
-            
-            <div class="hero-image-container">
-                <div class="glass-mockup">
-                    <div class="mockup-header">
-                        <div class="dot red"></div>
-                        <div class="dot yellow"></div>
-                        <div class="dot green"></div>
-                    </div>
-                    <div class="mockup-body">
-                        <div class="mockup-canvas">
-                            <i class="fa-solid fa-pen-nib"></i>
-                            <p>Ready to Draw</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div class="pkg-card tilt-card">
+          <div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🪟</div><div><div class="pkg-name">Windows ARM64</div><div class="pkg-sub">Snapdragon &amp; Surface Pro PCs</div></div></div><span class="pkg-arch">ARM</span></div>
+          <p class="pkg-desc">Native ARM64 Windows build for maximum efficiency and zero emulation overhead on Copilot+ PCs.</p>
+          <div class="pkg-btns">
+            <a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ .EXE Installer</a>
+            <a class="pkg-btn pkg-btn-secondary" href="https://github.com/hasibcore/Air-Canvas/releases">📄 .ZIP Portable</a>
+          </div>
+          <div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-green"></span>Native ARM64</span><span class="pkg-meta-item"><span class="dot dot-green"></span>Direct Download</span></div>
         </div>
-    </header>
+      </div>
+    </div>
 
-    <!-- Features Section -->
-    <section id="features" class="features">
-        <div class="container">
-            <div class="section-header">
-                <h2>Designed for <span class="gradient-text">Creators</span></h2>
-                <p>Everything you need for a seamless drawing experience without the cables.</p>
-            </div>
-            <div class="features-grid">
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="fa-solid fa-bolt"></i></div>
-                    <h3>Ultra-Low Latency</h3>
-                    <p>Custom 32-byte UDP/WebSocket binary protocol ensures your strokes appear instantly.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="fa-solid fa-bullseye"></i></div>
-                    <h3>Native Pen Injection</h3>
-                    <p>Translates touch and stylus data into native OS Pen events. Works out of the box with Photoshop, Blender, and Krita.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="fa-solid fa-wifi"></i></div>
-                    <h3>Zero-Config Discovery</h3>
-                    <p>No IP addresses to type. Automatic UDP broadcast pairing connects your devices instantly across your WiFi network.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon"><i class="fa-solid fa-layer-group"></i></div>
-                    <h3>Pressure & Tilt Tracking</h3>
-                    <p>Full support for stylus pressure, tilt angles, and force touch (on supported devices).</p>
-                </div>
-            </div>
+    <!-- macOS -->
+    <div class="plat-section">
+      <div class="plat-title"><div class="plat-title-icon">🍎</div> macOS / MacBook (Desktop Server Receiver)</div>
+      <div class="pkg-grid">
+        <div class="pkg-card tilt-card">
+          <div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🍎</div><div><div class="pkg-name">macOS Universal</div><div class="pkg-sub">MacBook Pro, Air, Mac Studio &amp; iMac</div></div></div><span class="pkg-arch">APPLE &amp; INT.</span></div>
+          <p class="pkg-desc">Universal binary supporting both Apple Silicon (M1-M4) and Intel Macs. Build from Flutter source.</p>
+          <div class="pkg-btns">
+            <a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Source (.zip)</a>
+          </div>
+          <div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-yellow"></span>Build Required</span><span class="pkg-meta-item"><span class="dot dot-green"></span>macOS 12+</span></div>
         </div>
-    </section>
+      </div>
+    </div>
 
-    <!-- How it Works Section -->
-    <section id="how-it-works" class="how-it-works">
-        <div class="container">
-            <div class="section-header">
-                <h2>How <span class="gradient-text">It Works</span></h2>
-                <p>Seamless cross-platform client-server architecture.</p>
-            </div>
-            <div class="architecture-flow">
-                <div class="flow-card">
-                    <div class="flow-icon"><i class="fa-solid fa-mobile-screen-button"></i></div>
-                    <h3>1. Mobile Client</h3>
-                    <p>Acts as your high-precision tablet. Captures pressure, tilt, and palm-rejected strokes.</p>
-                </div>
-                <div class="flow-arrow"><i class="fa-solid fa-arrow-right-arrow-left"></i></div>
-                <div class="flow-card center-card">
-                    <div class="flow-icon"><i class="fa-solid fa-network-wired"></i></div>
-                    <h3>2. Local WiFi</h3>
-                    <p>Streams data via custom 32-byte UDP/WebSocket binary protocol at lightning speeds.</p>
-                </div>
-                <div class="flow-arrow"><i class="fa-solid fa-arrow-right-arrow-left"></i></div>
-                <div class="flow-card">
-                    <div class="flow-icon"><i class="fa-solid fa-desktop"></i></div>
-                    <h3>3. Desktop Server</h3>
-                    <p>Receives data and injects synthetic native pen input into your favorite creative apps.</p>
-                </div>
-            </div>
+    <!-- Mobile -->
+    <div class="plat-section">
+      <div class="plat-title"><div class="plat-title-icon">📱</div> Mobile Apps (Canvas Client)</div>
+      <div class="pkg-grid">
+        <div class="pkg-card tilt-card">
+          <div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🤖</div><div><div class="pkg-name">Android Phone &amp; Tablet</div><div class="pkg-sub">Android 7.0+ (arm64 / x86_64)</div></div></div><span class="pkg-arch">APK</span></div>
+          <p class="pkg-desc">Full-featured canvas client with pressure sensitivity, gesture controls, and Wi-Fi auto-discovery.</p>
+          <div class="pkg-btns">
+            <a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Download APK</a>
+          </div>
+          <div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-green"></span>50 MB</span><span class="pkg-meta-item"><span class="dot dot-green"></span>Direct Install</span></div>
         </div>
-    </section>
-
-    <!-- Platforms Section -->
-    <section id="platforms" class="platforms">
-        <div class="container">
-            <div class="section-header">
-                <h2>Download for your <span class="gradient-text">Platform</span></h2>
-                <p>Air Canvas operates as a client on mobile/tablet and a server on desktop.</p>
-            </div>
-            
-            <div class="platform-tabs">
-                <button class="tab-btn active" onclick="switchTab('desktop')">Desktop (Server)</button>
-                <button class="tab-btn" onclick="switchTab('mobile')">Mobile (Client)</button>
-            </div>
-
-            <div class="platforms-grid" id="desktop-grid">
-                <!-- Windows -->
-                <div class="platform-card">
-                    <i class="fa-brands fa-windows platform-bg-icon"></i>
-                    <div class="platform-header">
-                        <i class="fa-brands fa-windows"></i>
-                        <h3>Windows</h3>
-                    </div>
-                    <p>Native `CreateSyntheticPointerDevice` injection.</p>
-                    <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-windows-x64.zip" class="btn outline-btn" target="_blank"><i class="fa-solid fa-download"></i> Download x64</a>
-                </div>
-                
-                <!-- macOS -->
-                <div class="platform-card">
-                    <i class="fa-brands fa-apple platform-bg-icon"></i>
-                    <div class="platform-header">
-                        <i class="fa-brands fa-apple"></i>
-                        <h3>macOS</h3>
-                    </div>
-                    <p>High-speed WebSocket listener with UDP Discovery.</p>
-                    <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-macos.dmg" class="btn outline-btn" target="_blank"><i class="fa-solid fa-download"></i> Download Universal</a>
-                </div>
-
-                <!-- Linux -->
-                <div class="platform-card">
-                    <i class="fa-brands fa-linux platform-bg-icon"></i>
-                    <div class="platform-header">
-                        <i class="fa-brands fa-linux"></i>
-                        <h3>Linux</h3>
-                    </div>
-                    <p>GTK Linux server receiver & auto pairing.</p>
-                    <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-linux.AppImage" class="btn outline-btn" target="_blank"><i class="fa-solid fa-download"></i> AppImage</a>
-                </div>
-            </div>
-
-            <div class="platforms-grid hidden" id="mobile-grid">
-                <!-- Android -->
-                <div class="platform-card">
-                    <i class="fa-brands fa-android platform-bg-icon"></i>
-                    <div class="platform-header">
-                        <i class="fa-brands fa-android"></i>
-                        <h3>Android</h3>
-                    </div>
-                    <p>High-rate stylus sampling & dynamic grid overlay.</p>
-                    <a href="https://github.com/hasibcore/Air-Canvas/releases/latest/download/AirCanvas-release.apk" class="btn outline-btn" target="_blank"><i class="fa-brands fa-android"></i> Download APK</a>
-                </div>
-
-                <!-- iOS -->
-                <div class="platform-card">
-                    <i class="fa-brands fa-app-store-ios platform-bg-icon"></i>
-                    <div class="platform-header">
-                        <i class="fa-brands fa-apple"></i>
-                        <h3>iOS / iPadOS</h3>
-                    </div>
-                    <p>Apple Pencil integration & force touch support.</p>
-                    <a href="#" class="btn outline-btn"><i class="fa-solid fa-download"></i> App Store (Coming Soon)</a>
-                </div>
-            </div>
+        <div class="pkg-card tilt-card">
+          <div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">📱</div><div><div class="pkg-name">iOS &amp; iPadOS</div><div class="pkg-sub">iPhone &amp; iPad — iOS 14+</div></div></div><span class="pkg-arch">IOS</span></div>
+          <p class="pkg-desc">Build from Flutter source using Xcode. Supports Apple Pencil pressure and ProMotion 120Hz display.</p>
+          <div class="pkg-btns">
+            <a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Source (.zip)</a>
+          </div>
+          <div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-yellow"></span>Build Required</span><span class="pkg-meta-item"><span class="dot dot-green"></span>Xcode 14+</span></div>
         </div>
-    </section>
+      </div>
+    </div>
 
-    <!-- FAQ Section -->
-    <section id="faq" class="faq">
-        <div class="container">
-            <div class="section-header">
-                <h2>Frequently Asked <span class="gradient-text">Questions</span></h2>
-                <p>Got questions? We've got answers.</p>
-            </div>
-            <div class="faq-grid">
-                <div class="faq-item">
-                    <h3>Does it work with Photoshop and Blender?</h3>
-                    <p>Yes! Because Air Canvas injects native OS pen events, it works out of the box with any app that supports graphics tablets, including Photoshop, Illustrator, Krita, and Blender.</p>
-                </div>
-                <div class="faq-item">
-                    <h3>Do I need an active internet connection?</h3>
-                    <p>No. Air Canvas operates entirely over your local WiFi network. No data leaves your home, ensuring zero lag from internet routing.</p>
-                </div>
-                <div class="faq-item">
-                    <h3>What happens if I don't have a stylus?</h3>
-                    <p>You can still use Air Canvas with your finger! However, pressure and tilt features are only available if your device supports them (e.g., S-Pen or Apple Pencil).</p>
-                </div>
-                <div class="faq-item">
-                    <h3>Is there a cable option?</h3>
-                    <p>Currently, Air Canvas is optimized for wireless, low-latency performance using your local network router. USB tethering is not yet natively supported but can work via local network sharing.</p>
-                </div>
-            </div>
+    <!-- Linux -->
+    <div class="plat-section">
+      <div class="plat-title"><div class="plat-title-icon">🐧</div> Linux PC (Desktop Server Receiver)</div>
+      <div class="pkg-grid">
+        <div class="pkg-card tilt-card">
+          <div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🐧</div><div><div class="pkg-name">Linux x86_64</div><div class="pkg-sub">Ubuntu, Debian, Arch, Fedora</div></div></div><span class="pkg-arch">x64</span></div>
+          <p class="pkg-desc">Server receiver for Linux desktops. Build from Flutter source with standard Linux build tools.</p>
+          <div class="pkg-btns">
+            <a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Source (.zip)</a>
+          </div>
+          <div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-yellow"></span>Build Required</span><span class="pkg-meta-item"><span class="dot dot-green"></span>Flutter 3.x</span></div>
         </div>
-    </section>
+      </div>
+    </div>
 
-    <!-- Footer -->
-    <footer>
-        <div class="container footer-content">
-            <div class="footer-brand">
-                <div class="logo">
-                    <div class="logo-icon"><i class="fa-solid fa-paintbrush"></i></div>
-                    <span>Air Canvas</span>
-                </div>
-                <p>Developed by Hasib Core.</p>
-            </div>
-            <div class="footer-links">
-                <a href="https://github.com/hasibcore/Air-Canvas" target="_blank"><i class="fa-brands fa-github"></i> GitHub</a>
-            </div>
+  </div>
+
+  <!-- SINGLE PLATFORM TABS (filtered views) -->
+  <div class="tab-panel" id="tab-windows">
+    <div class="plat-section"><div class="plat-title"><div class="plat-title-icon">🪟</div> Windows PC</div>
+    <div class="pkg-grid">
+      <div class="pkg-card tilt-card"><div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🪟</div><div><div class="pkg-name">Windows x64</div><div class="pkg-sub">Windows 10 &amp; 11</div></div></div><span class="pkg-arch">64-B</span></div><p class="pkg-desc">Single-file installer. Includes desktop shortcut &amp; portable server receiver.</p><div class="pkg-btns"><a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ .EXE Installer</a><a class="pkg-btn pkg-btn-secondary" href="https://github.com/hasibcore/Air-Canvas/releases">📄 .ZIP Portable</a></div><div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-green"></span>Ready Binary</span></div></div>
+      <div class="pkg-card tilt-card"><div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🪟</div><div><div class="pkg-name">Windows ARM64</div><div class="pkg-sub">Snapdragon &amp; Surface Pro</div></div></div><span class="pkg-arch">ARM</span></div><p class="pkg-desc">Native ARM64 build — zero emulation overhead on Copilot+ PCs.</p><div class="pkg-btns"><a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ .EXE Installer</a><a class="pkg-btn pkg-btn-secondary" href="https://github.com/hasibcore/Air-Canvas/releases">📄 .ZIP Portable</a></div><div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-green"></span>Native ARM64</span></div></div>
+    </div></div>
+  </div>
+
+  <div class="tab-panel" id="tab-macos">
+    <div class="plat-section"><div class="plat-title"><div class="plat-title-icon">🍎</div> macOS / MacBook</div>
+    <div class="pkg-grid">
+      <div class="pkg-card tilt-card"><div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🍎</div><div><div class="pkg-name">macOS Universal</div><div class="pkg-sub">M1-M4 &amp; Intel Mac</div></div></div><span class="pkg-arch">UNIV.</span></div><p class="pkg-desc">Universal binary — Apple Silicon and Intel. Requires Flutter SDK &amp; Xcode to build.</p><div class="pkg-btns"><a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Source (.zip)</a></div><div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-yellow"></span>Build Required</span></div></div>
+    </div></div>
+  </div>
+
+  <div class="tab-panel" id="tab-linux">
+    <div class="plat-section"><div class="plat-title"><div class="plat-title-icon">🐧</div> Linux PC</div>
+    <div class="pkg-grid">
+      <div class="pkg-card tilt-card"><div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🐧</div><div><div class="pkg-name">Linux x86_64</div><div class="pkg-sub">Ubuntu, Debian, Arch, Fedora</div></div></div><span class="pkg-arch">x64</span></div><p class="pkg-desc">Build from Flutter source. Works on any x86_64 Linux distro with GTK3.</p><div class="pkg-btns"><a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Source (.zip)</a></div><div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-yellow"></span>Build Required</span></div></div>
+    </div></div>
+  </div>
+
+  <div class="tab-panel" id="tab-mobile">
+    <div class="plat-section"><div class="plat-title"><div class="plat-title-icon">📱</div> Mobile Apps</div>
+    <div class="pkg-grid">
+      <div class="pkg-card tilt-card"><div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🤖</div><div><div class="pkg-name">Android</div><div class="pkg-sub">Android 7.0+</div></div></div><span class="pkg-arch">APK</span></div><p class="pkg-desc">Canvas client with pressure sensitivity &amp; auto-discovery. Direct APK install.</p><div class="pkg-btns"><a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Download APK</a></div><div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-green"></span>50 MB</span></div></div>
+      <div class="pkg-card tilt-card"><div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">📱</div><div><div class="pkg-name">iOS</div><div class="pkg-sub">iPhone — iOS 14+</div></div></div><span class="pkg-arch">IOS</span></div><p class="pkg-desc">Apple Pencil pressure support. Build via Xcode from Flutter source.</p><div class="pkg-btns"><a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Source (.zip)</a></div><div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-yellow"></span>Build Required</span></div></div>
+    </div></div>
+  </div>
+
+  <div class="tab-panel" id="tab-tablets">
+    <div class="plat-section"><div class="plat-title"><div class="plat-title-icon">📟</div> Tablets</div>
+    <div class="pkg-grid">
+      <div class="pkg-card tilt-card"><div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">🤖</div><div><div class="pkg-name">Android Tablet</div><div class="pkg-sub">Android 7.0+</div></div></div><span class="pkg-arch">APK</span></div><p class="pkg-desc">Optimized for large screen tablets. Landscape canvas mode with stylus pressure.</p><div class="pkg-btns"><a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Download APK</a></div><div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-green"></span>Direct Install</span></div></div>
+      <div class="pkg-card tilt-card"><div class="pkg-header"><div class="pkg-left"><div class="pkg-os-icon">📱</div><div><div class="pkg-name">iPad</div><div class="pkg-sub">iPadOS 14+</div></div></div><span class="pkg-arch">IOS</span></div><p class="pkg-desc">Apple Pencil with full pressure &amp; tilt support on iPad. Build via Xcode.</p><div class="pkg-btns"><a class="pkg-btn pkg-btn-primary" href="https://github.com/hasibcore/Air-Canvas/releases">⬇ Source (.zip)</a></div><div class="pkg-meta"><span class="pkg-meta-item"><span class="dot dot-yellow"></span>Build Required</span></div></div>
+    </div></div>
+  </div>
+</section>
+
+
+<!-- VERSION HISTORY & CHANGELOG -->
+<section id="versions">
+  <div class="sec-header-wrap">
+    <div class="sec-icon">🔀</div>
+    <h2 class="sec-title" style="text-align:center;font-size:2rem;font-weight:800;color:#fff;margin:0">Version History &amp; Changelog</h2>
+  </div>
+  <p class="sec-sub">Track all major updates, bug fixes, and feature additions across previous and current releases of AirCanvas.</p>
+  
+  <div class="ver-list">
+    <!-- Version 1.1.0 -->
+    <div class="ver-card current tilt-card">
+      <div class="ver-top">
+        <div class="ver-title-wrap">
+          <span class="ver-num">v1.1.0</span>
+          <span class="ver-badge current">CURRENT RELEASE</span>
         </div>
-    </footer>
+        <div class="ver-date">📅 Released: July 18, 2026</div>
+      </div>
+      <div class="ver-items">
+        <div class="ver-item">
+          <div class="ver-check">✓</div>
+          <div>Added Android <code>usesCleartextTraffic</code> permission for unrestricted local HTTP &amp; UDP Wi-Fi server communication.</div>
+        </div>
+        <div class="ver-item">
+          <div class="ver-check">✓</div>
+          <div>High-reliability HTTP subnet scanner &amp; UDP broadcast auto-discovery mechanism.</div>
+        </div>
+        <div class="ver-item">
+          <div class="ver-check">✓</div>
+          <div>Optimized WebSocket frame buffering, ping/pong latency measurement, and authentication completer lifecycle.</div>
+        </div>
+      </div>
+    </div>
 
-    <script src="https://cdn.jsdelivr.net/particles.js/2.0.0/particles.min.js"></script>
-    <script src="script.js"></script>
+    <!-- Version 1.0.0 -->
+    <div class="ver-card tilt-card">
+      <div class="ver-top">
+        <div class="ver-title-wrap">
+          <span class="ver-num">v1.0.0</span>
+          <span class="ver-badge prev">PREVIOUS RELEASE</span>
+        </div>
+        <div class="ver-date">📅 Released: July 17, 2026</div>
+      </div>
+      <div class="ver-items">
+        <div class="ver-item">
+          <div class="ver-check">✓</div>
+          <div>Single-file Windows C# Installer (<code>.EXE</code>) with custom 3D stylus icon &amp; desktop shortcut registration.</div>
+        </div>
+        <div class="ver-item">
+          <div class="ver-check">✓</div>
+          <div>Ultra-low latency binary UDP streaming engine &amp; WebSocket server receiver.</div>
+        </div>
+        <div class="ver-item">
+          <div class="ver-check">✓</div>
+          <div>4096-level pressure sensitivity &amp; pen tilt vector mapping for Windows Ink &amp; macOS APIs.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- COMPATIBILITY -->
+<section id="compatibility">
+  <div class="sec-header-wrap">
+    <div class="sec-icon">⚡</div>
+    <h2 class="sec-title" style="text-align:center;font-size:2rem;font-weight:800;color:#fff;margin:0">Platform Compatibility</h2>
+  </div>
+  <p class="sec-sub">AirCanvas connects mobile client apps to desktop server receivers seamlessly over Wi-Fi.</p>
+  
+  <div class="compat-grid">
+    <div class="compat-card tilt-card">
+      <div class="compat-icon">🪟</div>
+      <div class="compat-name">Windows PC</div>
+      <div class="compat-role">Server Receiver</div>
+      <div class="compat-desc">Windows 10, 11 (x64 &amp; ARM64). Direct Win32 Touch Injection with zero driver setup.</div>
+    </div>
+
+    <div class="compat-card tilt-card">
+      <div class="compat-icon">🤖</div>
+      <div class="compat-name">Android</div>
+      <div class="compat-role">Canvas Client App</div>
+      <div class="compat-desc">Android 7.0+ (ARM64 / ARMv7). Stylus pressure sensitivity &amp; Wi-Fi auto-discovery.</div>
+    </div>
+
+    <div class="compat-card tilt-card">
+      <div class="compat-icon">🍎</div>
+      <div class="compat-name">macOS</div>
+      <div class="compat-role">Server Receiver</div>
+      <div class="compat-desc">macOS 12+ (Universal M1-M4 &amp; Intel). Cocoa CGEvent cursor stream injection.</div>
+    </div>
+
+    <div class="compat-card tilt-card">
+      <div class="compat-icon">📱</div>
+      <div class="compat-name">iOS &amp; iPadOS</div>
+      <div class="compat-role">Canvas Client App</div>
+      <div class="compat-desc">iOS 14+. Apple Pencil 1 &amp; 2 pressure &amp; tilt vector stream transmission.</div>
+    </div>
+
+    <div class="compat-card tilt-card">
+      <div class="compat-icon">🐧</div>
+      <div class="compat-name">Linux PC</div>
+      <div class="compat-role">Server Receiver</div>
+      <div class="compat-desc">Ubuntu / Debian / Arch / Fedora. GTK3 &amp; X11/Wayland input injection support.</div>
+    </div>
+  </div>
+</section>
+
+<!-- CREATIVE SOFTWARE SUPPORT -->
+<section class="software-section">
+  <div class="sec-header-wrap">
+    <div class="sec-icon">🎨</div>
+    <h2 class="sec-title" style="text-align:center;font-size:1.8rem;font-weight:800;color:#fff;margin:0">Supported Creative Software</h2>
+  </div>
+  <p class="sec-sub" style="margin-bottom:28px">AirCanvas maps stylus input, pressure, and tilt seamlessly across all popular desktop creative suites.</p>
+
+  <div class="software-grid">
+    <div class="software-card tilt-card">
+      <div class="software-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/></svg>
+      </div>
+      <div class="software-name">Adobe Photoshop</div>
+    </div>
+
+    <div class="software-card tilt-card">
+      <div class="software-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="m2 2 7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+      </div>
+      <div class="software-name">Adobe Illustrator</div>
+    </div>
+
+    <div class="software-card tilt-card">
+      <div class="software-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.92 0 1.7-.75 1.7-1.7 0-.42-.16-.8-.43-1.07-.27-.27-.43-.65-.43-1.07 0-.92.75-1.7 1.7-1.7H17c2.76 0 5-2.24 5-5 0-4.69-4.31-9-10-9z"/></svg>
+      </div>
+      <div class="software-name">Krita</div>
+    </div>
+
+    <div class="software-card tilt-card">
+      <div class="software-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11z"/><path d="m5 2 5 5"/><path d="M2 13h15"/><path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4z"/></svg>
+      </div>
+      <div class="software-name">Clip Studio Paint</div>
+    </div>
+
+    <div class="software-card tilt-card">
+      <div class="software-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+      </div>
+      <div class="software-name">Blender 3D</div>
+    </div>
+
+    <div class="software-card tilt-card">
+      <div class="software-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+      </div>
+      <div class="software-name">Figma</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>Built with ❤️ using Flutter &nbsp;·&nbsp; <a href="https://github.com/hasibcore/Air-Canvas" target="_blank">github.com/hasibcore/Air-Canvas</a></p>
+  <p style="margin-top:8px">© 2026 AirCanvas &nbsp;·&nbsp; MIT License &nbsp;·&nbsp; v1.0.0-fixed</p>
+</footer>
+
+<script>
+// ── CURSOR ──────────────────────────────────────────────
+const cur = document.getElementById('cursor');
+const ring = document.getElementById('cursor-ring');
+const spot = document.getElementById('spotlight');
+let mx=0,my=0,rx=0,ry=0;
+
+document.addEventListener('mousemove',e=>{
+  mx=e.clientX; my=e.clientY;
+  cur.style.left=mx+'px'; cur.style.top=my+'px';
+  spot.style.background=`radial-gradient(600px circle at ${mx}px ${my}px,rgba(0,229,255,.07),transparent 70%)`;
+});
+
+// Ring lags behind cursor
+(function animRing(){
+  rx+=(mx-rx)*.12; ry+=(my-ry)*.12;
+  ring.style.left=rx+'px'; ring.style.top=ry+'px';
+  requestAnimationFrame(animRing);
+})();
+
+// ── CONSTELLATION NETWORK WITH CURSOR FLEE PHYSICS ─────
+const canvas = document.getElementById('trail-canvas');
+const ctx = canvas.getContext('2d');
+let W = canvas.width = window.innerWidth, H = canvas.height = window.innerHeight;
+window.addEventListener('resize', () => { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; initDots(); });
+
+const DOTS = [], N = 100, CONN_DIST = 140, MOUSE_DIST = 220;
+const mouse = { x: -1000, y: -1000 };
+document.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+
+function initDots() {
+  DOTS.length = 0;
+  for (let i = 0; i < N; i++) {
+    DOTS.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - .5) * 0.15,
+      vy: (Math.random() - .5) * 0.15,
+      r: Math.random() * 1.8 + 1
+    });
+  }
+}
+initDots();
+
+(function animParticles() {
+  ctx.clearRect(0, 0, W, H);
+  
+  DOTS.forEach(d => {
+    d.x += d.vx;
+    d.y += d.vy;
+
+    // Damping / friction back to slow ambient speed
+    d.vx *= 0.96;
+    d.vy *= 0.96;
+
+    // Keep slow drift going when idle
+    if (Math.abs(d.vx) < 0.08) d.vx += (Math.random() - 0.5) * 0.02;
+    if (Math.abs(d.vy) < 0.08) d.vy += (Math.random() - 0.5) * 0.02;
+
+    // Edge bouncing
+    if (d.x < 10) { d.x = 10; d.vx = Math.abs(d.vx); }
+    if (d.x > W - 10) { d.x = W - 10; d.vx = -Math.abs(d.vx); }
+    if (d.y < 10) { d.y = 10; d.vy = Math.abs(d.vy); }
+    if (d.y > H - 10) { d.y = H - 10; d.vy = -Math.abs(d.vy); }
+
+    // Flee ("palay") from cursor when close
+    const dx = d.x - mouse.x;
+    const dy = d.y - mouse.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < MOUSE_DIST && dist > 0) {
+      const force = Math.pow((MOUSE_DIST - dist) / MOUSE_DIST, 2) * 2.2;
+      const angle = Math.atan2(dy, dx);
+      d.vx += Math.cos(angle) * force;
+      d.vy += Math.sin(angle) * force;
+    }
+  });
+
+  // Draw connections
+  for (let i = 0; i < DOTS.length; i++) {
+    for (let j = i + 1; j < DOTS.length; j++) {
+      const dx = DOTS[i].x - DOTS[j].x, dy = DOTS[i].y - DOTS[j].y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < CONN_DIST) {
+        const alpha = (1 - d / CONN_DIST) * 0.35;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = '#00e5ff';
+        ctx.lineWidth = .7;
+        ctx.beginPath();
+        ctx.moveTo(DOTS[i].x, DOTS[i].y);
+        ctx.lineTo(DOTS[j].x, DOTS[j].y);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    // Laser stream to mouse when near
+    const dx = DOTS[i].x - mouse.x, dy = DOTS[i].y - mouse.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d < MOUSE_DIST) {
+      const alpha = (1 - d / MOUSE_DIST) * 0.5;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = '#00b4d8';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(DOTS[i].x, DOTS[i].y);
+      ctx.lineTo(mouse.x, mouse.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Draw dot nodes
+  DOTS.forEach(d => {
+    ctx.save();
+    ctx.globalAlpha = .8;
+    ctx.beginPath();
+    ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+    ctx.fillStyle = '#00e5ff';
+    ctx.shadowBlur = 8; ctx.shadowColor = '#00e5ff';
+    ctx.fill();
+    ctx.restore();
+  });
+
+  requestAnimationFrame(animParticles);
+})();
+
+// ── 3D TILT CARDS ───────────────────────────────────────
+document.querySelectorAll('.tilt-card').forEach(card=>{
+  card.addEventListener('mousemove',e=>{
+    const r=card.getBoundingClientRect();
+    const x=e.clientX-r.left, y=e.clientY-r.top;
+    const cx=r.width/2, cy=r.height/2;
+    const rx2=((y-cy)/cy)*10, ry2=-((x-cx)/cx)*10;
+    card.style.transform=`perspective(800px) rotateX(${rx2}deg) rotateY(${ry2}deg) scale(1.03)`;
+    card.style.boxShadow=`${-ry2}px ${rx2}px 40px rgba(0,229,255,.12)`;
+  });
+  card.addEventListener('mouseleave',()=>{
+    card.style.transform='perspective(800px) rotateX(0) rotateY(0) scale(1)';
+    card.style.boxShadow='';
+  });
+});
+
+// ── HERO LOGO PARALLAX ──────────────────────────────────
+const logo=document.getElementById('hero-logo');
+document.addEventListener('mousemove',e=>{
+  const dx=(e.clientX/window.innerWidth-.5)*20;
+  const dy=(e.clientY/window.innerHeight-.5)*20;
+  logo.style.transform=`translate(${dx}px,${dy}px)`;
+});
+
+// ── MAGNETIC BUTTONS ────────────────────────────────────
+document.querySelectorAll('.magnetic').forEach(btn=>{
+  btn.addEventListener('mousemove',e=>{
+    const r=btn.getBoundingClientRect();
+    const x=e.clientX-r.left-r.width/2;
+    const y=e.clientY-r.top-r.height/2;
+    btn.style.transform=`translate(${x*.25}px,${y*.25}px)`;
+  });
+  btn.addEventListener('mouseleave',()=>{btn.style.transform='';});
+});
+
+// ── COUNT-UP STATS ──────────────────────────────────────
+const observer=new IntersectionObserver(entries=>{
+  entries.forEach(en=>{
+    if(en.isIntersecting){
+      const el=en.target;
+      const target=+el.dataset.target;
+      let cur2=0;
+      const step=Math.ceil(target/40);
+      const t=setInterval(()=>{cur2+=step;if(cur2>=target){cur2=target;clearInterval(t);}el.textContent=cur2+(target===6?'+':'+')} ,30);
+      observer.unobserve(el);
+    }
+  });
+},{threshold:.5});
+document.querySelectorAll('[data-target]').forEach(el=>observer.observe(el));
+
+// ── NAV LOGO FLOAT ──────────────────────────────────────
+const navLogo=document.querySelector('.nav-logo');
+document.addEventListener('mousemove',e=>{
+  const dx=(e.clientX/window.innerWidth-.5)*6;
+  const dy=(e.clientY/window.innerHeight-.5)*6;
+  navLogo.style.transform=`rotate(${dx}deg) translateY(${dy*.5}px)`;
+});
+// ── TAB SWITCHER ────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
+    // Re-init tilt for newly visible cards
+    initTilt();
+  });
+});
+
+// ── LIVE SIMULATOR CANVAS ────────────────────────────────
+const simCanvas = document.getElementById('sim-canvas');
+if (simCanvas) {
+  const sCtx = simCanvas.getContext('2d');
+  let isDrawing = false, activeColor = '#00e5ff';
+  
+  function resizeSimCanvas() {
+    const rect = simCanvas.parentElement.getBoundingClientRect();
+    simCanvas.width = rect.width;
+    simCanvas.height = rect.height;
+    sCtx.lineCap = 'round';
+    sCtx.lineJoin = 'round';
+  }
+  resizeSimCanvas();
+  window.addEventListener('resize', resizeSimCanvas);
+
+  document.querySelectorAll('.sim-color').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.sim-color').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeColor = btn.dataset.color;
+    });
+  });
+
+  function getSimPos(e) {
+    const r = simCanvas.getBoundingClientRect();
+    const touch = e.touches ? e.touches[0] : e;
+    return { x: touch.clientX - r.left, y: touch.clientY - r.top };
+  }
+
+  function startDraw(e) {
+    isDrawing = true;
+    const pos = getSimPos(e);
+    sCtx.beginPath();
+    sCtx.moveTo(pos.x, pos.y);
+  }
+
+  function draw(e) {
+    if (!isDrawing) return;
+    const pos = getSimPos(e);
+    sCtx.strokeStyle = activeColor;
+    sCtx.lineWidth = 4;
+    sCtx.shadowBlur = 8;
+    sCtx.shadowColor = activeColor;
+    sCtx.lineTo(pos.x, pos.y);
+    sCtx.stroke();
+  }
+
+  function stopDraw() { isDrawing = false; }
+
+  simCanvas.addEventListener('mousedown', startDraw);
+  simCanvas.addEventListener('mousemove', draw);
+  window.addEventListener('mouseup', stopDraw);
+
+  simCanvas.addEventListener('touchstart', (e) => { e.preventDefault(); startDraw(e); });
+  simCanvas.addEventListener('touchmove', (e) => { e.preventDefault(); draw(e); });
+  window.addEventListener('touchend', stopDraw);
+
+  window.clearSimCanvas = function() {
+    sCtx.clearRect(0, 0, simCanvas.width, simCanvas.height);
+  };
+}
+</script>
 </body>
 </html>

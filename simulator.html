@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AirCanvas Web Studio & Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #030c14;
+      --c: #00e5ff;
+      --p: #00b4d8;
+      --panel: rgba(3, 14, 22, 0.85);
+      --border: rgba(0, 229, 255, 0.15);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Outfit', sans-serif; user-select: none; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: #fff; }
+
+    /* Top Bar */
+    .top-bar {
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 60px;
+      background: rgba(7, 7, 20, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; z-index: 100;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: #fff; }
+    .brand-logo { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, var(--c), var(--p)); display: flex; align-items: center; justify-content: center; font-size: 1.2rem; }
+    .brand-title { font-size: 1.1rem; font-weight: 800; letter-spacing: -0.02em; }
+    .brand-badge { padding: 3px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 700; background: rgba(0, 229, 255, 0.15); border: 1px solid rgba(0, 229, 255, 0.3); color: var(--c); text-transform: uppercase; }
+
+    .back-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 16px; border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border);
+      color: #fff; text-decoration: none; font-size: 0.85rem; font-weight: 600;
+      transition: all 0.2s;
+    }
+    .back-btn:hover { background: rgba(0, 229, 255, 0.15); border-color: rgba(0, 229, 255, 0.4); color: var(--c); }
+
+    /* Canvas Area */
+    #studio-canvas {
+      width: 100vw; height: 100vh;
+      display: block; cursor: crosshair;
+      touch-action: none;
+    }
+
+    /* Floating Toolbar */
+    .toolbar {
+      position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%);
+      background: var(--panel); backdrop-filter: blur(20px);
+      border: 1px solid var(--border); border-radius: 20px;
+      padding: 12px 24px; display: flex; align-items: center; gap: 20px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); z-index: 100;
+    }
+    .tool-group { display: flex; align-items: center; gap: 10px; }
+    .tool-label { font-size: 0.78rem; color: rgba(255, 255, 255, 0.5); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    .color-swatch {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 2px solid transparent; cursor: pointer; transition: transform 0.2s, border-color 0.2s;
+    }
+    .color-swatch:hover { transform: scale(1.15); }
+    .color-swatch.active { border-color: #fff; transform: scale(1.2); box-shadow: 0 0 12px currentColor; }
+
+    .brush-slider { width: 90px; accent-color: var(--c); cursor: pointer; }
+
+    .action-btn {
+      padding: 8px 14px; border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border);
+      color: #fff; font-size: 0.8rem; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; gap: 6px; transition: all 0.2s;
+    }
+    .action-btn:hover { background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.3); }
+    .action-btn.active { background: rgba(0, 229, 255, 0.2); border-color: var(--c); color: var(--c); }
+    .action-btn-primary { background: linear-gradient(135deg, var(--c), var(--p)); color: #000; border: none; }
+    .action-btn-primary:hover { box-shadow: 0 0 20px rgba(0, 229, 255, 0.4); }
+
+    /* Live Pressure HUD */
+    .hud {
+      position: absolute; top: 76px; right: 24px;
+      background: rgba(7, 7, 20, 0.75); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 14px;
+      padding: 10px 16px; font-size: 0.8rem; display: flex; flex-direction: column; gap: 4px;
+      z-index: 90; pointer-events: none;
+    }
+    .hud-row { display: flex; justify-content: space-between; gap: 16px; color: rgba(255, 255, 255, 0.6); }
+    .hud-val { color: var(--c); font-weight: 700; font-family: monospace; }
+  </style>
+</head>
+<body>
+
+  <!-- TOP BAR -->
+  <div class="top-bar">
+    <a href="index.html" class="brand">
+      <div class="brand-logo">🎨</div>
+      <div>
+        <span class="brand-title">AirCanvas Studio</span>
+        <span class="brand-badge">Full Simulator</span>
+      </div>
+    </a>
+    <a href="index.html" class="back-btn">← Back to Landing Page</a>
+  </div>
+
+  <!-- HUD -->
+  <div class="hud">
+    <div class="hud-row"><span>Input Mode:</span> <span class="hud-val" id="hud-input">Stylus / Touch</span></div>
+    <div class="hud-row"><span>Pressure:</span> <span class="hud-val" id="hud-pressure">0%</span></div>
+    <div class="hud-row"><span>Stream Latency:</span> <span class="hud-val" style="color:#22c55e">1.4ms (Simulated)</span></div>
+  </div>
+
+  <!-- CANVAS -->
+  <canvas id="studio-canvas"></canvas>
+
+  <!-- TOOLBAR -->
+  <div class="toolbar">
+    <div class="tool-group">
+      <span class="tool-label">Color</span>
+      <div class="color-swatch active" style="background:#00e5ff" data-color="#00e5ff"></div>
+      <div class="color-swatch" style="background:#a855f7" data-color="#a855f7"></div>
+      <div class="color-swatch" style="background:#3b82f6" data-color="#3b82f6"></div>
+      <div class="color-swatch" style="background:#22c55e" data-color="#22c55e"></div>
+      <div class="color-swatch" style="background:#f43f5e" data-color="#f43f5e"></div>
+      <div class="color-swatch" style="background:#ffffff" data-color="#ffffff"></div>
+    </div>
+
+    <div style="width:1px;height:24px;background:var(--border)"></div>
+
+    <div class="tool-group">
+      <span class="tool-label">Size</span>
+      <input type="range" class="brush-slider" id="brush-size" min="2" max="50" value="8">
+    </div>
+
+    <div style="width:1px;height:24px;background:var(--border)"></div>
+
+    <div class="tool-group">
+      <button class="action-btn" id="eraser-btn" onclick="toggleEraser()">🧹 Eraser</button>
+      <button class="action-btn" onclick="clearCanvas()">🗑️ Clear</button>
+      <button class="action-btn action-btn-primary" onclick="exportArtwork()">💾 Export PNG</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('studio-canvas');
+    const ctx = canvas.getContext('2d');
+    
+    let isDrawing = false;
+    let currentColor = '#00e5ff';
+    let brushSize = 8;
+    let isEraser = false;
+    let lastX = 0, lastY = 0;
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      clearCanvas();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    function clearCanvas() {
+      ctx.fillStyle = '#030c14';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    resizeCanvas();
+
+    // Color Swatches
+    document.querySelectorAll('.color-swatch').forEach(swatch => {
+      swatch.addEventListener('click', () => {
+        document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+        currentColor = swatch.getAttribute('data-color');
+        if(isEraser) toggleEraser();
+      });
+    });
+
+    // Brush Size
+    document.getElementById('brush-size').addEventListener('input', e => {
+      brushSize = e.target.value;
+    });
+
+    // Eraser Toggle
+    function toggleEraser() {
+      isEraser = !isEraser;
+      document.getElementById('eraser-btn').classList.toggle('active', isEraser);
+    }
+
+    // Pointer Events (Mouse, Touch, Stylus Pen Pressure)
+    canvas.addEventListener('pointerdown', e => {
+      isDrawing = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      draw(e);
+    });
+
+    canvas.addEventListener('pointermove', e => {
+      if(!isDrawing) return;
+      draw(e);
+    });
+
+    canvas.addEventListener('pointerup', () => { isDrawing = false; updateHUD(0, 'Idle'); });
+    canvas.addEventListener('pointerleave', () => { isDrawing = false; updateHUD(0, 'Idle'); });
+
+    function draw(e) {
+      const pressure = e.pressure && e.pressure > 0 ? e.pressure : 0.5;
+      const actualSize = isEraser ? brushSize * 2.5 : Math.max(1, brushSize * pressure * 1.8);
+
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = actualSize;
+      
+      if(isEraser) {
+        ctx.strokeStyle = '#030c14';
+      } else {
+        ctx.strokeStyle = currentColor;
+        ctx.shadowBlur = Math.min(15, actualSize);
+        ctx.shadowColor = currentColor;
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(lastX, lastY);
+      ctx.lineTo(e.clientX, e.clientY);
+      ctx.stroke();
+      ctx.restore();
+
+      lastX = e.clientX;
+      lastY = e.clientY;
+
+      updateHUD(pressure, e.pointerType || 'mouse');
+    }
+
+    function updateHUD(pressure, type) {
+      document.getElementById('hud-pressure').textContent = Math.round(pressure * 100) + '%';
+      document.getElementById('hud-input').textContent = type.toUpperCase();
+    }
+
+    function exportArtwork() {
+      const link = document.createElement('a');
+      link.download = 'AirCanvas-Artwork.png';
+      link.href = canvas.toDataURL();
+      link.click();
+    }
+  </script>
+</body>
+</html>
