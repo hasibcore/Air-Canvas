@@ -4,6 +4,15 @@
 
 ---
 
+### 🌐 Live Links & Downloads
+
+- 🔗 **Live Website:** **[https://hasibcore.github.io/Air-Canvas/](https://hasibcore.github.io/Air-Canvas/)**
+- 🎨 **Web Studio & Simulator:** **[https://hasibcore.github.io/Air-Canvas/simulator.html](https://hasibcore.github.io/Air-Canvas/simulator.html)**
+- 📦 **Download Releases (APK / Binaries):** **[https://github.com/hasibcore/Air-Canvas/releases](https://github.com/hasibcore/Air-Canvas/releases)**
+- 📥 **Direct Full Source Code (.ZIP):** **[Air-Canvas-v1.1.0.zip](https://github.com/hasibcore/Air-Canvas/archive/refs/tags/v1.1.0.zip)**
+
+---
+
 ## 📱 Platform Roles & Architecture
 
 Air Canvas operates seamless cross-platform client-server communication:
