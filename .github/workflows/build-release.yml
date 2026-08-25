@@ -1,0 +1,111 @@
+name: Build and Release AirCanvas
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Release (.exe)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Windows Executable
+        run: flutter build windows --release
+
+      - name: Compress Windows Release Bundle
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath AirCanvas-Windows-x64.zip
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirCanvas-Windows-x64
+          path: AirCanvas-Windows-x64.zip
+
+  build-android:
+    name: Build Android APK (.apk)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Android Release APK
+        run: flutter build apk --release
+
+      - name: Copy and rename APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk AirCanvas-v1.1.0-release.apk
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirCanvas-v1.1.0-release.apk
+          path: AirCanvas-v1.1.0-release.apk
+
+  release:
+    name: Create GitHub Release
+    needs: [build-windows, build-android]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AirCanvas-Windows-x64
+          path: release-assets
+
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AirCanvas-v1.1.0-release.apk
+          path: release-assets
+
+      - name: Publish Release with Binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/AirCanvas-Windows-x64.zip
+            release-assets/AirCanvas-v1.1.0-release.apk
+          name: AirCanvas v1.1.0 - Full Wireless Graphics Tablet
+          draft: false
+          prerelease: false
+          generate_release_notes: true
