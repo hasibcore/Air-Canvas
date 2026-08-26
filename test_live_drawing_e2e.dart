@@ -19,6 +19,50 @@ void main() async {
   print('  AirCanvas Live End-to-End Drawing Simulator');
   print('====================================================');
 
+  // 1. Test UDP Discovery Broadcast
+  print('Testing UDP WiFi Discovery on port 9091...');
+  final udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+  udpSocket.broadcastEnabled = true;
+
+  final discoveryMsg = jsonEncode({
+    'type': 'aircanvas_discovery',
+    'version': '1.0',
+  });
+
+  final discoveryCompleter = Completer<Map<String, dynamic>>();
+
+  udpSocket.listen((event) {
+    if (event == RawSocketEvent.read) {
+      final datagram = udpSocket.receive();
+      if (datagram != null) {
+        final text = utf8.decode(datagram.data);
+        print('  [UDP Response Received] $text from ${datagram.address.address}:${datagram.port}');
+        try {
+          final json = jsonDecode(text) as Map<String, dynamic>;
+          if (json['type'] == 'aircanvas_response' && !discoveryCompleter.isCompleted) {
+            discoveryCompleter.complete(json);
+          }
+        } catch (_) {}
+      }
+    }
+  });
+
+  // Send discovery to localhost and broadcast
+  udpSocket.send(utf8.encode(discoveryMsg), InternetAddress('127.0.0.1'), 9091);
+  udpSocket.send(utf8.encode(discoveryMsg), InternetAddress('255.255.255.255'), 9091);
+
+  final discovered = await discoveryCompleter.future.timeout(
+    const Duration(seconds: 3),
+    onTimeout: () => {'error': 'timeout'},
+  );
+
+  if (discovered.containsKey('name')) {
+    print('✅ WiFi Discovery Successful: Device "${discovered['name']}" at ${discovered['ip']}:${discovered['port']}');
+  } else {
+    print('⚠️ Discovery timed out (Manual IP mode will be tested)');
+  }
+  udpSocket.close();
+
   const serverUrl = 'ws://127.0.0.1:9090';
   const pin = '1234';
 

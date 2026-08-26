@@ -382,7 +382,7 @@ class DrawingPainter extends CustomPainter {
         Paint()
           ..color = settings.mode == BrushMode.eraser
               ? const Color(0xFF0A0A12)
-              : settings.color.withValues(alpha: settings.opacity)
+              : settings.color.withOpacity(settings.opacity.clamp(0.0, 1.0))
           ..strokeWidth = 1
           ..style = PaintingStyle.fill,
       );
@@ -423,7 +423,7 @@ class DrawingPainter extends CustomPainter {
       final paint = Paint()
         ..color = settings.mode == BrushMode.eraser
             ? const Color(0xFF0A0A12)
-            : settings.color.withValues(alpha: settings.opacity)
+            : settings.color.withOpacity(settings.opacity.clamp(0.0, 1.0))
         ..strokeWidth = width
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
@@ -452,7 +452,7 @@ class GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.03)
+      ..color = const Color(0xFFFFFFFF).withOpacity(0.03)
       ..strokeWidth = 0.5;
 
     const gridSize = 40.0;

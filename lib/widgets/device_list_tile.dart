@@ -34,7 +34,7 @@ class DeviceListTile extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
+                    color: const Color(0xFF6C63FF).withOpacity(0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Icon(

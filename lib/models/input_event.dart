@@ -427,7 +427,7 @@ class ServerConfig {
 
   const ServerConfig({
     this.port = 9090,
-    this.useBinaryProtocol = false,
+    this.useBinaryProtocol = true,
     this.targetFPS = 120,
     this.enablePressureSmoothing = true,
     this.enablePrediction = true,

@@ -188,11 +188,11 @@ class ConnectionProvider extends ChangeNotifier {
       _isAuthenticated = false;
       _encryptionKey = null; // নতুন সেশনের জন্য পুরনো এনক্রিপশন কী রিসেট করুন
 
-      // pairing pin জেনারেট করা
+      // Default Pairing PIN: 1234 (consistent with C# server)
+      _pairingPin = '1234';
       final rand = Random.secure();
-      _pairingPin = (1000 + rand.nextInt(9000)).toString();
       _sessionKey = List<int>.generate(32, (i) => rand.nextInt(256));
-      debugPrint('[Server] Generated pairing PIN: $_pairingPin');
+      debugPrint('[Server] Using pairing PIN: $_pairingPin');
 
       // লোকাল IP বের করা
       _localIp = await _getLocalIpAddress();
@@ -202,7 +202,7 @@ class ConnectionProvider extends ChangeNotifier {
 
       // WebSocket Server শুরু করা
       _httpServer = await HttpServer.bind(InternetAddress.anyIPv4, port);
-      _serverConfig = ServerConfig(port: port);
+      _serverConfig = ServerConfig(port: port, useBinaryProtocol: true);
 
       // UDP Discovery Broadcast শুরু করা
       await _startDiscoveryBroadcast(port);
@@ -784,7 +784,12 @@ class ConnectionProvider extends ChangeNotifier {
 
   Future<void> _startDiscoveryBroadcast(int serverPort) async {
     try {
-      _serverUdpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, defaultDiscoveryPort);
+      _serverUdpSocket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        defaultDiscoveryPort,
+        reuseAddress: true,
+        reusePort: true,
+      );
       _serverUdpSocket!.broadcastEnabled = true;
       _serverUdpSocket!.listen((event) {
         if (event == RawSocketEvent.read) {
@@ -801,11 +806,11 @@ class ConnectionProvider extends ChangeNotifier {
                   'port': serverPort,
                   'ip': _localIp,
                 });
-                _serverUdpSocket!.send(
-                  utf8.encode(response),
-                  datagram.address,
-                  datagram.port,
-                );
+                final encoded = utf8.encode(response);
+                _serverUdpSocket!.send(encoded, datagram.address, datagram.port);
+                try {
+                  _serverUdpSocket!.send(encoded, InternetAddress('255.255.255.255'), defaultDiscoveryPort);
+                } catch (_) {}
               }
             } catch (e, stackTrace) {
               debugPrint('[Server] Discovery request parse error: $e\n$stackTrace');
