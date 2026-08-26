@@ -68,6 +68,10 @@ namespace AirCanvas
         private Button btnTestInput;
         private Button btnAllowFirewall;
         private Button btnClearCanvas;
+        private Button btnPptPen;
+        private Button btnPptLaser;
+        private Button btnPptEraser;
+        private Button btnUndo;
         private CheckBox chkEnableInjection;
         private volatile bool isInjectionEnabled = true;
         private Panel pnlHeader;
@@ -94,12 +98,15 @@ namespace AirCanvas
         private byte[] sessionKeyBytes = null;
         private string lastClientPin = "1234";
 
-        // Win32 Native Input Injection
+        // Win32 Native Input & Keyboard Injection
         [DllImport("user32.dll")]
         private static extern bool SetCursorPos(int X, int Y);
 
         [DllImport("user32.dll")]
-        private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);
+        private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+
+        [DllImport("user32.dll")]
+        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
         private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
         private const uint MOUSEEVENTF_MOVE = 0x0001;
@@ -107,6 +114,16 @@ namespace AirCanvas
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
         private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
         private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+
+        private const uint KEYEVENTF_KEYUP = 0x0002;
+        private const byte VK_CONTROL = 0x11;
+        private const byte VK_P = 0x50; // 'P' (PowerPoint Pen Mode)
+        private const byte VK_L = 0x4C; // 'L' (PowerPoint Laser Pointer)
+        private const byte VK_E = 0x45; // 'E' (PowerPoint Eraser)
+        private const byte VK_Z = 0x5A; // 'Z' (Undo)
+
+        // Windows Ink / Tablet Pen signature recognized by Office, PowerPoint, OneNote, Whiteboard
+        private static readonly UIntPtr MI_WP_SIGNATURE = new UIntPtr(0xFF515700);
 
         public MainForm()
         {
@@ -232,7 +249,7 @@ namespace AirCanvas
 
             chkEnableInjection = new CheckBox
             {
-                Text = "Inject Cursor to Photoshop/Krita/Paint",
+                Text = "Draw in PowerPoint / OneNote / Photoshop / Paint",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(226, 232, 240),
                 Location = new Point(15, 172),
@@ -242,12 +259,60 @@ namespace AirCanvas
             isInjectionEnabled = true;
             chkEnableInjection.CheckedChanged += (s, e) => { isInjectionEnabled = chkEnableInjection.Checked; };
 
+            btnPptPen = new Button
+            {
+                Text = "🖊️ PPT Pen (Ctrl+P)",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                Location = new Point(15, 204),
+                Size = new Size(145, 30),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(37, 99, 235), // Blue 600
+                ForeColor = Color.White
+            };
+            btnPptPen.Click += (s, e) => TriggerPowerPointPen();
+
+            btnPptLaser = new Button
+            {
+                Text = "🔴 Laser (Ctrl+L)",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                Location = new Point(165, 204),
+                Size = new Size(150, 30),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(220, 38, 38), // Red 600
+                ForeColor = Color.White
+            };
+            btnPptLaser.Click += (s, e) => TriggerPowerPointLaser();
+
+            btnPptEraser = new Button
+            {
+                Text = "🧹 Eraser (Ctrl+E)",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                Location = new Point(15, 238),
+                Size = new Size(145, 30),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(71, 85, 105),
+                ForeColor = Color.White
+            };
+            btnPptEraser.Click += (s, e) => TriggerPowerPointEraser();
+
+            btnUndo = new Button
+            {
+                Text = "↩️ Undo (Ctrl+Z)",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                Location = new Point(165, 238),
+                Size = new Size(150, 30),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(71, 85, 105),
+                ForeColor = Color.White
+            };
+            btnUndo.Click += (s, e) => TriggerUndo();
+
             btnTestInput = new Button
             {
                 Text = "🧪 Test Stroke",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(15, 208),
-                Size = new Size(145, 32),
+                Location = new Point(15, 272),
+                Size = new Size(145, 30),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(51, 65, 85),
                 ForeColor = Color.White
@@ -258,8 +323,8 @@ namespace AirCanvas
             {
                 Text = "🗑 Clear Canvas",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(170, 208),
-                Size = new Size(150, 32),
+                Location = new Point(165, 272),
+                Size = new Size(150, 30),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(71, 85, 105),
                 ForeColor = Color.White
@@ -270,8 +335,8 @@ namespace AirCanvas
             {
                 Text = "🔓 Allow Firewall (Fix Connection)",
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                Location = new Point(15, 252),
-                Size = new Size(305, 36),
+                Location = new Point(15, 308),
+                Size = new Size(300, 34),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(16, 185, 129), // Emerald 500
                 ForeColor = Color.White
@@ -283,7 +348,7 @@ namespace AirCanvas
                 Text = "⏹ Stop Server",
                 Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
                 Location = new Point(15, 395),
-                Size = new Size(305, 42),
+                Size = new Size(300, 42),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(239, 68, 68), // Red
                 ForeColor = Color.White
@@ -300,6 +365,10 @@ namespace AirCanvas
             pnlCard.Controls.Add(lblClients);
             pnlCard.Controls.Add(lblPackets);
             pnlCard.Controls.Add(chkEnableInjection);
+            pnlCard.Controls.Add(btnPptPen);
+            pnlCard.Controls.Add(btnPptLaser);
+            pnlCard.Controls.Add(btnPptEraser);
+            pnlCard.Controls.Add(btnUndo);
             pnlCard.Controls.Add(btnTestInput);
             pnlCard.Controls.Add(btnClearCanvas);
             pnlCard.Controls.Add(btnAllowFirewall);
@@ -356,7 +425,55 @@ namespace AirCanvas
             }
         }
 
-        private void InjectAndDrawInput(double x, double y, double pressure, string eventType)
+        private void TriggerPowerPointPen()
+        {
+            try
+            {
+                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+                keybd_event(VK_P, 0, 0, UIntPtr.Zero);
+                keybd_event(VK_P, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            }
+            catch { }
+        }
+
+        private void TriggerPowerPointLaser()
+        {
+            try
+            {
+                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+                keybd_event(VK_L, 0, 0, UIntPtr.Zero);
+                keybd_event(VK_L, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            }
+            catch { }
+        }
+
+        private void TriggerPowerPointEraser()
+        {
+            try
+            {
+                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+                keybd_event(VK_E, 0, 0, UIntPtr.Zero);
+                keybd_event(VK_E, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            }
+            catch { }
+        }
+
+        private void TriggerUndo()
+        {
+            try
+            {
+                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+                keybd_event(VK_Z, 0, 0, UIntPtr.Zero);
+                keybd_event(VK_Z, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            }
+            catch { }
+        }
+
+        private void InjectAndDrawInput(double x, double y, double pressure, string eventType, int buttons = 1, int pointerType = 0)
         {
             // Clamp normalized coords
             x = Math.Max(0.0, Math.Min(1.0, x));
@@ -366,7 +483,7 @@ namespace AirCanvas
             // 1. Draw live on in-app PC Canvas
             DrawOnAppCanvas(x, y, pressure, eventType);
 
-            // 2. Win32 Cursor injection for Photoshop/Krita/Paint/OneNote/Whiteboard
+            // 2. Win32 Cursor injection for PowerPoint, OneNote, Photoshop, Krita, MS Paint, Whiteboard
             if (isInjectionEnabled)
             {
                 try
@@ -380,17 +497,21 @@ namespace AirCanvas
 
                     SetCursorPos(targetX, targetY);
 
+                    bool isRightClick = (buttons & 2) != 0;
+
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN, absX, absY, 0, 0);
+                        uint downFlag = isRightClick ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
+                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | downFlag, absX, absY, 0, MI_WP_SIGNATURE);
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
                     {
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, absX, absY, 0, 0);
+                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, absX, absY, 0, MI_WP_SIGNATURE);
                     }
                     else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
                     {
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP, absX, absY, 0, 0);
+                        uint upFlag = isRightClick ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
+                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, MI_WP_SIGNATURE);
                     }
                 }
                 catch { }
@@ -888,7 +1009,19 @@ namespace AirCanvas
                     double.TryParse(val, out pressure);
                 }
 
-                InjectAndDrawInput(x, y, pressure, eventType);
+                int bIdx = json.IndexOf("\"b\":");
+                int buttons = 1;
+                if (bIdx != -1)
+                {
+                    int end = json.IndexOfAny(new char[] { ',', '}' }, bIdx);
+                    if (end > bIdx + 4)
+                    {
+                        string val = json.Substring(bIdx + 4, end - (bIdx + 4)).Trim();
+                        int.TryParse(val, out buttons);
+                    }
+                }
+
+                InjectAndDrawInput(x, y, pressure, eventType, buttons, 0);
             }
             catch { }
         }
@@ -984,7 +1117,7 @@ namespace AirCanvas
 
                 if (eventType == "clear")
                 {
-                    InjectAndDrawInput(0, 0, 0, "clear");
+                    InjectAndDrawInput(0, 0, 0, "clear", 1, 0);
                     return;
                 }
 
@@ -997,7 +1130,10 @@ namespace AirCanvas
 
                 double pressure = (double)packet[5] / 255.0;
 
-                InjectAndDrawInput(x, y, pressure, eventType);
+                int pointerType = packet.Length > 6 ? packet[6] : 0;
+                int buttons = packet.Length > 10 ? packet[10] : 1;
+
+                InjectAndDrawInput(x, y, pressure, eventType, buttons, pointerType);
             }
             catch { }
         }
