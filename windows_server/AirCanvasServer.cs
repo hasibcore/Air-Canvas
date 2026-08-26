@@ -274,10 +274,13 @@ namespace AirCanvas
             ClearCanvas();
         }
 
+        private bool hasDrawnOnCanvas = false;
+
         private void ClearCanvas()
         {
             if (canvasGraphics != null)
             {
+                hasDrawnOnCanvas = false;
                 canvasGraphics.Clear(Color.FromArgb(15, 23, 42));
                 using (Font f = new Font("Segoe UI", 10, FontStyle.Italic))
                 using (Brush b = new SolidBrush(Color.FromArgb(71, 85, 105)))
@@ -286,6 +289,96 @@ namespace AirCanvas
                 }
                 pbCanvas.Image = canvasBitmap;
             }
+        }
+
+        private void InjectAndDrawInput(double x, double y, double pressure, string eventType)
+        {
+            // Clamp normalized coords
+            x = Math.Max(0.0, Math.Min(1.0, x));
+            y = Math.Max(0.0, Math.Min(1.0, y));
+            pressure = Math.Max(0.0, Math.Min(1.0, pressure));
+
+            // 1. Draw live on in-app PC Canvas
+            DrawOnAppCanvas(x, y, pressure, eventType);
+
+            // 2. Win32 Cursor injection for Photoshop/Krita/Paint
+            if (chkEnableInjection.Checked)
+            {
+                try
+                {
+                    Rectangle screen = Screen.PrimaryScreen.Bounds;
+                    int targetX = (int)(x * (screen.Width - 1));
+                    int targetY = (int)(y * (screen.Height - 1));
+
+                    SetCursorPos(targetX, targetY);
+
+                    if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                    }
+                    else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, 0);
+                    }
+                    else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private void DrawOnAppCanvas(double x, double y, double pressure, string eventType)
+        {
+            if (this.IsDisposed || !this.IsHandleCreated || canvasGraphics == null) return;
+
+            this.BeginInvoke((Action)(() =>
+            {
+                try
+                {
+                    float canvasX = (float)(x * pbCanvas.Width);
+                    float canvasY = (float)(y * pbCanvas.Height);
+                    PointF currentPt = new PointF(canvasX, canvasY);
+
+                    float penWidth = Math.Max(2.5f, (float)(pressure * 9.0f));
+
+                    if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!hasDrawnOnCanvas)
+                        {
+                            canvasGraphics.Clear(Color.FromArgb(15, 23, 42));
+                            hasDrawnOnCanvas = true;
+                        }
+                        lastDrawPoint = currentPt;
+                        using (Brush brush = new SolidBrush(Color.FromArgb(56, 189, 248))) // Sky 400
+                        {
+                            canvasGraphics.FillEllipse(brush, currentPt.X - penWidth / 2, currentPt.Y - penWidth / 2, penWidth, penWidth);
+                        }
+                    }
+                    else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!lastDrawPoint.IsEmpty)
+                        {
+                            using (Pen pen = new Pen(Color.FromArgb(56, 189, 248), penWidth))
+                            {
+                                pen.StartCap = LineCap.Round;
+                                pen.EndCap = LineCap.Round;
+                                pen.LineJoin = LineJoin.Round;
+                                canvasGraphics.DrawLine(pen, lastDrawPoint, currentPt);
+                            }
+                        }
+                        lastDrawPoint = currentPt;
+                    }
+                    else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
+                    {
+                        lastDrawPoint = PointF.Empty;
+                    }
+
+                    pbCanvas.Invalidate();
+                }
+                catch { }
+            }));
         }
 
         private void GetLocalIPAddress()
@@ -755,87 +848,6 @@ namespace AirCanvas
                 InjectAndDrawInput(x, y, pressure, eventType);
             }
             catch { }
-        }
-
-        private void InjectAndDrawInput(double x, double y, double pressure, string eventType)
-        {
-            // Clamp normalized coords
-            x = Math.Max(0.0, Math.Min(1.0, x));
-            y = Math.Max(0.0, Math.Min(1.0, y));
-            pressure = Math.Max(0.0, Math.Min(1.0, pressure));
-
-            // 1. Draw live on in-app PC Canvas
-            DrawOnAppCanvas(x, y, pressure, eventType);
-
-            // 2. Win32 Cursor injection for Photoshop/Krita/Paint
-            if (chkEnableInjection.Checked)
-            {
-                try
-                {
-                    Rectangle screen = Screen.PrimaryScreen.Bounds;
-                    int targetX = (int)(x * (screen.Width - 1));
-                    int targetY = (int)(y * (screen.Height - 1));
-
-                    SetCursorPos(targetX, targetY);
-
-                    if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
-                    {
-                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-                    }
-                    else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase))
-                    {
-                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-                    }
-                }
-                catch { }
-            }
-        }
-
-        private void DrawOnAppCanvas(double x, double y, double pressure, string eventType)
-        {
-            if (this.IsDisposed || !this.IsHandleCreated || canvasGraphics == null) return;
-
-            this.BeginInvoke((Action)(() =>
-            {
-                try
-                {
-                    float canvasX = (float)(x * pbCanvas.Width);
-                    float canvasY = (float)(y * pbCanvas.Height);
-                    PointF currentPt = new PointF(canvasX, canvasY);
-
-                    float penWidth = Math.Max(2.5f, (float)(pressure * 9.0f));
-
-                    if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
-                    {
-                        lastDrawPoint = currentPt;
-                        using (Brush brush = new SolidBrush(Color.FromArgb(56, 189, 248))) // Sky 400
-                        {
-                            canvasGraphics.FillEllipse(brush, currentPt.X - penWidth / 2, currentPt.Y - penWidth / 2, penWidth, penWidth);
-                        }
-                    }
-                    else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (!lastDrawPoint.IsEmpty)
-                        {
-                            using (Pen pen = new Pen(Color.FromArgb(56, 189, 248), penWidth))
-                            {
-                                pen.StartCap = LineCap.Round;
-                                pen.EndCap = LineCap.Round;
-                                pen.LineJoin = LineJoin.Round;
-                                canvasGraphics.DrawLine(pen, lastDrawPoint, currentPt);
-                            }
-                        }
-                        lastDrawPoint = currentPt;
-                    }
-                    else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase))
-                    {
-                        lastDrawPoint = PointF.Empty;
-                    }
-
-                    pbCanvas.Invalidate();
-                }
-                catch { }
-            }));
         }
 
         private void RunUdpDiscoveryListener(CancellationToken token)
