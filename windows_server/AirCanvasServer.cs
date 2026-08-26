@@ -63,10 +63,6 @@ namespace AirCanvas
         private byte[] sessionKeyBytes = null;
         private string lastClientPin = "1234";
 
-        // Client Screen Dimensions (for scaling)
-        private double clientWidth = 1920;
-        private double clientHeight = 1080;
-
         // Win32 Native Input Injection
         [DllImport("user32.dll")]
         private static extern bool SetCursorPos(int X, int Y);
@@ -282,11 +278,11 @@ namespace AirCanvas
         {
             if (canvasGraphics != null)
             {
-                canvasGraphics.Clear(Color.FromArgb(15, 23, 42)); // Dark background
+                canvasGraphics.Clear(Color.FromArgb(15, 23, 42));
                 using (Font f = new Font("Segoe UI", 10, FontStyle.Italic))
                 using (Brush b = new SolidBrush(Color.FromArgb(71, 85, 105)))
                 {
-                    canvasGraphics.DrawString("Live drawing canvas from your phone will appear here in real-time...", f, b, new PointF(15, 15));
+                    canvasGraphics.DrawString("Live drawing from your mobile screen will appear here in real-time...", f, b, new PointF(15, 15));
                 }
                 pbCanvas.Image = canvasBitmap;
             }
@@ -399,7 +395,7 @@ namespace AirCanvas
                     return;
                 }
 
-                // 2. Send Auth Challenge immediately
+                // 2. Send Auth Challenge frame immediately
                 SendWebSocketText(stream, "{\"type\":\"auth_challenge\"}");
 
                 // 3. Read incoming WebSocket frames
@@ -421,7 +417,7 @@ namespace AirCanvas
                         string json = Encoding.UTF8.GetString(frame.Payload);
                         ProcessJsonMessage(json, stream);
                     }
-                    else if (frame.Opcode == 2) // Binary Input Event
+                    else if (frame.Opcode == 2) // Binary Input Event or Encrypted Payload
                     {
                         ProcessBinaryPacket(frame.Payload, frame.Payload.Length);
                     }
@@ -612,7 +608,6 @@ namespace AirCanvas
             // Authenticate handshake response
             if (json.Contains("\"type\":\"auth_response\"") || json.Contains("\"type\":\"auth\""))
             {
-                // Extract PIN if present
                 try
                 {
                     int pIdx = json.IndexOf("\"pin\":");
@@ -628,7 +623,6 @@ namespace AirCanvas
                 }
                 catch { }
 
-                // Generate random session key
                 sessionKeyBytes = Encoding.UTF8.GetBytes(lastClientPin != null ? lastClientPin : "1234");
                 string b64Key = Convert.ToBase64String(sessionKeyBytes);
 
@@ -636,7 +630,6 @@ namespace AirCanvas
             }
             else if (json.Contains("\"type\":\"device_info\""))
             {
-                ExtractClientResolution(json);
                 SendWebSocketText(stream, "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"useBinaryProtocol\":true}}");
             }
             else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
@@ -649,39 +642,19 @@ namespace AirCanvas
             }
         }
 
-        private void ExtractClientResolution(string json)
-        {
-            try
-            {
-                int wIdx = json.IndexOf("\"screenWidth\":");
-                if (wIdx != -1)
-                {
-                    int end = json.IndexOfAny(new char[] { ',', '}' }, wIdx);
-                    string val = json.Substring(wIdx + 14, end - (wIdx + 14)).Trim();
-                    double.TryParse(val, out clientWidth);
-                }
-                int hIdx = json.IndexOf("\"screenHeight\":");
-                if (hIdx != -1)
-                {
-                    int end = json.IndexOfAny(new char[] { ',', '}' }, hIdx);
-                    string val = json.Substring(hIdx + 15, end - (hIdx + 15)).Trim();
-                    double.TryParse(val, out clientHeight);
-                }
-            }
-            catch { }
-        }
-
         private void ParseJsonInputEvent(string json)
         {
             try
             {
-                double x = 0, y = 0, pressure = 1.0;
+                double x = 0, y = 0, pressure = 0.5;
                 string eventType = "move";
 
-                int tIdx = json.IndexOf("\"type\":");
+                // Format: t/type, x, y, p/pressure
+                int tIdx = json.IndexOf("\"t\":");
+                if (tIdx == -1) tIdx = json.IndexOf("\"type\":");
                 if (tIdx != -1)
                 {
-                    int start = json.IndexOf('"', tIdx + 7) + 1;
+                    int start = json.IndexOf('"', tIdx + 4) + 1;
                     int end = json.IndexOf('"', start);
                     if (start > 0 && end > start)
                     {
@@ -705,11 +678,12 @@ namespace AirCanvas
                     double.TryParse(val, out y);
                 }
 
-                int pIdx = json.IndexOf("\"pressure\":");
+                int pIdx = json.IndexOf("\"p\":");
+                if (pIdx == -1) pIdx = json.IndexOf("\"pressure\":");
                 if (pIdx != -1)
                 {
                     int end = json.IndexOfAny(new char[] { ',', '}' }, pIdx);
-                    string val = json.Substring(pIdx + 11, end - (pIdx + 11)).Trim();
+                    string val = json.Substring(pIdx + (pIdx == json.IndexOf("\"p\":") ? 4 : 11), end - (pIdx + (pIdx == json.IndexOf("\"p\":") ? 4 : 11))).Trim();
                     double.TryParse(val, out pressure);
                 }
 
@@ -720,46 +694,59 @@ namespace AirCanvas
 
         private void ProcessBinaryPacket(byte[] data, int count)
         {
-            if (count < 14) return;
+            if (count < 11) return;
             try
             {
                 byte[] packet = data;
 
-                // Try decrypting if magic byte is not 0xAC
-                if (packet[0] != 0xAC)
+                // Check if packet starts with valid event type (0=down, 1=move, 2=up, 3=cancel)
+                // If not, it is XOR encrypted by Flutter client!
+                if (packet[0] > 5 || packet.Length != 13)
                 {
                     if (sessionKeyBytes != null)
                     {
                         byte[] dec = Crypt(packet, sessionKeyBytes);
-                        if (dec[0] == 0xAC) packet = dec;
+                        if (dec.Length >= 6 && dec[0] <= 5) packet = dec;
                     }
-                    if (packet[0] != 0xAC && lastClientPin != null)
+                    if (packet[0] > 5 && lastClientPin != null)
                     {
                         byte[] dec = Crypt(packet, Encoding.UTF8.GetBytes(lastClientPin));
-                        if (dec[0] == 0xAC) packet = dec;
+                        if (dec.Length >= 6 && dec[0] <= 5) packet = dec;
                     }
-                    if (packet[0] != 0xAC)
+                    if (packet[0] > 5)
                     {
                         byte[] dec = Crypt(packet, Encoding.UTF8.GetBytes("1234"));
-                        if (dec[0] == 0xAC) packet = dec;
+                        if (dec.Length >= 6 && dec[0] <= 5) packet = dec;
                     }
                 }
 
-                if (packet[0] != 0xAC) return;
+                // If decrypted payload is a JSON string (e.g. { "type": "device_info" })
+                if (packet[0] == (byte)'{')
+                {
+                    string json = Encoding.UTF8.GetString(packet);
+                    ProcessJsonMessage(json, null);
+                    return;
+                }
 
-                byte typeByte = packet[1];
+                if (packet[0] > 5 || packet.Length < 6) return;
+
+                // Exact Flutter InputEvent binary format:
+                // [type:1][x:2][y:2][pressure:1][pointerType:1][pointerId:1][tiltX:1][tiltY:1][buttons:1][version:1][checksum:1]
+                byte typeByte = packet[0];
                 string eventType = "move";
                 if (typeByte == 0) eventType = "down";
                 else if (typeByte == 1) eventType = "move";
                 else if (typeByte == 2) eventType = "up";
+                else if (typeByte == 3) eventType = "cancel";
 
-                byte[] xBytes = new byte[] { packet[5], packet[4], packet[3], packet[2] };
-                byte[] yBytes = new byte[] { packet[9], packet[8], packet[7], packet[6] };
-                byte[] pBytes = new byte[] { packet[13], packet[12], packet[11], packet[10] };
+                // Big-endian uint16 / 65535.0 (0.0 to 1.0)
+                int xUint = (packet[1] << 8) | packet[2];
+                double x = (double)xUint / 65535.0;
 
-                float x = BitConverter.ToSingle(xBytes, 0);
-                float y = BitConverter.ToSingle(yBytes, 0);
-                float pressure = BitConverter.ToSingle(pBytes, 0);
+                int yUint = (packet[3] << 8) | packet[4];
+                double y = (double)yUint / 65535.0;
+
+                double pressure = (double)packet[5] / 255.0;
 
                 InjectAndDrawInput(x, y, pressure, eventType);
             }
@@ -768,6 +755,11 @@ namespace AirCanvas
 
         private void InjectAndDrawInput(double x, double y, double pressure, string eventType)
         {
+            // Clamp normalized coords
+            x = Math.Max(0.0, Math.Min(1.0, x));
+            y = Math.Max(0.0, Math.Min(1.0, y));
+            pressure = Math.Max(0.0, Math.Min(1.0, pressure));
+
             // 1. Draw live on in-app PC Canvas
             DrawOnAppCanvas(x, y, pressure, eventType);
 
@@ -777,11 +769,8 @@ namespace AirCanvas
                 try
                 {
                     Rectangle screen = Screen.PrimaryScreen.Bounds;
-                    int targetX = (int)((x / (clientWidth > 0 ? clientWidth : screen.Width)) * screen.Width);
-                    int targetY = (int)((y / (clientHeight > 0 ? clientHeight : screen.Height)) * screen.Height);
-
-                    targetX = Math.Max(0, Math.Min(screen.Width - 1, targetX));
-                    targetY = Math.Max(0, Math.Min(screen.Height - 1, targetY));
+                    int targetX = (int)(x * (screen.Width - 1));
+                    int targetY = (int)(y * (screen.Height - 1));
 
                     SetCursorPos(targetX, targetY);
 
@@ -806,16 +795,16 @@ namespace AirCanvas
             {
                 try
                 {
-                    float canvasX = (float)((x / (clientWidth > 0 ? clientWidth : 1080)) * pbCanvas.Width);
-                    float canvasY = (float)((y / (clientHeight > 0 ? clientHeight : 1920)) * pbCanvas.Height);
+                    float canvasX = (float)(x * pbCanvas.Width);
+                    float canvasY = (float)(y * pbCanvas.Height);
                     PointF currentPt = new PointF(canvasX, canvasY);
 
-                    float penWidth = Math.Max(1.5f, (float)(pressure * 6.0f));
+                    float penWidth = Math.Max(2.5f, (float)(pressure * 9.0f));
 
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
                         lastDrawPoint = currentPt;
-                        using (Brush brush = new SolidBrush(Color.FromArgb(56, 189, 248))) // Cyan
+                        using (Brush brush = new SolidBrush(Color.FromArgb(56, 189, 248))) // Sky 400
                         {
                             canvasGraphics.FillEllipse(brush, currentPt.X - penWidth / 2, currentPt.Y - penWidth / 2, penWidth, penWidth);
                         }
@@ -828,6 +817,7 @@ namespace AirCanvas
                             {
                                 pen.StartCap = LineCap.Round;
                                 pen.EndCap = LineCap.Round;
+                                pen.LineJoin = LineJoin.Round;
                                 canvasGraphics.DrawLine(pen, lastDrawPoint, currentPt);
                             }
                         }
@@ -891,19 +881,13 @@ namespace AirCanvas
 
         private void TestStroke()
         {
-            Rectangle screen = Screen.PrimaryScreen.Bounds;
-            int startX = screen.Width / 2 - 100;
-            int startY = screen.Height / 2;
-
-            SetCursorPos(startX, startY);
-            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-            for (int i = 0; i <= 200; i += 10)
+            for (int i = 0; i <= 200; i += 5)
             {
-                SetCursorPos(startX + i, (int)(startY + Math.Sin(i * 0.05) * 40));
-                DrawOnAppCanvas(100 + i * 2, 200 + Math.Sin(i * 0.05) * 80, 0.8, "move");
+                double normX = 0.2 + (i / 300.0);
+                double normY = 0.5 + Math.Sin(i * 0.05) * 0.15;
+                DrawOnAppCanvas(normX, normY, 0.8, i == 0 ? "down" : (i == 200 ? "up" : "move"));
                 Thread.Sleep(10);
             }
-            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
         }
 
         private void UpdateClientsUI()
