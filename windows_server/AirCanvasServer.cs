@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
@@ -35,6 +36,7 @@ namespace AirCanvas
         private Label lblPackets;
         private Button btnToggleServer;
         private Button btnTestInput;
+        private Button btnAllowFirewall;
         private CheckBox chkEnableInjection;
         private Panel pnlHeader;
         private Panel pnlCard;
@@ -79,7 +81,7 @@ namespace AirCanvas
         private void InitializeComponent()
         {
             this.Text = "AirCanvas Server — PC Graphics Tablet Receiver";
-            this.Size = new Size(520, 480);
+            this.Size = new Size(540, 500);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -119,8 +121,8 @@ namespace AirCanvas
             // Card Panel
             pnlCard = new Panel
             {
-                Location = new Point(20, 100),
-                Size = new Size(465, 240),
+                Location = new Point(20, 95),
+                Size = new Size(485, 260),
                 BackColor = Color.FromArgb(30, 41, 59)
             };
 
@@ -129,7 +131,7 @@ namespace AirCanvas
                 Text = "🌐 Server IP: Detecting...",
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 ForeColor = Color.FromArgb(248, 250, 252),
-                Location = new Point(20, 20),
+                Location = new Point(20, 18),
                 AutoSize = true
             };
 
@@ -138,7 +140,7 @@ namespace AirCanvas
                 Text = "🔌 Port: 9090 (WebSocket) | 9091 (UDP Discovery)",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(20, 50),
+                Location = new Point(20, 48),
                 AutoSize = true
             };
 
@@ -147,7 +149,7 @@ namespace AirCanvas
                 Text = "📱 Connected Devices: 0",
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 ForeColor = Color.FromArgb(74, 222, 128), // Green 400
-                Location = new Point(20, 85),
+                Location = new Point(20, 80),
                 AutoSize = true
             };
 
@@ -156,7 +158,7 @@ namespace AirCanvas
                 Text = "⚡ Packets Processed: 0",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(20, 115),
+                Location = new Point(20, 110),
                 AutoSize = true
             };
 
@@ -165,8 +167,8 @@ namespace AirCanvas
                 Text = "Enable Native Cursor & Pen Injection (Photoshop/Krita/Blender)",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(226, 232, 240),
-                Location = new Point(20, 155),
-                Size = new Size(420, 25),
+                Location = new Point(20, 145),
+                Size = new Size(445, 25),
                 Checked = true
             };
 
@@ -174,13 +176,25 @@ namespace AirCanvas
             {
                 Text = "🧪 Test Stroke",
                 Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-                Location = new Point(20, 190),
-                Size = new Size(110, 32),
+                Location = new Point(20, 185),
+                Size = new Size(110, 34),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(51, 65, 85),
                 ForeColor = Color.White
             };
             btnTestInput.Click += (s, e) => TestStroke();
+
+            btnAllowFirewall = new Button
+            {
+                Text = "🔓 Allow Firewall (Fix Connection)",
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Location = new Point(140, 185),
+                Size = new Size(250, 34),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(16, 185, 129), // Emerald 500
+                ForeColor = Color.White
+            };
+            btnAllowFirewall.Click += (s, e) => FixFirewallRules();
 
             pnlCard.Controls.Add(lblIp);
             pnlCard.Controls.Add(lblPort);
@@ -188,6 +202,7 @@ namespace AirCanvas
             pnlCard.Controls.Add(lblPackets);
             pnlCard.Controls.Add(chkEnableInjection);
             pnlCard.Controls.Add(btnTestInput);
+            pnlCard.Controls.Add(btnAllowFirewall);
             this.Controls.Add(pnlCard);
 
             // Toggle Button
@@ -195,8 +210,8 @@ namespace AirCanvas
             {
                 Text = "⏹ Stop Server",
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                Location = new Point(20, 360),
-                Size = new Size(465, 45),
+                Location = new Point(20, 375),
+                Size = new Size(485, 45),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(239, 68, 68), // Red
                 ForeColor = Color.White
@@ -262,18 +277,17 @@ namespace AirCanvas
                 Task.Run(() => AcceptWebSocketsAsync(cts.Token));
                 Task.Run(() => RunUdpDiscoveryListener(cts.Token));
             }
-            catch (Exception ex)
+            catch
             {
-                // If http://*:9090 fails due to urlacl, fallback to localhost prefix
+                // Fallback prefix
                 try
                 {
                     httpListener = new HttpListener();
-                    httpListener.Prefixes.Add("http://localhost:" + ServerPort + "/");
-                    httpListener.Prefixes.Add("http://127.0.0.1:" + ServerPort + "/");
+                    httpListener.Prefixes.Add("http://+:" + ServerPort + "/");
                     httpListener.Start();
 
                     isRunning = true;
-                    lblStatus.Text = "● Server Running (Localhost) — Ready";
+                    lblStatus.Text = "● Server Running — Ready for Tablets";
                     lblStatus.ForeColor = Color.FromArgb(74, 222, 128);
                     btnToggleServer.Text = "⏹ Stop Server";
                     btnToggleServer.BackColor = Color.FromArgb(239, 68, 68);
@@ -312,7 +326,7 @@ namespace AirCanvas
 
         private async Task AcceptWebSocketsAsync(CancellationToken token)
         {
-            while (!token.IsCancellationRequested && httpListener.IsListening)
+            while (!token.IsCancellationRequested && httpListener != null && httpListener.IsListening)
             {
                 try
                 {
@@ -323,7 +337,7 @@ namespace AirCanvas
                     }
                     else
                     {
-                        // HTTP fallback (e.g. status check)
+                        // HTTP fallback (status check)
                         byte[] response = Encoding.UTF8.GetBytes("{\"app\":\"AirCanvas\",\"status\":\"running\",\"version\":\"1.1.0\"}");
                         context.Response.ContentType = "application/json";
                         context.Response.ContentLength64 = response.Length;
@@ -348,6 +362,12 @@ namespace AirCanvas
                 UpdateClientsUI();
 
                 var ws = wsContext.WebSocket;
+
+                // Send Auth Challenge immediately to Flutter Client
+                string challenge = "{\"type\":\"auth_challenge\"}";
+                byte[] challengeBytes = Encoding.UTF8.GetBytes(challenge);
+                await ws.SendAsync(new ArraySegment<byte>(challengeBytes), WebSocketMessageType.Text, true, CancellationToken.None);
+
                 byte[] buffer = new byte[8192];
 
                 while (ws.State == WebSocketState.Open && !token.IsCancellationRequested)
@@ -370,7 +390,7 @@ namespace AirCanvas
                     }
 
                     Interlocked.Increment(ref packetsReceived);
-                    if (packetsReceived % 20 == 0)
+                    if (packetsReceived % 10 == 0)
                     {
                         UpdatePacketsUI();
                     }
@@ -386,21 +406,32 @@ namespace AirCanvas
 
         private void ProcessJsonMessage(string json, WebSocket ws)
         {
-            // Authenticate handshake
-            if (json.Contains("\"type\":\"auth\""))
+            // Authenticate handshake response
+            if (json.Contains("\"type\":\"auth_response\"") || json.Contains("\"type\":\"auth\""))
             {
-                string authOk = "{\"type\":\"auth_ok\",\"token\":\"pc-session-key\"}";
+                string authOk = "{\"type\":\"auth_success\",\"token\":\"pc-session-key\"}";
                 byte[] bytes = Encoding.UTF8.GetBytes(authOk);
                 ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
             }
             else if (json.Contains("\"type\":\"device_info\""))
             {
-                // Parse client screen resolution if available
+                // Parse client screen resolution
                 ExtractClientResolution(json);
+
+                // Send server config confirmation
+                string configOk = "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"useBinaryProtocol\":true}}";
+                byte[] bytes = Encoding.UTF8.GetBytes(configOk);
+                ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
             }
-            else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input_event\""))
+            else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
             {
                 ParseJsonInputEvent(json);
+            }
+            else if (json.Contains("\"type\":\"ping\""))
+            {
+                string pong = "{\"type\":\"pong\",\"ts\":" + DateTime.Now.Ticks + "}";
+                byte[] bytes = Encoding.UTF8.GetBytes(pong);
+                ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
             }
         }
 
@@ -478,7 +509,7 @@ namespace AirCanvas
             if (count < 14) return;
             try
             {
-                // Binary layout:
+                // Binary protocol layout:
                 // [0]: Magic byte (0xAC)
                 // [1]: Event type (0=down, 1=move, 2=up, 3=hover, 4=cancel)
                 // [2-5]: X (float32, big endian)
@@ -553,6 +584,29 @@ namespace AirCanvas
                 }
             }
             catch { }
+        }
+
+        private void FixFirewallRules()
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c netsh advfirewall firewall add rule name=\"AirCanvas TCP 9090\" dir=in action=allow protocol=TCP localport=9090 profile=any & netsh advfirewall firewall add rule name=\"AirCanvas UDP 9091\" dir=in action=allow protocol=UDP localport=9091 profile=any",
+                    Verb = "runas",
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                Process proc = Process.Start(psi);
+                if (proc != null) proc.WaitForExit();
+
+                MessageBox.Show("Windows Firewall rules added successfully!\nYour Android phone / tablet can now connect without timeout.", "Firewall Allowed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not add firewall rule automatically:\n" + ex.Message + "\n\nPlease right click 'Fix_Firewall.bat' and select 'Run as administrator'.", "Notice", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
 
         private void TestStroke()
