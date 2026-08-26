@@ -457,7 +457,7 @@ namespace AirCanvas
                 try
                 {
                     TcpClient client = await tcpServer.AcceptTcpClientAsync();
-                    Task.Run(() => HandleClientSessionAsync(client, token));
+                    Task clientTask = Task.Run(() => HandleClientSessionAsync(client, token));
                 }
                 catch
                 {
