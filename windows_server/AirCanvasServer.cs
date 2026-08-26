@@ -804,6 +804,7 @@ namespace AirCanvas
                         lastClientPin != null ? Encoding.UTF8.GetBytes(lastClientPin) : null,
                         Encoding.UTF8.GetBytes("1234")
                     };
+                    bool decrypted = false;
                     foreach (byte[] key in keysToTry)
                     {
                         if (key == null) continue;
@@ -811,9 +812,11 @@ namespace AirCanvas
                         if ((dec.Length == 13 && dec[0] <= 5) || (dec.Length > 0 && dec[0] == (byte)'{'))
                         {
                             packet = dec;
+                            decrypted = true;
                             break;
                         }
                     }
+                    if (!decrypted) return; // All keys failed
                 }
 
                 // Route JSON messages (device_info, input in JSON mode, ping, etc.)
