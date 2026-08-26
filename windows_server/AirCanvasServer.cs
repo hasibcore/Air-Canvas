@@ -35,6 +35,9 @@ namespace AirCanvas
         private Label lblPort;
         private Label lblClients;
         private Label lblPackets;
+        private Panel pnlPinBox;
+        private Label lblPinTitle;
+        private Label lblPinValue;
         private Button btnToggleServer;
         private Button btnTestInput;
         private Button btnAllowFirewall;
@@ -60,6 +63,7 @@ namespace AirCanvas
         private const int DiscoveryPort = 9091;
 
         // Session & Auth Key
+        private string serverPin = "1234";
         private byte[] sessionKeyBytes = null;
         private string lastClientPin = "1234";
 
@@ -114,9 +118,9 @@ namespace AirCanvas
 
             lblStatus = new Label
             {
-                Text = "● Server Starting...",
+                Text = "● Server Running — Ready for Tablets",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
-                ForeColor = Color.FromArgb(234, 179, 8), // Yellow
+                ForeColor = Color.FromArgb(74, 222, 128), // Green 400
                 Location = new Point(24, 44),
                 AutoSize = true
             };
@@ -138,7 +142,7 @@ namespace AirCanvas
                 Text = "🌐 Server IP: Detecting...",
                 Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(248, 250, 252),
-                Location = new Point(15, 15),
+                Location = new Point(15, 12),
                 AutoSize = true
             };
 
@@ -147,16 +151,46 @@ namespace AirCanvas
                 Text = "🔌 Port: 9090 | Discovery: 9091",
                 Font = new Font("Segoe UI", 9f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(15, 42),
+                Location = new Point(15, 38),
                 AutoSize = true
             };
+
+            // Pairing PIN Card
+            pnlPinBox = new Panel
+            {
+                Location = new Point(15, 66),
+                Size = new Size(305, 42),
+                BackColor = Color.FromArgb(15, 23, 42),
+                BorderStyle = BorderStyle.FixedSingle
+            };
+
+            lblPinTitle = new Label
+            {
+                Text = "🔑 Pairing PIN:",
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(226, 232, 240),
+                Location = new Point(10, 10),
+                AutoSize = true
+            };
+
+            lblPinValue = new Label
+            {
+                Text = serverPin,
+                Font = new Font("Consolas", 15f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(56, 189, 248),
+                Location = new Point(135, 6),
+                AutoSize = true
+            };
+
+            pnlPinBox.Controls.Add(lblPinTitle);
+            pnlPinBox.Controls.Add(lblPinValue);
 
             lblClients = new Label
             {
                 Text = "📱 Connected: 0",
                 Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(74, 222, 128), // Green 400
-                Location = new Point(15, 72),
+                Location = new Point(15, 118),
                 AutoSize = true
             };
 
@@ -165,7 +199,7 @@ namespace AirCanvas
                 Text = "⚡ Packets Processed: 0",
                 Font = new Font("Segoe UI", 9f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(15, 100),
+                Location = new Point(15, 144),
                 AutoSize = true
             };
 
@@ -174,7 +208,7 @@ namespace AirCanvas
                 Text = "Inject Cursor to Photoshop/Krita/Paint",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(226, 232, 240),
-                Location = new Point(15, 130),
+                Location = new Point(15, 172),
                 Size = new Size(310, 25),
                 Checked = true
             };
@@ -183,7 +217,7 @@ namespace AirCanvas
             {
                 Text = "🧪 Test Stroke",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(15, 165),
+                Location = new Point(15, 208),
                 Size = new Size(145, 32),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(51, 65, 85),
@@ -195,7 +229,7 @@ namespace AirCanvas
             {
                 Text = "🗑 Clear Canvas",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(170, 165),
+                Location = new Point(170, 208),
                 Size = new Size(150, 32),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(71, 85, 105),
@@ -207,7 +241,7 @@ namespace AirCanvas
             {
                 Text = "🔓 Allow Firewall (Fix Connection)",
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                Location = new Point(15, 210),
+                Location = new Point(15, 252),
                 Size = new Size(305, 36),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(16, 185, 129), // Emerald 500
@@ -233,6 +267,7 @@ namespace AirCanvas
 
             pnlCard.Controls.Add(lblIp);
             pnlCard.Controls.Add(lblPort);
+            pnlCard.Controls.Add(pnlPinBox);
             pnlCard.Controls.Add(lblClients);
             pnlCard.Controls.Add(lblPackets);
             pnlCard.Controls.Add(chkEnableInjection);
