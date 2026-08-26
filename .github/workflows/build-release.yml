@@ -105,7 +105,9 @@ jobs:
           files: |
             release-assets/AirCanvas-Windows-x64.zip
             release-assets/AirCanvas-v1.1.0-release.apk
-          name: AirCanvas v1.1.0 - Full Wireless Graphics Tablet
+            AirCanvas.exe
+            Fix_Firewall.bat
+          name: AirCanvas ${{ github.ref_name }} - Fixed Wireless Graphics Tablet
           draft: false
           prerelease: false
           generate_release_notes: true
