@@ -419,7 +419,7 @@ namespace AirCanvas
                     }
                     else if (frame.Opcode == 2) // Binary Input Event or Encrypted Payload
                     {
-                        ProcessBinaryPacket(frame.Payload, frame.Payload.Length);
+                        ProcessBinaryPacket(frame.Payload, frame.Payload.Length, stream);
                     }
 
                     Interlocked.Increment(ref packetsReceived);
@@ -630,7 +630,8 @@ namespace AirCanvas
             }
             else if (json.Contains("\"type\":\"device_info\""))
             {
-                SendWebSocketText(stream, "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"useBinaryProtocol\":true}}");
+                // Key must be "binary" to match Flutter's ServerConfig.fromJson()
+                SendWebSocketText(stream, "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"binary\":true}}");
             }
             else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
             {
@@ -692,45 +693,48 @@ namespace AirCanvas
             catch { }
         }
 
-        private void ProcessBinaryPacket(byte[] data, int count)
+        private void ProcessBinaryPacket(byte[] data, int count, NetworkStream stream)
         {
-            if (count < 11) return;
+            if (count < 1) return;
             try
             {
                 byte[] packet = data;
 
-                // Check if packet starts with valid event type (0=down, 1=move, 2=up, 3=cancel)
-                // If not, it is XOR encrypted by Flutter client!
-                if (packet[0] > 5 || packet.Length != 13)
+                // Attempt decryption: encrypted packets won't start with a valid
+                // event type (0-5) or JSON brace '{'. Try each key until one
+                // produces recognizable output.
+                bool isRecognizable = (packet[0] <= 5 && packet.Length == 13) || packet[0] == (byte)'{';
+                if (!isRecognizable)
                 {
-                    if (sessionKeyBytes != null)
+                    byte[][] keysToTry = new byte[][] {
+                        sessionKeyBytes,
+                        lastClientPin != null ? Encoding.UTF8.GetBytes(lastClientPin) : null,
+                        Encoding.UTF8.GetBytes("1234")
+                    };
+                    foreach (byte[] key in keysToTry)
                     {
-                        byte[] dec = Crypt(packet, sessionKeyBytes);
-                        if (dec.Length >= 6 && dec[0] <= 5) packet = dec;
-                    }
-                    if (packet[0] > 5 && lastClientPin != null)
-                    {
-                        byte[] dec = Crypt(packet, Encoding.UTF8.GetBytes(lastClientPin));
-                        if (dec.Length >= 6 && dec[0] <= 5) packet = dec;
-                    }
-                    if (packet[0] > 5)
-                    {
-                        byte[] dec = Crypt(packet, Encoding.UTF8.GetBytes("1234"));
-                        if (dec.Length >= 6 && dec[0] <= 5) packet = dec;
+                        if (key == null) continue;
+                        byte[] dec = Crypt(packet, key);
+                        if ((dec.Length == 13 && dec[0] <= 5) || (dec.Length > 0 && dec[0] == (byte)'{'))
+                        {
+                            packet = dec;
+                            break;
+                        }
                     }
                 }
 
-                // If decrypted payload is a JSON string (e.g. { "type": "device_info" })
+                // Route JSON messages (device_info, input in JSON mode, ping, etc.)
                 if (packet[0] == (byte)'{')
                 {
                     string json = Encoding.UTF8.GetString(packet);
-                    ProcessJsonMessage(json, null);
+                    ProcessJsonMessage(json, stream);
                     return;
                 }
 
+                // Validate as 13-byte binary input event
                 if (packet[0] > 5 || packet.Length < 6) return;
 
-                // Exact Flutter InputEvent binary format:
+                // Flutter InputEvent binary format:
                 // [type:1][x:2][y:2][pressure:1][pointerType:1][pointerId:1][tiltX:1][tiltY:1][buttons:1][version:1][checksum:1]
                 byte typeByte = packet[0];
                 string eventType = "move";
@@ -739,7 +743,7 @@ namespace AirCanvas
                 else if (typeByte == 2) eventType = "up";
                 else if (typeByte == 3) eventType = "cancel";
 
-                // Big-endian uint16 / 65535.0 (0.0 to 1.0)
+                // Big-endian uint16 / 65535.0 (normalized 0.0 to 1.0)
                 int xUint = (packet[1] << 8) | packet[2];
                 double x = (double)xUint / 65535.0;
 
