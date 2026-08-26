@@ -1,12 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Net.WebSockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -42,8 +42,8 @@ namespace AirCanvas
         private Panel pnlCard;
         private NotifyIcon trayIcon;
 
-        // Server State
-        private HttpListener httpListener;
+        // Server State (Pure Socket TCP - No Http.sys / No Access is denied)
+        private TcpListener tcpServer;
         private UdpClient udpDiscoveryClient;
         private CancellationTokenSource cts;
         private bool isRunning = false;
@@ -264,9 +264,11 @@ namespace AirCanvas
             try
             {
                 cts = new CancellationTokenSource();
-                httpListener = new HttpListener();
-                httpListener.Prefixes.Add("http://*:" + ServerPort + "/");
-                httpListener.Start();
+
+                // Pure Socket TcpListener - Bypasses Windows Http.sys URLACL (No Access is denied)
+                tcpServer = new TcpListener(IPAddress.Any, ServerPort);
+                tcpServer.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                tcpServer.Start();
 
                 isRunning = true;
                 lblStatus.Text = "● Server Running — Ready for Tablets";
@@ -274,33 +276,14 @@ namespace AirCanvas
                 btnToggleServer.Text = "⏹ Stop Server";
                 btnToggleServer.BackColor = Color.FromArgb(239, 68, 68);
 
-                Task.Run(() => AcceptWebSocketsAsync(cts.Token));
+                Task.Run(() => AcceptTcpClientsAsync(cts.Token));
                 Task.Run(() => RunUdpDiscoveryListener(cts.Token));
             }
-            catch
+            catch (Exception ex)
             {
-                // Fallback prefix
-                try
-                {
-                    httpListener = new HttpListener();
-                    httpListener.Prefixes.Add("http://+:" + ServerPort + "/");
-                    httpListener.Start();
-
-                    isRunning = true;
-                    lblStatus.Text = "● Server Running — Ready for Tablets";
-                    lblStatus.ForeColor = Color.FromArgb(74, 222, 128);
-                    btnToggleServer.Text = "⏹ Stop Server";
-                    btnToggleServer.BackColor = Color.FromArgb(239, 68, 68);
-
-                    Task.Run(() => AcceptWebSocketsAsync(cts.Token));
-                    Task.Run(() => RunUdpDiscoveryListener(cts.Token));
-                }
-                catch (Exception ex2)
-                {
-                    lblStatus.Text = "✕ Server Error: " + ex2.Message;
-                    lblStatus.ForeColor = Color.FromArgb(239, 68, 68);
-                    isRunning = false;
-                }
+                lblStatus.Text = "✕ Server Error: " + ex.Message;
+                lblStatus.ForeColor = Color.FromArgb(239, 68, 68);
+                isRunning = false;
             }
         }
 
@@ -310,7 +293,7 @@ namespace AirCanvas
             try
             {
                 if (cts != null) cts.Cancel();
-                if (httpListener != null) { httpListener.Stop(); httpListener.Close(); }
+                if (tcpServer != null) tcpServer.Stop();
                 if (udpDiscoveryClient != null) udpDiscoveryClient.Close();
             }
             catch { }
@@ -324,69 +307,69 @@ namespace AirCanvas
             btnToggleServer.BackColor = Color.FromArgb(34, 197, 94);
         }
 
-        private async Task AcceptWebSocketsAsync(CancellationToken token)
+        private async Task AcceptTcpClientsAsync(CancellationToken token)
         {
-            while (!token.IsCancellationRequested && httpListener != null && httpListener.IsListening)
+            while (!token.IsCancellationRequested && tcpServer != null)
             {
                 try
                 {
-                    var context = await httpListener.GetContextAsync();
-                    if (context.Request.IsWebSocketRequest)
-                    {
-                        ProcessWebSocketRequest(context, token);
-                    }
-                    else
-                    {
-                        // HTTP fallback (status check)
-                        byte[] response = Encoding.UTF8.GetBytes("{\"app\":\"AirCanvas\",\"status\":\"running\",\"version\":\"1.1.0\"}");
-                        context.Response.ContentType = "application/json";
-                        context.Response.ContentLength64 = response.Length;
-                        context.Response.OutputStream.Write(response, 0, response.Length);
-                        context.Response.Close();
-                    }
+                    TcpClient client = await tcpServer.AcceptTcpClientAsync();
+                    Task.Run(() => HandleClientSessionAsync(client, token));
                 }
-                catch (Exception)
+                catch
                 {
                     if (token.IsCancellationRequested) break;
                 }
             }
         }
 
-        private async void ProcessWebSocketRequest(HttpListenerContext context, CancellationToken token)
+        private async Task HandleClientSessionAsync(TcpClient client, CancellationToken token)
         {
-            WebSocketContext wsContext = null;
+            Interlocked.Increment(ref connectedClients);
+            UpdateClientsUI();
+
+            NetworkStream stream = null;
             try
             {
-                wsContext = await context.AcceptWebSocketAsync(null);
-                Interlocked.Increment(ref connectedClients);
-                UpdateClientsUI();
+                client.NoDelay = true; // Disable Nagle's algorithm for sub-5ms low latency
+                stream = client.GetStream();
 
-                var ws = wsContext.WebSocket;
+                // 1. Perform RFC 6455 WebSocket Handshake
+                byte[] handshakeBuffer = new byte[4096];
+                int bytesRead = await stream.ReadAsync(handshakeBuffer, 0, handshakeBuffer.Length, token);
+                if (bytesRead == 0) return;
 
-                // Send Auth Challenge immediately to Flutter Client
-                string challenge = "{\"type\":\"auth_challenge\"}";
-                byte[] challengeBytes = Encoding.UTF8.GetBytes(challenge);
-                await ws.SendAsync(new ArraySegment<byte>(challengeBytes), WebSocketMessageType.Text, true, CancellationToken.None);
-
-                byte[] buffer = new byte[8192];
-
-                while (ws.State == WebSocketState.Open && !token.IsCancellationRequested)
+                string headerText = Encoding.UTF8.GetString(handshakeBuffer, 0, bytesRead);
+                if (!PerformWebSocketHandshake(headerText, stream))
                 {
-                    var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), token);
-                    if (result.MessageType == WebSocketMessageType.Close)
+                    return;
+                }
+
+                // 2. Send Auth Challenge frame immediately
+                SendWebSocketText(stream, "{\"type\":\"auth_challenge\"}");
+
+                // 3. Read incoming WebSocket frames
+                while (client.Connected && !token.IsCancellationRequested)
+                {
+                    var frame = ReadWebSocketFrame(stream);
+                    if (frame == null) break; // Client disconnected or closed
+
+                    if (frame.Opcode == 8) // Close
                     {
-                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
                         break;
                     }
-
-                    if (result.MessageType == WebSocketMessageType.Binary)
+                    else if (frame.Opcode == 9) // Ping -> send Pong
                     {
-                        ProcessBinaryPacket(buffer, result.Count);
+                        SendWebSocketFrame(stream, 10, frame.Payload);
                     }
-                    else if (result.MessageType == WebSocketMessageType.Text)
+                    else if (frame.Opcode == 1) // Text JSON
                     {
-                        string json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                        ProcessJsonMessage(json, ws);
+                        string json = Encoding.UTF8.GetString(frame.Payload);
+                        ProcessJsonMessage(json, stream);
+                    }
+                    else if (frame.Opcode == 2) // Binary Input Event
+                    {
+                        ProcessBinaryPacket(frame.Payload, frame.Payload.Length);
                     }
 
                     Interlocked.Increment(ref packetsReceived);
@@ -399,19 +382,172 @@ namespace AirCanvas
             catch { }
             finally
             {
+                try { if (stream != null) stream.Close(); } catch { }
+                try { client.Close(); } catch { }
                 Interlocked.Decrement(ref connectedClients);
                 UpdateClientsUI();
             }
         }
 
-        private void ProcessJsonMessage(string json, WebSocket ws)
+        private bool PerformWebSocketHandshake(string headerText, NetworkStream stream)
+        {
+            try
+            {
+                string secKeyHeader = "Sec-WebSocket-Key: ";
+                int keyIdx = headerText.IndexOf(secKeyHeader, StringComparison.OrdinalIgnoreCase);
+                if (keyIdx == -1) return false;
+
+                int keyEnd = headerText.IndexOf("\r\n", keyIdx);
+                string key = headerText.Substring(keyIdx + secKeyHeader.Length, keyEnd - (keyIdx + secKeyHeader.Length)).Trim();
+
+                string acceptKey;
+                using (SHA1 sha1 = SHA1.Create())
+                {
+                    byte[] hash = sha1.ComputeHash(Encoding.UTF8.GetBytes(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
+                    acceptKey = Convert.ToBase64String(hash);
+                }
+
+                string response = "HTTP/1.1 101 Switching Protocols\r\n" +
+                                  "Upgrade: websocket\r\n" +
+                                  "Connection: Upgrade\r\n" +
+                                  "Sec-WebSocket-Accept: " + acceptKey + "\r\n\r\n";
+
+                byte[] responseBytes = Encoding.UTF8.GetBytes(response);
+                stream.Write(responseBytes, 0, responseBytes.Length);
+                stream.Flush();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void SendWebSocketText(NetworkStream stream, string text)
+        {
+            try
+            {
+                byte[] payload = Encoding.UTF8.GetBytes(text);
+                SendWebSocketFrame(stream, 1, payload);
+            }
+            catch { }
+        }
+
+        private void SendWebSocketFrame(NetworkStream stream, byte opcode, byte[] payload)
+        {
+            try
+            {
+                int len = payload != null ? payload.Length : 0;
+                List<byte> frame = new List<byte>();
+                frame.Add((byte)(0x80 | (opcode & 0x0F))); // FIN = 1, Opcode
+
+                if (len <= 125)
+                {
+                    frame.Add((byte)len);
+                }
+                else if (len <= 65535)
+                {
+                    frame.Add(126);
+                    frame.Add((byte)((len >> 8) & 0xFF));
+                    frame.Add((byte)(len & 0xFF));
+                }
+                else
+                {
+                    frame.Add(127);
+                    for (int i = 7; i >= 0; i--)
+                    {
+                        frame.Add((byte)((len >> (i * 8)) & 0xFF));
+                    }
+                }
+
+                if (payload != null && payload.Length > 0)
+                {
+                    frame.AddRange(payload);
+                }
+
+                byte[] bytes = frame.ToArray();
+                stream.Write(bytes, 0, bytes.Length);
+                stream.Flush();
+            }
+            catch { }
+        }
+
+        private class WsFrame
+        {
+            public byte Opcode;
+            public byte[] Payload;
+        }
+
+        private WsFrame ReadWebSocketFrame(NetworkStream stream)
+        {
+            try
+            {
+                int b1 = stream.ReadByte();
+                if (b1 == -1) return null;
+                int b2 = stream.ReadByte();
+                if (b2 == -1) return null;
+
+                byte opcode = (byte)(b1 & 0x0F);
+                bool isMasked = (b2 & 0x80) != 0;
+                long payloadLength = b2 & 0x7F;
+
+                if (payloadLength == 126)
+                {
+                    byte[] lenBytes = ReadExact(stream, 2);
+                    payloadLength = (lenBytes[0] << 8) | lenBytes[1];
+                }
+                else if (payloadLength == 127)
+                {
+                    byte[] lenBytes = ReadExact(stream, 8);
+                    payloadLength = 0;
+                    for (int i = 0; i < 8; i++)
+                    {
+                        payloadLength = (payloadLength << 8) | lenBytes[i];
+                    }
+                }
+
+                byte[] mask = null;
+                if (isMasked)
+                {
+                    mask = ReadExact(stream, 4);
+                }
+
+                byte[] payload = ReadExact(stream, (int)payloadLength);
+                if (isMasked && mask != null)
+                {
+                    for (int i = 0; i < payload.Length; i++)
+                    {
+                        payload[i] = (byte)(payload[i] ^ mask[i % 4]);
+                    }
+                }
+
+                return new WsFrame { Opcode = opcode, Payload = payload };
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private byte[] ReadExact(NetworkStream stream, int count)
+        {
+            byte[] buffer = new byte[count];
+            int offset = 0;
+            while (offset < count)
+            {
+                int read = stream.Read(buffer, offset, count - offset);
+                if (read <= 0) throw new IOException("Stream closed unexpectedly");
+                offset += read;
+            }
+            return buffer;
+        }
+
+        private void ProcessJsonMessage(string json, NetworkStream stream)
         {
             // Authenticate handshake response
             if (json.Contains("\"type\":\"auth_response\"") || json.Contains("\"type\":\"auth\""))
             {
-                string authOk = "{\"type\":\"auth_success\",\"token\":\"pc-session-key\"}";
-                byte[] bytes = Encoding.UTF8.GetBytes(authOk);
-                ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                SendWebSocketText(stream, "{\"type\":\"auth_success\",\"token\":\"pc-session-key\"}");
             }
             else if (json.Contains("\"type\":\"device_info\""))
             {
@@ -419,9 +555,7 @@ namespace AirCanvas
                 ExtractClientResolution(json);
 
                 // Send server config confirmation
-                string configOk = "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"useBinaryProtocol\":true}}";
-                byte[] bytes = Encoding.UTF8.GetBytes(configOk);
-                ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                SendWebSocketText(stream, "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"useBinaryProtocol\":true}}");
             }
             else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
             {
@@ -429,9 +563,7 @@ namespace AirCanvas
             }
             else if (json.Contains("\"type\":\"ping\""))
             {
-                string pong = "{\"type\":\"pong\",\"ts\":" + DateTime.Now.Ticks + "}";
-                byte[] bytes = Encoding.UTF8.GetBytes(pong);
-                ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                SendWebSocketText(stream, "{\"type\":\"pong\",\"ts\":" + DateTime.Now.Ticks + "}");
             }
         }
 
