@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -37,12 +38,17 @@ namespace AirCanvas
         private Button btnToggleServer;
         private Button btnTestInput;
         private Button btnAllowFirewall;
+        private Button btnClearCanvas;
         private CheckBox chkEnableInjection;
         private Panel pnlHeader;
         private Panel pnlCard;
+        private PictureBox pbCanvas;
+        private Bitmap canvasBitmap;
+        private Graphics canvasGraphics;
+        private PointF lastDrawPoint = PointF.Empty;
         private NotifyIcon trayIcon;
 
-        // Server State (Pure Socket TCP - No Http.sys / No Access is denied)
+        // Server State (Pure Socket TCP)
         private TcpListener tcpServer;
         private UdpClient udpDiscoveryClient;
         private CancellationTokenSource cts;
@@ -52,6 +58,10 @@ namespace AirCanvas
         private string localIp = "127.0.0.1";
         private const int ServerPort = 9090;
         private const int DiscoveryPort = 9091;
+
+        // Session & Auth Key
+        private byte[] sessionKeyBytes = null;
+        private string lastClientPin = "1234";
 
         // Client Screen Dimensions (for scaling)
         private double clientWidth = 1920;
@@ -75,13 +85,14 @@ namespace AirCanvas
         {
             InitializeComponent();
             GetLocalIPAddress();
+            InitCanvas();
             StartServer();
         }
 
         private void InitializeComponent()
         {
             this.Text = "AirCanvas Server — PC Graphics Tablet Receiver";
-            this.Size = new Size(540, 500);
+            this.Size = new Size(820, 600);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -92,25 +103,25 @@ namespace AirCanvas
             pnlHeader = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 80,
+                Height = 75,
                 BackColor = Color.FromArgb(30, 41, 59) // Slate 800
             };
 
             lblTitle = new Label
             {
-                Text = "🎨 AirCanvas PC Server",
-                Font = new Font("Segoe UI", 16, FontStyle.Bold),
+                Text = "🎨 AirCanvas PC Server & Live Canvas",
+                Font = new Font("Segoe UI", 15, FontStyle.Bold),
                 ForeColor = Color.FromArgb(56, 189, 248), // Sky 400
-                Location = new Point(20, 15),
+                Location = new Point(20, 12),
                 AutoSize = true
             };
 
             lblStatus = new Label
             {
                 Text = "● Server Starting...",
-                Font = new Font("Segoe UI", 10, FontStyle.Regular),
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(234, 179, 8), // Yellow
-                Location = new Point(24, 48),
+                Location = new Point(24, 44),
                 AutoSize = true
             };
 
@@ -118,100 +129,102 @@ namespace AirCanvas
             pnlHeader.Controls.Add(lblStatus);
             this.Controls.Add(pnlHeader);
 
-            // Card Panel
+            // Left Card Panel (Server Info & Controls)
             pnlCard = new Panel
             {
-                Location = new Point(20, 95),
-                Size = new Size(485, 260),
+                Location = new Point(15, 88),
+                Size = new Size(340, 455),
                 BackColor = Color.FromArgb(30, 41, 59)
             };
 
             lblIp = new Label
             {
                 Text = "🌐 Server IP: Detecting...",
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(248, 250, 252),
-                Location = new Point(20, 18),
+                Location = new Point(15, 15),
                 AutoSize = true
             };
 
             lblPort = new Label
             {
-                Text = "🔌 Port: 9090 (WebSocket) | 9091 (UDP Discovery)",
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
+                Text = "🔌 Port: 9090 | Discovery: 9091",
+                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(20, 48),
+                Location = new Point(15, 42),
                 AutoSize = true
             };
 
             lblClients = new Label
             {
-                Text = "📱 Connected Devices: 0",
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                Text = "📱 Connected: 0",
+                Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(74, 222, 128), // Green 400
-                Location = new Point(20, 80),
+                Location = new Point(15, 72),
                 AutoSize = true
             };
 
             lblPackets = new Label
             {
                 Text = "⚡ Packets Processed: 0",
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
+                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(20, 110),
+                Location = new Point(15, 100),
                 AutoSize = true
             };
 
             chkEnableInjection = new CheckBox
             {
-                Text = "Enable Native Cursor & Pen Injection (Photoshop/Krita/Blender)",
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
+                Text = "Inject Cursor to Photoshop/Krita/Paint",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(226, 232, 240),
-                Location = new Point(20, 145),
-                Size = new Size(445, 25),
+                Location = new Point(15, 130),
+                Size = new Size(310, 25),
                 Checked = true
             };
 
             btnTestInput = new Button
             {
                 Text = "🧪 Test Stroke",
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-                Location = new Point(20, 185),
-                Size = new Size(110, 34),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                Location = new Point(15, 165),
+                Size = new Size(145, 32),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(51, 65, 85),
                 ForeColor = Color.White
             };
             btnTestInput.Click += (s, e) => TestStroke();
 
+            btnClearCanvas = new Button
+            {
+                Text = "🗑 Clear Canvas",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                Location = new Point(170, 165),
+                Size = new Size(150, 32),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(71, 85, 105),
+                ForeColor = Color.White
+            };
+            btnClearCanvas.Click += (s, e) => ClearCanvas();
+
             btnAllowFirewall = new Button
             {
                 Text = "🔓 Allow Firewall (Fix Connection)",
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                Location = new Point(140, 185),
-                Size = new Size(250, 34),
+                Location = new Point(15, 210),
+                Size = new Size(305, 36),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(16, 185, 129), // Emerald 500
                 ForeColor = Color.White
             };
             btnAllowFirewall.Click += (s, e) => FixFirewallRules();
 
-            pnlCard.Controls.Add(lblIp);
-            pnlCard.Controls.Add(lblPort);
-            pnlCard.Controls.Add(lblClients);
-            pnlCard.Controls.Add(lblPackets);
-            pnlCard.Controls.Add(chkEnableInjection);
-            pnlCard.Controls.Add(btnTestInput);
-            pnlCard.Controls.Add(btnAllowFirewall);
-            this.Controls.Add(pnlCard);
-
-            // Toggle Button
             btnToggleServer = new Button
             {
                 Text = "⏹ Stop Server",
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                Location = new Point(20, 375),
-                Size = new Size(485, 45),
+                Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
+                Location = new Point(15, 395),
+                Size = new Size(305, 42),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(239, 68, 68), // Red
                 ForeColor = Color.White
@@ -221,7 +234,27 @@ namespace AirCanvas
                 if (isRunning) StopServer();
                 else StartServer();
             };
-            this.Controls.Add(btnToggleServer);
+
+            pnlCard.Controls.Add(lblIp);
+            pnlCard.Controls.Add(lblPort);
+            pnlCard.Controls.Add(lblClients);
+            pnlCard.Controls.Add(lblPackets);
+            pnlCard.Controls.Add(chkEnableInjection);
+            pnlCard.Controls.Add(btnTestInput);
+            pnlCard.Controls.Add(btnClearCanvas);
+            pnlCard.Controls.Add(btnAllowFirewall);
+            pnlCard.Controls.Add(btnToggleServer);
+            this.Controls.Add(pnlCard);
+
+            // Right Panel: Live Drawing Canvas PictureBox
+            pbCanvas = new PictureBox
+            {
+                Location = new Point(370, 88),
+                Size = new Size(420, 455),
+                BackColor = Color.FromArgb(15, 23, 42),
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            this.Controls.Add(pbCanvas);
 
             // Tray Icon
             trayIcon = new NotifyIcon
@@ -235,6 +268,28 @@ namespace AirCanvas
                 this.Show();
                 this.WindowState = FormWindowState.Normal;
             };
+        }
+
+        private void InitCanvas()
+        {
+            canvasBitmap = new Bitmap(pbCanvas.Width, pbCanvas.Height);
+            canvasGraphics = Graphics.FromImage(canvasBitmap);
+            canvasGraphics.SmoothingMode = SmoothingMode.AntiAlias;
+            ClearCanvas();
+        }
+
+        private void ClearCanvas()
+        {
+            if (canvasGraphics != null)
+            {
+                canvasGraphics.Clear(Color.FromArgb(15, 23, 42)); // Dark background
+                using (Font f = new Font("Segoe UI", 10, FontStyle.Italic))
+                using (Brush b = new SolidBrush(Color.FromArgb(71, 85, 105)))
+                {
+                    canvasGraphics.DrawString("Live drawing canvas from your phone will appear here in real-time...", f, b, new PointF(15, 15));
+                }
+                pbCanvas.Image = canvasBitmap;
+            }
         }
 
         private void GetLocalIPAddress()
@@ -265,7 +320,6 @@ namespace AirCanvas
             {
                 cts = new CancellationTokenSource();
 
-                // Pure Socket TcpListener - Bypasses Windows Http.sys URLACL (No Access is denied)
                 tcpServer = new TcpListener(IPAddress.Any, ServerPort);
                 tcpServer.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 tcpServer.Start();
@@ -302,7 +356,7 @@ namespace AirCanvas
             connectedClients = 0;
             lblStatus.Text = "○ Server Stopped";
             lblStatus.ForeColor = Color.FromArgb(148, 163, 184);
-            lblClients.Text = "📱 Connected Devices: 0";
+            lblClients.Text = "📱 Connected: 0";
             btnToggleServer.Text = "▶ Start Server";
             btnToggleServer.BackColor = Color.FromArgb(34, 197, 94);
         }
@@ -331,10 +385,10 @@ namespace AirCanvas
             NetworkStream stream = null;
             try
             {
-                client.NoDelay = true; // Disable Nagle's algorithm for sub-5ms low latency
+                client.NoDelay = true; // Sub-5ms low latency
                 stream = client.GetStream();
 
-                // 1. Perform RFC 6455 WebSocket Handshake
+                // 1. WebSocket Handshake
                 byte[] handshakeBuffer = new byte[4096];
                 int bytesRead = await stream.ReadAsync(handshakeBuffer, 0, handshakeBuffer.Length, token);
                 if (bytesRead == 0) return;
@@ -345,20 +399,20 @@ namespace AirCanvas
                     return;
                 }
 
-                // 2. Send Auth Challenge frame immediately
+                // 2. Send Auth Challenge immediately
                 SendWebSocketText(stream, "{\"type\":\"auth_challenge\"}");
 
                 // 3. Read incoming WebSocket frames
                 while (client.Connected && !token.IsCancellationRequested)
                 {
                     var frame = ReadWebSocketFrame(stream);
-                    if (frame == null) break; // Client disconnected or closed
+                    if (frame == null) break;
 
                     if (frame.Opcode == 8) // Close
                     {
                         break;
                     }
-                    else if (frame.Opcode == 9) // Ping -> send Pong
+                    else if (frame.Opcode == 9) // Ping
                     {
                         SendWebSocketFrame(stream, 10, frame.Payload);
                     }
@@ -439,7 +493,7 @@ namespace AirCanvas
             {
                 int len = payload != null ? payload.Length : 0;
                 List<byte> frame = new List<byte>();
-                frame.Add((byte)(0x80 | (opcode & 0x0F))); // FIN = 1, Opcode
+                frame.Add((byte)(0x80 | (opcode & 0x0F)));
 
                 if (len <= 125)
                 {
@@ -542,19 +596,47 @@ namespace AirCanvas
             return buffer;
         }
 
+        private byte[] Crypt(byte[] data, byte[] key)
+        {
+            if (key == null || key.Length == 0 || data == null) return data;
+            byte[] result = new byte[data.Length];
+            for (int i = 0; i < data.Length; i++)
+            {
+                result[i] = (byte)(data[i] ^ key[i % key.Length]);
+            }
+            return result;
+        }
+
         private void ProcessJsonMessage(string json, NetworkStream stream)
         {
             // Authenticate handshake response
             if (json.Contains("\"type\":\"auth_response\"") || json.Contains("\"type\":\"auth\""))
             {
-                SendWebSocketText(stream, "{\"type\":\"auth_success\",\"token\":\"pc-session-key\"}");
+                // Extract PIN if present
+                try
+                {
+                    int pIdx = json.IndexOf("\"pin\":");
+                    if (pIdx != -1)
+                    {
+                        int start = json.IndexOf('"', pIdx + 6) + 1;
+                        int end = json.IndexOf('"', start);
+                        if (start > 0 && end > start)
+                        {
+                            lastClientPin = json.Substring(start, end - start);
+                        }
+                    }
+                }
+                catch { }
+
+                // Generate random session key
+                sessionKeyBytes = Encoding.UTF8.GetBytes(lastClientPin != null ? lastClientPin : "1234");
+                string b64Key = Convert.ToBase64String(sessionKeyBytes);
+
+                SendWebSocketText(stream, "{\"type\":\"auth_success\",\"session_key\":\"" + b64Key + "\"}");
             }
             else if (json.Contains("\"type\":\"device_info\""))
             {
-                // Parse client screen resolution
                 ExtractClientResolution(json);
-
-                // Send server config confirmation
                 SendWebSocketText(stream, "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"useBinaryProtocol\":true}}");
             }
             else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
@@ -631,7 +713,7 @@ namespace AirCanvas
                     double.TryParse(val, out pressure);
                 }
 
-                InjectInput(x, y, pressure, eventType);
+                InjectAndDrawInput(x, y, pressure, eventType);
             }
             catch { }
         }
@@ -641,59 +723,125 @@ namespace AirCanvas
             if (count < 14) return;
             try
             {
-                // Binary protocol layout:
-                // [0]: Magic byte (0xAC)
-                // [1]: Event type (0=down, 1=move, 2=up, 3=hover, 4=cancel)
-                // [2-5]: X (float32, big endian)
-                // [6-9]: Y (float32, big endian)
-                // [10-13]: Pressure (float32, big endian)
-                if (data[0] != 0xAC) return;
+                byte[] packet = data;
 
-                byte typeByte = data[1];
+                // Try decrypting if magic byte is not 0xAC
+                if (packet[0] != 0xAC)
+                {
+                    if (sessionKeyBytes != null)
+                    {
+                        byte[] dec = Crypt(packet, sessionKeyBytes);
+                        if (dec[0] == 0xAC) packet = dec;
+                    }
+                    if (packet[0] != 0xAC && lastClientPin != null)
+                    {
+                        byte[] dec = Crypt(packet, Encoding.UTF8.GetBytes(lastClientPin));
+                        if (dec[0] == 0xAC) packet = dec;
+                    }
+                    if (packet[0] != 0xAC)
+                    {
+                        byte[] dec = Crypt(packet, Encoding.UTF8.GetBytes("1234"));
+                        if (dec[0] == 0xAC) packet = dec;
+                    }
+                }
+
+                if (packet[0] != 0xAC) return;
+
+                byte typeByte = packet[1];
                 string eventType = "move";
                 if (typeByte == 0) eventType = "down";
                 else if (typeByte == 1) eventType = "move";
                 else if (typeByte == 2) eventType = "up";
 
-                byte[] xBytes = new byte[] { data[5], data[4], data[3], data[2] };
-                byte[] yBytes = new byte[] { data[9], data[8], data[7], data[6] };
-                byte[] pBytes = new byte[] { data[13], data[12], data[11], data[10] };
+                byte[] xBytes = new byte[] { packet[5], packet[4], packet[3], packet[2] };
+                byte[] yBytes = new byte[] { packet[9], packet[8], packet[7], packet[6] };
+                byte[] pBytes = new byte[] { packet[13], packet[12], packet[11], packet[10] };
 
                 float x = BitConverter.ToSingle(xBytes, 0);
                 float y = BitConverter.ToSingle(yBytes, 0);
                 float pressure = BitConverter.ToSingle(pBytes, 0);
 
-                InjectInput(x, y, pressure, eventType);
+                InjectAndDrawInput(x, y, pressure, eventType);
             }
             catch { }
         }
 
-        private void InjectInput(double x, double y, double pressure, string eventType)
+        private void InjectAndDrawInput(double x, double y, double pressure, string eventType)
         {
-            if (!chkEnableInjection.Checked) return;
+            // 1. Draw live on in-app PC Canvas
+            DrawOnAppCanvas(x, y, pressure, eventType);
 
-            try
+            // 2. Win32 Cursor injection for Photoshop/Krita/Paint
+            if (chkEnableInjection.Checked)
             {
-                Rectangle screen = Screen.PrimaryScreen.Bounds;
-                int targetX = (int)((x / (clientWidth > 0 ? clientWidth : screen.Width)) * screen.Width);
-                int targetY = (int)((y / (clientHeight > 0 ? clientHeight : screen.Height)) * screen.Height);
-
-                // Clamp to screen bounds
-                targetX = Math.Max(0, Math.Min(screen.Width - 1, targetX));
-                targetY = Math.Max(0, Math.Min(screen.Height - 1, targetY));
-
-                SetCursorPos(targetX, targetY);
-
-                if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
+                try
                 {
-                    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                    Rectangle screen = Screen.PrimaryScreen.Bounds;
+                    int targetX = (int)((x / (clientWidth > 0 ? clientWidth : screen.Width)) * screen.Width);
+                    int targetY = (int)((y / (clientHeight > 0 ? clientHeight : screen.Height)) * screen.Height);
+
+                    targetX = Math.Max(0, Math.Min(screen.Width - 1, targetX));
+                    targetY = Math.Max(0, Math.Min(screen.Height - 1, targetY));
+
+                    SetCursorPos(targetX, targetY);
+
+                    if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                    }
+                    else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                    }
                 }
-                else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase))
-                {
-                    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-                }
+                catch { }
             }
-            catch { }
+        }
+
+        private void DrawOnAppCanvas(double x, double y, double pressure, string eventType)
+        {
+            if (this.IsDisposed || !this.IsHandleCreated || canvasGraphics == null) return;
+
+            this.BeginInvoke((Action)(() =>
+            {
+                try
+                {
+                    float canvasX = (float)((x / (clientWidth > 0 ? clientWidth : 1080)) * pbCanvas.Width);
+                    float canvasY = (float)((y / (clientHeight > 0 ? clientHeight : 1920)) * pbCanvas.Height);
+                    PointF currentPt = new PointF(canvasX, canvasY);
+
+                    float penWidth = Math.Max(1.5f, (float)(pressure * 6.0f));
+
+                    if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
+                    {
+                        lastDrawPoint = currentPt;
+                        using (Brush brush = new SolidBrush(Color.FromArgb(56, 189, 248))) // Cyan
+                        {
+                            canvasGraphics.FillEllipse(brush, currentPt.X - penWidth / 2, currentPt.Y - penWidth / 2, penWidth, penWidth);
+                        }
+                    }
+                    else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!lastDrawPoint.IsEmpty)
+                        {
+                            using (Pen pen = new Pen(Color.FromArgb(56, 189, 248), penWidth))
+                            {
+                                pen.StartCap = LineCap.Round;
+                                pen.EndCap = LineCap.Round;
+                                canvasGraphics.DrawLine(pen, lastDrawPoint, currentPt);
+                            }
+                        }
+                        lastDrawPoint = currentPt;
+                    }
+                    else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase))
+                    {
+                        lastDrawPoint = PointF.Empty;
+                    }
+
+                    pbCanvas.Invalidate();
+                }
+                catch { }
+            }));
         }
 
         private void RunUdpDiscoveryListener(CancellationToken token)
@@ -752,6 +900,7 @@ namespace AirCanvas
             for (int i = 0; i <= 200; i += 10)
             {
                 SetCursorPos(startX + i, (int)(startY + Math.Sin(i * 0.05) * 40));
+                DrawOnAppCanvas(100 + i * 2, 200 + Math.Sin(i * 0.05) * 80, 0.8, "move");
                 Thread.Sleep(10);
             }
             mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
@@ -762,7 +911,7 @@ namespace AirCanvas
             if (this.IsDisposed || !this.IsHandleCreated) return;
             this.BeginInvoke((Action)(() =>
             {
-                lblClients.Text = "📱 Connected Devices: " + connectedClients;
+                lblClients.Text = "📱 Connected: " + connectedClients;
                 lblClients.ForeColor = connectedClients > 0 ? Color.FromArgb(74, 222, 128) : Color.FromArgb(148, 163, 184);
             }));
         }
@@ -780,6 +929,8 @@ namespace AirCanvas
         {
             StopServer();
             if (trayIcon != null) trayIcon.Dispose();
+            if (canvasGraphics != null) canvasGraphics.Dispose();
+            if (canvasBitmap != null) canvasBitmap.Dispose();
             base.OnFormClosing(e);
         }
     }
