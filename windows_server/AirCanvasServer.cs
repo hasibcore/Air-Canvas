@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -68,6 +69,7 @@ namespace AirCanvas
         private Button btnAllowFirewall;
         private Button btnClearCanvas;
         private CheckBox chkEnableInjection;
+        private volatile bool isInjectionEnabled = true;
         private Panel pnlHeader;
         private Panel pnlCard;
         private PictureBox pbCanvas;
@@ -237,6 +239,8 @@ namespace AirCanvas
                 Size = new Size(310, 25),
                 Checked = true
             };
+            isInjectionEnabled = true;
+            chkEnableInjection.CheckedChanged += (s, e) => { isInjectionEnabled = chkEnableInjection.Checked; };
 
             btnTestInput = new Button
             {
@@ -348,6 +352,7 @@ namespace AirCanvas
                     canvasGraphics.DrawString("Live drawing from your mobile screen will appear here in real-time...", f, b, new PointF(15, 15));
                 }
                 pbCanvas.Image = canvasBitmap;
+                pbCanvas.Invalidate();
             }
         }
 
@@ -362,7 +367,7 @@ namespace AirCanvas
             DrawOnAppCanvas(x, y, pressure, eventType);
 
             // 2. Win32 Cursor injection for Photoshop/Krita/Paint/OneNote/Whiteboard
-            if (chkEnableInjection.Checked)
+            if (isInjectionEnabled)
             {
                 try
                 {
@@ -406,8 +411,10 @@ namespace AirCanvas
                         return;
                     }
 
-                    float canvasX = (float)(x * pbCanvas.Width);
-                    float canvasY = (float)(y * pbCanvas.Height);
+                    int w = pbCanvas.Width > 0 ? pbCanvas.Width : 420;
+                    int h = pbCanvas.Height > 0 ? pbCanvas.Height : 455;
+                    float canvasX = (float)(x * w);
+                    float canvasY = (float)(y * h);
                     PointF currentPt = new PointF(canvasX, canvasY);
 
                     float penWidth = Math.Max(2.0f, (float)(pressure * 10.0f));
@@ -447,6 +454,7 @@ namespace AirCanvas
                     }
 
                     pbCanvas.Invalidate();
+                    pbCanvas.Update();
                 }
                 catch { }
             }));
@@ -456,6 +464,34 @@ namespace AirCanvas
         {
             try
             {
+                // 1. Scan active physical network adapters (WiFi / Ethernet)
+                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus == OperationalStatus.Up &&
+                        ni.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                    {
+                        string name = ni.Name.ToLower();
+                        string desc = ni.Description.ToLower();
+                        if (name.Contains("vbox") || desc.Contains("virtual") || desc.Contains("vmware") || desc.Contains("wsl"))
+                            continue;
+
+                        foreach (UnicastIPAddressInformation ip in ni.GetIPProperties().UnicastAddresses)
+                        {
+                            if (ip.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip.Address))
+                            {
+                                string ipStr = ip.Address.ToString();
+                                if (ipStr.StartsWith("192.168.") || ipStr.StartsWith("10.") || ipStr.StartsWith("172."))
+                                {
+                                    localIp = ipStr;
+                                    if (lblIp != null) lblIp.Text = "🌐 Server IP: " + localIp;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2. Fallback via UDP socket query
                 using (Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0))
                 {
                     socket.Connect("8.8.8.8", 65530);
@@ -470,7 +506,7 @@ namespace AirCanvas
             {
                 localIp = "127.0.0.1";
             }
-            lblIp.Text = "🌐 Server IP: " + localIp;
+            if (lblIp != null) lblIp.Text = "🌐 Server IP: " + localIp;
         }
 
         private void StartServer()
@@ -968,24 +1004,48 @@ namespace AirCanvas
 
         private void RunUdpDiscoveryListener(CancellationToken token)
         {
+            UdpClient udp = null;
             try
             {
-                udpDiscoveryClient = new UdpClient(DiscoveryPort);
+                udp = new UdpClient();
+                udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                udp.EnableBroadcast = true;
+                udp.Client.Bind(new IPEndPoint(IPAddress.Any, DiscoveryPort));
+                udpDiscoveryClient = udp;
+
                 while (!token.IsCancellationRequested)
                 {
-                    IPEndPoint remoteEp = new IPEndPoint(IPAddress.Any, 0);
-                    byte[] data = udpDiscoveryClient.Receive(ref remoteEp);
-                    string message = Encoding.UTF8.GetString(data);
-
-                    if (message.Contains("aircanvas_discovery"))
+                    try
                     {
-                        string reply = "{\"type\":\"aircanvas_response\",\"name\":\"" + Environment.MachineName + "\",\"port\":" + ServerPort + ",\"ip\":\"" + localIp + "\"}";
-                        byte[] replyBytes = Encoding.UTF8.GetBytes(reply);
-                        udpDiscoveryClient.Send(replyBytes, replyBytes.Length, remoteEp);
+                        IPEndPoint remoteEp = new IPEndPoint(IPAddress.Any, 0);
+                        byte[] data = udp.Receive(ref remoteEp);
+                        if (data == null || data.Length == 0) continue;
+
+                        string message = Encoding.UTF8.GetString(data);
+                        if (message.Contains("aircanvas_discovery"))
+                        {
+                            string reply = "{\"type\":\"aircanvas_response\",\"name\":\"" + Environment.MachineName + "\",\"port\":" + ServerPort + ",\"ip\":\"" + localIp + "\"}";
+                            byte[] replyBytes = Encoding.UTF8.GetBytes(reply);
+
+                            // Reply directly to sender endpoint
+                            try { udp.Send(replyBytes, replyBytes.Length, remoteEp); } catch { }
+
+                            // Also broadcast reply to subnet broadcast port
+                            try { udp.Send(replyBytes, replyBytes.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort)); } catch { }
+                        }
                     }
+                    catch (SocketException)
+                    {
+                        if (token.IsCancellationRequested) break;
+                    }
+                    catch { }
                 }
             }
             catch { }
+            finally
+            {
+                if (udp != null) { try { udp.Close(); } catch { } }
+            }
         }
 
         private void FixFirewallRules()
