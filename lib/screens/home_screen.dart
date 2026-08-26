@@ -11,6 +11,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/connection_provider.dart';
+import '../services/drawing_provider.dart';
+import 'drawing_screen.dart';
 import '../widgets/connection_status_bar.dart';
 import '../widgets/device_list_tile.dart';
 import '../widgets/manual_connect_dialog.dart';
@@ -597,48 +599,112 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // ==================== CONNECTED VIEW ====================
   Widget _buildConnectedView(ConnectionProvider connection) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.check_circle, color: Colors.green, size: 64),
-            const SizedBox(height: 20),
-            const Text(
-              'Connected!',
-              style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              connection.mode == ConnectionMode.server
-                  ? 'Connected to ${connection.connectedDeviceName}'
-                  : 'Connected to server at ${connection.serverIp}',
-              style: TextStyle(color: Colors.grey.shade400),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pushNamed('/drawing'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF6C63FF),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.check_circle, color: Colors.green, size: 28),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  connection.mode == ConnectionMode.server
+                      ? 'Connected: ${connection.connectedDeviceName}'
+                      : 'Connected to ${connection.serverIp}',
+                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              child: const Text('Open Drawing Pad', style: TextStyle(fontSize: 16)),
-            ),
-            const SizedBox(height: 16),
-            TextButton(
-              onPressed: () => connection.disconnect(),
-              child: Text(
-                'Disconnect',
-                style: TextStyle(color: Colors.grey.shade400),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Live drawing preview canvas for real-time stroke display
+          Consumer<DrawingProvider>(
+            builder: (context, drawing, _) {
+              return Container(
+                height: 300,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0A0A12),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF2A2A4A)),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      drawing.updateCanvasSize(constraints.maxWidth, constraints.maxHeight);
+                      return Stack(
+                        children: [
+                          Positioned.fill(
+                            child: CustomPaint(
+                              painter: DrawingPainter(drawingProvider: drawing),
+                              size: Size.infinite,
+                            ),
+                          ),
+                          if (drawing.strokes.isEmpty && drawing.currentStroke == null)
+                            Center(
+                              child: Text(
+                                connection.mode == ConnectionMode.server
+                                    ? 'Draw on your tablet/phone to see it live here!'
+                                    : 'Touch or stylus drawing mirror',
+                                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                              ),
+                            ),
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: IconButton(
+                              icon: const Icon(Icons.delete_outline, color: Colors.white70, size: 20),
+                              tooltip: 'Clear Canvas',
+                              onPressed: () => drawing.clearCanvas(),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.of(context).pushNamed('/drawing'),
+                  icon: const Icon(Icons.fullscreen),
+                  label: const Text('Full Screen Drawing Pad'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6C63FF),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ],
-        ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: () => connection.disconnect(),
+                icon: const Icon(Icons.link_off, color: Colors.redAccent),
+                label: const Text('Disconnect', style: TextStyle(color: Colors.redAccent)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.redAccent),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

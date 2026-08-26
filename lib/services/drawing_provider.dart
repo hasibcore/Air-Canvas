@@ -335,6 +335,66 @@ class DrawingProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Handle incoming remote input event (e.g. tablet strokes received on PC server)
+  void handleIncomingInputEvent(InputEvent event) {
+    final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
+    final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
+    final pos = Offset(event.x * w, event.y * h);
+
+    if (event.type == InputEventType.clear) {
+      _strokes.clear();
+      _currentStroke = null;
+      _isDrawing = false;
+      _resetSmoothingBuffers();
+      canvasNotifier.notify();
+      notifyListeners();
+      return;
+    }
+
+    if (event.type == InputEventType.pointerDown) {
+      _isDrawing = true;
+      final point = StrokePoint(
+        position: pos,
+        pressure: event.pressure,
+        timestamp: event.timestamp,
+        pointerType: event.pointerType,
+      );
+      _currentStroke = Stroke(settings: _brushSettings, startTime: event.timestamp);
+      _currentStroke!.addPoint(point);
+      _lastPosition = pos;
+      _lastPressure = event.pressure;
+      _resetSmoothingBuffers();
+      _positionBuffer.add(pos);
+      _pressureBuffer.add(event.pressure);
+      canvasNotifier.notify();
+      notifyListeners();
+    } else if (event.type == InputEventType.pointerMove) {
+      if (_currentStroke == null) {
+        _isDrawing = true;
+        _currentStroke = Stroke(settings: _brushSettings, startTime: event.timestamp);
+      }
+      final point = StrokePoint(
+        position: pos,
+        pressure: event.pressure,
+        timestamp: event.timestamp,
+        pointerType: event.pointerType,
+      );
+      _currentStroke!.addPoint(point);
+      _lastPosition = pos;
+      _lastPressure = event.pressure;
+      canvasNotifier.notify();
+    } else if (event.type == InputEventType.pointerUp || event.type == InputEventType.pointerCancel) {
+      if (_currentStroke != null) {
+        _strokes.add(_currentStroke!);
+        _currentStroke = null;
+      }
+      _isDrawing = false;
+      _resetSmoothingBuffers();
+      canvasNotifier.notify();
+      notifyListeners();
+    }
+  }
+
   /// ইনপুট ইভেন্ট জেনারেট ও callback এ পাঠানো
   void _emitInputEvent(
     InputEventType type,

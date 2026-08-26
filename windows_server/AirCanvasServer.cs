@@ -17,12 +17,37 @@ namespace AirCanvas
 {
     public class Program
     {
+        private static Mutex singleInstanceMutex = null;
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+
         [STAThread]
         public static void Main()
         {
+            const string mutexName = "AirCanvasServerSingleInstance_UniqueId";
+            bool isNewInstance;
+            singleInstanceMutex = new Mutex(true, mutexName, out isNewInstance);
+
+            if (!isNewInstance)
+            {
+                IntPtr hWnd = FindWindow(null, "AirCanvas Server — PC Graphics Tablet Receiver");
+                if (hWnd != IntPtr.Zero)
+                {
+                    ShowWindow(hWnd, 9); // SW_RESTORE
+                    SetForegroundWindow(hWnd);
+                }
+                return;
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
+            GC.KeepAlive(singleInstanceMutex);
         }
     }
 
@@ -336,7 +361,7 @@ namespace AirCanvas
             // 1. Draw live on in-app PC Canvas
             DrawOnAppCanvas(x, y, pressure, eventType);
 
-            // 2. Win32 Cursor injection for Photoshop/Krita/Paint
+            // 2. Win32 Cursor injection for Photoshop/Krita/Paint/OneNote/Whiteboard
             if (chkEnableInjection.Checked)
             {
                 try
@@ -345,19 +370,22 @@ namespace AirCanvas
                     int targetX = (int)(x * (screen.Width - 1));
                     int targetY = (int)(y * (screen.Height - 1));
 
+                    uint absX = (uint)((x * 65535.0) + 0.5);
+                    uint absY = (uint)((y * 65535.0) + 0.5);
+
                     SetCursorPos(targetX, targetY);
 
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
-                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN, absX, absY, 0, 0);
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
                     {
-                        mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, 0);
+                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, absX, absY, 0, 0);
                     }
                     else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
                     {
-                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP, absX, absY, 0, 0);
                     }
                 }
                 catch { }
@@ -372,19 +400,26 @@ namespace AirCanvas
             {
                 try
                 {
+                    if (eventType.Equals("clear", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ClearCanvas();
+                        return;
+                    }
+
                     float canvasX = (float)(x * pbCanvas.Width);
                     float canvasY = (float)(y * pbCanvas.Height);
                     PointF currentPt = new PointF(canvasX, canvasY);
 
-                    float penWidth = Math.Max(2.5f, (float)(pressure * 9.0f));
+                    float penWidth = Math.Max(2.0f, (float)(pressure * 10.0f));
+
+                    if (!hasDrawnOnCanvas)
+                    {
+                        canvasGraphics.Clear(Color.FromArgb(15, 23, 42));
+                        hasDrawnOnCanvas = true;
+                    }
 
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (!hasDrawnOnCanvas)
-                        {
-                            canvasGraphics.Clear(Color.FromArgb(15, 23, 42));
-                            hasDrawnOnCanvas = true;
-                        }
                         lastDrawPoint = currentPt;
                         using (Brush brush = new SolidBrush(Color.FromArgb(56, 189, 248))) // Sky 400
                         {
@@ -393,15 +428,16 @@ namespace AirCanvas
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (!lastDrawPoint.IsEmpty)
+                        if (lastDrawPoint.IsEmpty)
                         {
-                            using (Pen pen = new Pen(Color.FromArgb(56, 189, 248), penWidth))
-                            {
-                                pen.StartCap = LineCap.Round;
-                                pen.EndCap = LineCap.Round;
-                                pen.LineJoin = LineJoin.Round;
-                                canvasGraphics.DrawLine(pen, lastDrawPoint, currentPt);
-                            }
+                            lastDrawPoint = currentPt;
+                        }
+                        using (Pen pen = new Pen(Color.FromArgb(56, 189, 248), penWidth))
+                        {
+                            pen.StartCap = LineCap.Round;
+                            pen.EndCap = LineCap.Round;
+                            pen.LineJoin = LineJoin.Round;
+                            canvasGraphics.DrawLine(pen, lastDrawPoint, currentPt);
                         }
                         lastDrawPoint = currentPt;
                     }
@@ -821,6 +857,18 @@ namespace AirCanvas
             catch { }
         }
 
+        private static bool IsValidBinaryPacket(byte[] data)
+        {
+            if (data == null || data.Length != 13) return false;
+            if (data[0] > 5) return false;
+            int sum = 0;
+            for (int i = 0; i < 12; i++)
+            {
+                sum += data[i];
+            }
+            return (sum & 0xFF) == data[12];
+        }
+
         private void ProcessBinaryPacket(byte[] data, int count, NetworkStream stream)
         {
             if (count < 1) return;
@@ -828,42 +876,65 @@ namespace AirCanvas
             {
                 byte[] packet = data;
 
-                // Attempt decryption: encrypted packets won't start with a valid
-                // event type (0-5) or JSON brace '{'. Try each key until one
-                // produces recognizable output.
-                bool isRecognizable = (packet[0] <= 5 && packet.Length == 13) || packet[0] == (byte)'{';
-                if (!isRecognizable)
-                {
-                    byte[][] keysToTry = new byte[][] {
-                        sessionKeyBytes,
-                        lastClientPin != null ? Encoding.UTF8.GetBytes(lastClientPin) : null,
-                        Encoding.UTF8.GetBytes("1234")
-                    };
-                    bool decrypted = false;
-                    foreach (byte[] key in keysToTry)
-                    {
-                        if (key == null) continue;
-                        byte[] dec = Crypt(packet, key);
-                        if ((dec.Length == 13 && dec[0] <= 5) || (dec.Length > 0 && dec[0] == (byte)'{'))
-                        {
-                            packet = dec;
-                            decrypted = true;
-                            break;
-                        }
-                    }
-                    if (!decrypted) return; // All keys failed
-                }
-
-                // Route JSON messages (device_info, input in JSON mode, ping, etc.)
-                if (packet[0] == (byte)'{')
+                // 1. Direct check: is unencrypted JSON?
+                if (packet.Length > 0 && packet[0] == (byte)'{')
                 {
                     string json = Encoding.UTF8.GetString(packet);
                     ProcessJsonMessage(json, stream);
                     return;
                 }
 
-                // Validate as 13-byte binary input event
-                if (packet[0] > 5 || packet.Length < 6) return;
+                // 2. Direct check: is unencrypted valid binary packet?
+                bool isDirectValid = IsValidBinaryPacket(packet);
+
+                if (!isDirectValid)
+                {
+                    // Attempt decryption using available keys
+                    byte[][] keysToTry = new byte[][] {
+                        sessionKeyBytes,
+                        lastClientPin != null ? Encoding.UTF8.GetBytes(lastClientPin) : null,
+                        serverPin != null ? Encoding.UTF8.GetBytes(serverPin) : null,
+                        Encoding.UTF8.GetBytes("1234")
+                    };
+
+                    bool decrypted = false;
+                    foreach (byte[] key in keysToTry)
+                    {
+                        if (key == null || key.Length == 0) continue;
+                        byte[] dec = Crypt(packet, key);
+
+                        // Check if decrypted into JSON
+                        if (dec.Length > 0 && dec[0] == (byte)'{')
+                        {
+                            packet = dec;
+                            string json = Encoding.UTF8.GetString(packet);
+                            ProcessJsonMessage(json, stream);
+                            return;
+                        }
+
+                        // Check if decrypted into valid 13-byte binary packet
+                        if (IsValidBinaryPacket(dec))
+                        {
+                            packet = dec;
+                            decrypted = true;
+                            break;
+                        }
+                    }
+
+                    if (!decrypted && !isDirectValid)
+                    {
+                        if (packet.Length >= 6 && packet[0] <= 5)
+                        {
+                            // Fallback for non-checksum binary packets
+                        }
+                        else
+                        {
+                            return;
+                        }
+                    }
+                }
+
+                if (packet.Length < 6) return;
 
                 // Flutter InputEvent binary format:
                 // [type:1][x:2][y:2][pressure:1][pointerType:1][pointerId:1][tiltX:1][tiltY:1][buttons:1][version:1][checksum:1]
@@ -873,6 +944,13 @@ namespace AirCanvas
                 else if (typeByte == 1) eventType = "move";
                 else if (typeByte == 2) eventType = "up";
                 else if (typeByte == 3) eventType = "cancel";
+                else if (typeByte == 5) eventType = "clear";
+
+                if (eventType == "clear")
+                {
+                    InjectAndDrawInput(0, 0, 0, "clear");
+                    return;
+                }
 
                 // Big-endian uint16 / 65535.0 (normalized 0.0 to 1.0)
                 int xUint = (packet[1] << 8) | packet[2];
@@ -935,13 +1013,16 @@ namespace AirCanvas
 
         private void TestStroke()
         {
-            for (int i = 0; i <= 200; i += 5)
+            Task.Run(() =>
             {
-                double normX = 0.2 + (i / 300.0);
-                double normY = 0.5 + Math.Sin(i * 0.05) * 0.15;
-                DrawOnAppCanvas(normX, normY, 0.8, i == 0 ? "down" : (i == 200 ? "up" : "move"));
-                Thread.Sleep(10);
-            }
+                for (int i = 0; i <= 200; i += 5)
+                {
+                    double normX = 0.2 + (i / 300.0);
+                    double normY = 0.5 + Math.Sin(i * 0.05) * 0.15;
+                    InjectAndDrawInput(normX, normY, 0.8, i == 0 ? "down" : (i == 200 ? "up" : "move"));
+                    Thread.Sleep(10);
+                }
+            });
         }
 
         private void UpdateClientsUI()

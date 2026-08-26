@@ -20,14 +20,18 @@ void main() {
     };
 
     final connection = ConnectionProvider();
-    // Instantiate ServerInputHandler so it registers its listeners to ConnectionProvider
-    ServerInputHandler(connection);
+    final drawing = DrawingProvider();
+    // Instantiate ServerInputHandler and wire incoming remote strokes to DrawingProvider
+    final serverHandler = ServerInputHandler(connection);
+    serverHandler.onEventReceived = (event) {
+      drawing.handleIncomingInputEvent(event);
+    };
 
     runApp(
       MultiProvider(
         providers: [
           ChangeNotifierProvider<ConnectionProvider>.value(value: connection),
-          ChangeNotifierProvider(create: (_) => DrawingProvider()),
+          ChangeNotifierProvider<DrawingProvider>.value(value: drawing),
         ],
         child: const AirCanvasApp(),
       ),
