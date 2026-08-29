@@ -1073,7 +1073,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   const ListTile(
                     leading: Icon(Icons.info_outline, color: Color(0xFF6C63FF)),
                     title: Text('About', style: TextStyle(color: Colors.white)),
-                    subtitle: Text('$kAppName v1.0', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    subtitle: Text('$kAppName v1.4', style: TextStyle(color: Colors.grey, fontSize: 12)),
                   ),
                 ],
               );
