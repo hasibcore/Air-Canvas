@@ -27,7 +27,7 @@ import 'package:crypto/crypto.dart' as c;
 import 'package:pointycastle/export.dart' as pc;
 
 /// Web প্ল্যাটফর্মে dart:isolate সমর্থিত নয় — এই ফ্ল্যাগ দিয়ে নিরাপদ ফলব্যাক করা হয়।
-const bool kIsWeb = identical(0, 0.0);
+const bool _kIsWeb = identical(0, 0.0);
 
 /// একটি authenticated, replay-প্রতিরোধী চ্যানেল — একটি WebSocket কানেকশনের জন্য একটি।
 class SecureChannel {
@@ -265,7 +265,7 @@ Uint8List? unwrapSessionKey(List<int> wrapped, String pin, List<int> salt,
 Future<Uint8List> wrapSessionKeyAsync(
     List<int> sessionKey, String pin, List<int> salt,
     {int iterations = SecureChannel.pbkdf2Iterations, Uint8List? iv}) {
-  if (kIsWeb) {
+  if (_kIsWeb) {
     return Future.value(wrapSessionKey(sessionKey, pin, salt,
         iterations: iterations, iv: iv));
   }
@@ -277,7 +277,7 @@ Future<Uint8List> wrapSessionKeyAsync(
 Future<Uint8List?> unwrapSessionKeyAsync(
     List<int> wrapped, String pin, List<int> salt,
     {int iterations = SecureChannel.pbkdf2Iterations}) {
-  if (kIsWeb) {
+  if (_kIsWeb) {
     return Future.value(
         unwrapSessionKey(wrapped, pin, salt, iterations: iterations));
   }
