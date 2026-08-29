@@ -22,11 +22,15 @@ namespace AirCanvas
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+
         [STAThread]
         public static void Main()
         {
             try
             {
+                try { SetProcessDPIAware(); } catch { }
                 // Clean up any stale background instances
                 Process current = Process.GetCurrentProcess();
                 foreach (Process p in Process.GetProcessesByName("AirCanvas"))
@@ -868,12 +872,12 @@ namespace AirCanvas
                 try
                 {
                     Rectangle screen = Screen.PrimaryScreen.Bounds;
-                    int targetX = (int)(x * (screen.Width - 1));
-                    int targetY = (int)(y * (screen.Height - 1));
+                    int targetX = (int)Math.Round(x * (screen.Width - 1));
+                    int targetY = (int)Math.Round(y * (screen.Height - 1));
                     SetCursorPos(targetX, targetY);
 
-                    uint absX = (uint)((x * 65535.0) + 0.5);
-                    uint absY = (uint)((y * 65535.0) + 0.5);
+                    uint absX = (uint)Math.Round(x * 65535.0);
+                    uint absY = (uint)Math.Round(y * 65535.0);
 
                     bool isRightClick = (buttons & 2) != 0;
 

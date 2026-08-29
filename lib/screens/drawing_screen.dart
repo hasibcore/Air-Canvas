@@ -41,6 +41,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
   // Hint text localized helper (Bug 94)
   String get _tapToShowToolbarHint => 'Tap to show toolbar';
 
+  bool _lockAspectRatio = true;
+
   @override
   void initState() {
     super.initState();
@@ -112,36 +114,59 @@ class _DrawingScreenState extends State<DrawingScreen> {
       backgroundColor: const Color(0xFF0A0A12),
       body: Stack(
         children: [
-          // Drawing Canvas
+          // Drawing Canvas with 16:9 Aspect Ratio Sync (Prevents Aspect Ratio Distortion on PC)
           Positioned.fill(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                // Canvas size dynamically updates when constraints change (Bug 81)
-                if (_lastWidth != constraints.maxWidth || _lastHeight != constraints.maxHeight) {
-                  _lastWidth = constraints.maxWidth;
-                  _lastHeight = constraints.maxHeight;
+                final screenRatio = constraints.maxWidth / constraints.maxHeight;
+                const targetRatio = 16.0 / 9.0;
+                double canvasW = constraints.maxWidth;
+                double canvasH = constraints.maxHeight;
+
+                if (_lockAspectRatio) {
+                  if (screenRatio > targetRatio) {
+                    canvasH = constraints.maxHeight;
+                    canvasW = canvasH * targetRatio;
+                  } else {
+                    canvasW = constraints.maxWidth;
+                    canvasH = canvasW / targetRatio;
+                  }
+                }
+
+                if (_lastWidth != canvasW || _lastHeight != canvasH) {
+                  _lastWidth = canvasW;
+                  _lastHeight = canvasH;
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (mounted) {
-                      context.read<DrawingProvider>().updateCanvasSize(
-                            constraints.maxWidth,
-                            constraints.maxHeight,
-                          );
+                      context.read<DrawingProvider>().updateCanvasSize(canvasW, canvasH);
                     }
                   });
                 }
-                return Listener(
-                  behavior: HitTestBehavior.opaque,
-                  onPointerDown: _onPointerDown,
-                  onPointerMove: _onPointerMove,
-                  onPointerUp: _onPointerUp,
-                  onPointerCancel: _onPointerCancel,
-                  child: Container(
-                    color: const Color(0xFF0A0A12),
-                    child: CustomPaint(
-                      painter: DrawingPainter(
-                        drawingProvider: context.read<DrawingProvider>(),
+
+                return Center(
+                  child: SizedBox(
+                    width: canvasW,
+                    height: canvasH,
+                    child: Listener(
+                      behavior: HitTestBehavior.opaque,
+                      onPointerDown: _onPointerDown,
+                      onPointerMove: _onPointerMove,
+                      onPointerUp: _onPointerUp,
+                      onPointerCancel: _onPointerCancel,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0A0A12),
+                          border: _lockAspectRatio
+                              ? Border.all(color: const Color(0xFF3B82F6).withValues(alpha: 0.3), width: 1.5)
+                              : null,
+                        ),
+                        child: CustomPaint(
+                          painter: DrawingPainter(
+                            drawingProvider: context.read<DrawingProvider>(),
+                          ),
+                          size: Size.infinite,
+                        ),
                       ),
-                      size: Size.infinite,
                     ),
                   ),
                 );
