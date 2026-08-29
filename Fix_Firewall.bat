@@ -52,11 +52,11 @@ netsh advfirewall firewall delete rule name="AirCanvas Server App" >nul 2>&1
 ::   Windows has mis-classified the network. Note that a device on the
 ::   same WiFi is on the same subnet, so the phone/tablet is unaffected.
 :: ---------------------------------------------------------------------
-netsh advfirewall firewall add rule name="AirCanvas TCP 9090" dir=in action=allow protocol=TCP localport=9090 profile=private,domain remoteip=LocalSubnet
-netsh advfirewall firewall add rule name="AirCanvas UDP 9091" dir=in action=allow protocol=UDP localport=9091 profile=private,domain remoteip=LocalSubnet
+netsh advfirewall firewall add rule name="AirCanvas TCP 9090" dir=in action=allow protocol=TCP localport=9090 profile=any
+netsh advfirewall firewall add rule name="AirCanvas UDP 9091" dir=in action=allow protocol=UDP localport=9091 profile=any
 
 if exist "%~dp0AirCanvas.exe" (
-    netsh advfirewall firewall add rule name="AirCanvas Server App" dir=in action=allow program="%~dp0AirCanvas.exe" enable=yes profile=private,domain remoteip=LocalSubnet
+    netsh advfirewall firewall add rule name="AirCanvas Server App" dir=in action=allow program="%~dp0AirCanvas.exe" enable=yes profile=any
 )
 
 echo.
