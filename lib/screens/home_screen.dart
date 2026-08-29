@@ -5,6 +5,8 @@
 // 2. মোবাইল থেকে সার্ভার খুঁজে কানেক্ট করতে পারে
 // 3. ম্যানুয়ালি IP দিয়ে কানেক্ট করতে পারে
 
+import 'dart:async';
+import 'dart:io' show Platform, Process;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter/services.dart';
@@ -144,7 +146,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   borderRadius: BorderRadius.circular(12),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFF6C63FF).withOpacity(0.3),
+                      color: const Color(0xFF6C63FF).withValues(alpha: 0.3),
                       blurRadius: 10,
                       spreadRadius: 1,
                     ),
@@ -158,7 +160,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     errorBuilder: (context, error, stackTrace) => Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF6C63FF).withOpacity(0.15),
+                        color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Icon(
@@ -285,9 +287,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF6C63FF).withOpacity(0.15),
+                        color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFF6C63FF).withOpacity(0.3)),
+                        border: Border.all(color: const Color(0xFF6C63FF).withValues(alpha: 0.3)),
                       ),
                       child: Column(
                         children: [
@@ -320,9 +322,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.green.shade400.withOpacity(0.1),
+                      color: Colors.green.shade400.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.green.shade400.withOpacity(0.3)),
+                      border: Border.all(color: Colors.green.shade400.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       children: [
@@ -407,6 +409,61 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             title: 'Firewall Notice',
             description: 'Allow AirCanvas through Windows Firewall on private networks if prompted.',
           ),
+
+          // ==================== DRAWING APPS SECTION ====================
+          if (!kIsWeb && (defaultTargetPlatform == TargetPlatform.windows || defaultTargetPlatform == TargetPlatform.macOS || defaultTargetPlatform == TargetPlatform.linux)) ...[
+            const SizedBox(height: 28),
+            const Row(
+              children: [
+                Icon(Icons.palette, color: Color(0xFF6C63FF), size: 20),
+                SizedBox(width: 8),
+                Text(
+                  'Drawing Apps',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Quick-launch a drawing application on this PC',
+              style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildLaunchCard(
+                    icon: Icons.note_alt,
+                    label: 'OneNote',
+                    color: const Color(0xFF7B2D8E),
+                    onTap: _launchOneNote,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _buildLaunchCard(
+                    icon: Icons.slideshow,
+                    label: 'PowerPoint',
+                    color: const Color(0xFFD04423),
+                    onTap: _launchPowerPoint,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _buildLaunchCard(
+                    icon: Icons.brush,
+                    label: 'Drawing Studio',
+                    color: const Color(0xFF00B4D8),
+                    onTap: _launchDrawingStudio,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -636,7 +693,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   borderRadius: BorderRadius.circular(16),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      drawing.updateCanvasSize(constraints.maxWidth, constraints.maxHeight);
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (context.mounted) {
+                          drawing.updateCanvasSize(constraints.maxWidth, constraints.maxHeight);
+                        }
+                      });
                       return Stack(
                         children: [
                           Positioned.fill(
@@ -721,7 +782,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFF6C63FF).withOpacity(0.1),
+            color: const Color(0xFF6C63FF).withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, color: const Color(0xFF6C63FF), size: 20),
@@ -741,65 +802,173 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  // ==================== DRAWING APP LAUNCHERS ====================
+  Widget _buildLaunchCard({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 28),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _launchOneNote() {
+    if (kIsWeb) return;
+    try {
+      if (Platform.isWindows) {
+        unawaited(Process.run('cmd', ['/c', 'start', 'onenote:']).then((_) {
+          debugPrint('[Launch] OneNote opened');
+        }).catchError((Object e) {
+          debugPrint('[Launch] OneNote error: $e');
+        }));
+      }
+    } catch (e) {
+      debugPrint('[Launch] OneNote error: $e');
+    }
+  }
+
+  void _launchPowerPoint() {
+    if (kIsWeb) return;
+    try {
+      if (Platform.isWindows) {
+        unawaited(Process.run('cmd', ['/c', 'start', 'powerpnt']).then((_) {
+          debugPrint('[Launch] PowerPoint opened');
+        }).catchError((Object e) {
+          debugPrint('[Launch] PowerPoint error: $e');
+        }));
+      }
+    } catch (e) {
+      debugPrint('[Launch] PowerPoint error: $e');
+    }
+  }
+
+  Future<void> _launchDrawingStudio() async {
+    if (kIsWeb) return;
+    try {
+      final exeDir = Platform.resolvedExecutable;
+      final appDir = exeDir.substring(0, exeDir.lastIndexOf(Platform.pathSeparator));
+      final studioPath = '$appDir${Platform.pathSeparator}drawing_studio.html';
+      final uri = Uri.file(studioPath);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      } else if (Platform.isWindows) {
+        await Process.run('cmd', ['/c', 'start', '', studioPath]);
+      }
+      debugPrint('[Launch] Drawing Studio opened: $studioPath');
+    } catch (e) {
+      debugPrint('[Launch] Drawing Studio error: $e');
+      try {
+        if (Platform.isWindows) {
+          await Process.run('cmd', ['/c', 'start', '', 'drawing_studio.html']);
+        }
+      } catch (e2) {
+        debugPrint('[Launch] Drawing Studio fallback error: $e2');
+      }
+    }
+  }
+
   Future<String?> _promptForPin(BuildContext context) async {
     final TextEditingController pinController = TextEditingController();
     return showDialog<String>(
       context: context,
       barrierDismissible: false,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A1A2E),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text(
-            'Enter Pairing PIN',
-            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Enter the 4-digit pairing PIN displayed on the PC server screen.',
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+        // PIN এখন ৬ ডিজিট ও প্রতিবার সার্ভার স্টার্টে নতুন হয়।
+        // পুরো ৬ ডিজিট না দিলে Connect বাটন নিষ্ক্রিয় থাকে।
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final bool isComplete = pinController.text.length == kPairingPinLength;
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A1A2E),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text(
+                'Enter Pairing PIN',
+                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: pinController,
-                keyboardType: TextInputType.number,
-                maxLength: 4,
-                obscureText: true,
-                style: const TextStyle(color: Colors.white, fontSize: 20, letterSpacing: 8),
-                textAlign: TextAlign.center,
-                decoration: InputDecoration(
-                  counterText: '',
-                  hintText: '••••',
-                  hintStyle: TextStyle(color: Colors.grey.shade600, letterSpacing: 8),
-                  enabledBorder: OutlineInputBorder(
-                    borderSide: const BorderSide(color: Color(0xFF2A2A4A)),
-                    borderRadius: BorderRadius.circular(8),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Enter the $kPairingPinLength-digit pairing PIN shown on the PC server screen. '
+                    'It changes every time the server is started.',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
                   ),
-                  focusedBorder: OutlineInputBorder(
-                    borderSide: const BorderSide(color: Color(0xFF6C63FF)),
-                    borderRadius: BorderRadius.circular(8),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: pinController,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    maxLength: kPairingPinLength,
+                    obscureText: false,
+                    autofocus: true,
+                    onChanged: (_) => setDialogState(() {}),
+                    onSubmitted: (value) {
+                      if (value.length == kPairingPinLength) {
+                        Navigator.pop(context, value);
+                      }
+                    },
+                    style: const TextStyle(color: Colors.white, fontSize: 20, letterSpacing: 8),
+                    textAlign: TextAlign.center,
+                    decoration: InputDecoration(
+                      counterText: '',
+                      hintText: '•' * kPairingPinLength,
+                      hintStyle: TextStyle(color: Colors.grey.shade600, letterSpacing: 8),
+                      enabledBorder: OutlineInputBorder(
+                        borderSide: const BorderSide(color: Color(0xFF2A2A4A)),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: const BorderSide(color: Color(0xFF6C63FF)),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
                   ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
                 ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, null),
-              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context, pinController.text),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF6C63FF),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              child: const Text('Connect'),
-            ),
-          ],
+                ElevatedButton(
+                  onPressed: isComplete
+                      ? () => Navigator.pop(context, pinController.text)
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6C63FF),
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: const Color(0xFF2A2A4A),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text('Connect'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -811,13 +980,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       builder: (context) => ManualConnectDialog(
         ipController: _ipController,
         portController: _portController,
-        onConnect: (ip, port) async {
+        onConnect: (ip, port, pin) async {
           // context pop করার আগেই size নিন (pop করার পর context defunct হয়ে যায়)
           final size = MediaQuery.of(context).size;
           Navigator.pop(context);
           final success = await connection.connectToServer(
             ip,
             port: port,
+            pin: pin,
             onPinRequired: () => _promptForPin(context),
             screenWidth: size.width,
             screenHeight: size.height,

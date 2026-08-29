@@ -165,6 +165,64 @@ class DrawingProvider extends ChangeNotifier {
   final List<Offset> _positionBuffer = [];
   final List<double> _pressureBuffer = [];
 
+  // --- Pointer slot mapping ---
+  //
+  // Flutter এর `PointerEvent.pointer` একটা প্রসেস-গ্লোবাল কাউন্টার — অ্যাপ চালু
+  // থাকা অবস্থায় প্রতিটি নতুন টাচ/হোভার/স্ক্রলে ১ করে বাড়ে, কখনো রিসেট হয় না।
+  // মেনু ট্যাপ, স্ক্রল, বাটন চাপ — সবই গোনায় ধরা হয়। আগে এখানে
+  // `pointerId > 100` হলে ইভেন্ট ফেলে দেওয়া হতো, ফলে অ্যাপ কিছুক্ষণ ব্যবহারের
+  // পর (~১০০ বার আঙুল ছোঁয়ানোর পর) down/move/up তিনটাই সাইলেন্টলি ড্রপ হতো —
+  // অ্যাপ "connected" দেখাত কিন্তু কিছুই আঁকা হতো না।
+  //
+  // এখন প্রতিটি সক্রিয় পয়েন্টারকে ০..১৫ এর একটা ছোট স্লট দেওয়া হয়, pointer
+  // উঠে গেলে স্লট ছেড়ে দেওয়া হয়। তাই ওয়্যারের ১ বাইট pointerId কখনো ওভারফ্লো
+  // করে না (আগে input_event.dart `clamp(0, 255)` করত, মানে ২৫৫+ সব এক হয়ে যেত),
+  // আর multi-touch এ কোন আঙুল কোনটা সেটাও PC পাশে আলাদা করে বোঝা যায়।
+  static const int maxPointerSlots = 16;
+  final Map<int, int> _pointerSlots = <int, int>{};
+  final Map<int, Offset> _slotLastPosition = <int, Offset>{};
+
+  /// এই raw pointer এর স্লট, না থাকলে নতুন একটা দেয়।
+  ///
+  /// সব স্লট ব্যস্ত থাকলে সবচেয়ে পুরনোটা কেড়ে নেওয়া হয়, ব্যর্থ হওয়া হয় না।
+  /// কারণ pointer up/cancel কোনোভাবে মিস হলে (যেমন অ্যাপ ব্যাকগ্রাউন্ডে গেলে)
+  /// স্লট আটকে থাকতে পারে — তখন "ব্যর্থ" হলে ড্রয়িং চিরতরে বন্ধ হয়ে যেত,
+  /// অর্থাৎ পুরনো `pointerId > 100` বাগটাই ছোট আকারে ফিরে আসত।
+  int _acquireSlot(int rawPointerId) {
+    final existing = _pointerSlots[rawPointerId];
+    if (existing != null) return existing;
+
+    final used = _pointerSlots.values.toSet();
+    for (int slot = 0; slot < maxPointerSlots; slot++) {
+      if (!used.contains(slot)) {
+        _pointerSlots[rawPointerId] = slot;
+        return slot;
+      }
+    }
+
+    // Map টা insertion-ordered, তাই প্রথম key-ই সবচেয়ে পুরনো pointer।
+    final stalest = _pointerSlots.keys.first;
+    final reclaimed = _pointerSlots.remove(stalest)!;
+    _slotLastPosition.remove(reclaimed);
+    debugPrint('[Drawing] Reclaimed pointer slot $reclaimed from stale pointer $stalest');
+    _pointerSlots[rawPointerId] = reclaimed;
+    return reclaimed;
+  }
+
+  void _releaseSlot(int rawPointerId) {
+    final slot = _pointerSlots.remove(rawPointerId);
+    if (slot != null) _slotLastPosition.remove(slot);
+  }
+
+  /// সব pointer state ছেড়ে দেওয়া (canvas clear, dispose, রিমোট reset)।
+  void _releaseAllSlots() {
+    _pointerSlots.clear();
+    _slotLastPosition.clear();
+  }
+
+  /// UI/ডিবাগের জন্য — এখন কতগুলো পয়েন্টার সক্রিয় ধরে রাখা হয়েছে।
+  int get activePointerCount => _pointerSlots.length;
+
   // Canvas repaint notifier (prevents whole screen rebuilding during fast pointer movements)
   final CanvasRepaintNotifier canvasNotifier = CanvasRepaintNotifier();
 
@@ -211,12 +269,16 @@ class DrawingProvider extends ChangeNotifier {
     double tiltY = 0.0,
     int buttons = 0,
   }) {
-    if (pointerId < 0 || pointerId > 100) return; // Defensive pointerId check
+    if (pointerId < 0) return; // Defensive pointerId check
+    // Flutter এর গ্লোবাল pointer id কে ছোট স্লটে ম্যাপ করা — উপরের নোট দেখুন।
+    final slot = _acquireSlot(pointerId);
+    if (slot < 0) return; // ১৬টা স্লটই ব্যস্ত
     _isDrawing = true;
 
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
     final now = DateTime.now();
 
+    _resetSmoothingBuffers();
     final point = StrokePoint(
       position: position,
       pressure: clampedPressure,
@@ -228,15 +290,14 @@ class DrawingProvider extends ChangeNotifier {
     _currentStroke!.addPoint(point);
     _lastPosition = position;
     _lastPressure = clampedPressure;
+    _slotLastPosition[slot] = position;
 
-    // Clear and init smoothing buffers
-    _resetSmoothingBuffers();
     _positionBuffer.add(position);
     _pressureBuffer.add(clampedPressure);
 
     // ইনপুট ইভেন্ট জেনারেট ও পাঠানো
     _emitInputEvent(
-      InputEventType.pointerDown, position, clampedPressure, pointerType, pointerId, now,
+      InputEventType.pointerDown, position, clampedPressure, pointerType, slot, now,
       tiltX: tiltX, tiltY: tiltY, buttons: buttons,
     );
 
@@ -254,7 +315,10 @@ class DrawingProvider extends ChangeNotifier {
     int buttons = 0,
   }) {
     if (!_isDrawing || _currentStroke == null) return;
-    if (pointerId < 0 || pointerId > 100) return; // Defensive pointerId check
+    if (pointerId < 0) return; // Defensive pointerId check
+    // down মিস হয়ে থাকলেও স্লট দিয়ে দেওয়া হয় — নাহলে পুরো স্ট্রোক হারিয়ে যেত।
+    final slot = _pointerSlots[pointerId] ?? _acquireSlot(pointerId);
+    if (slot < 0) return;
 
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
     final now = DateTime.now();
@@ -278,10 +342,11 @@ class DrawingProvider extends ChangeNotifier {
     _currentStroke!.addPoint(point);
     _lastPosition = smoothedPosition;
     _lastPressure = smoothedPressure;
+    _slotLastPosition[slot] = smoothedPosition;
 
     // ইনপুট ইভেন্ট পাঠানো
     _emitInputEvent(
-      InputEventType.pointerMove, smoothedPosition, smoothedPressure, pointerType, pointerId, now,
+      InputEventType.pointerMove, smoothedPosition, smoothedPressure, pointerType, slot, now,
       tiltX: tiltX, tiltY: tiltY, buttons: buttons,
     );
 
@@ -290,43 +355,61 @@ class DrawingProvider extends ChangeNotifier {
   }
 
   /// টাচ/পেন আপ - স্ট্রোক শেষ
+  ///
+  /// এখানে আগে `if (!_isDrawing || _currentStroke == null) return;` দিয়ে শুরু
+  /// হতো। কিন্তু down টা কোনো কারণে ড্রপ হলে বা মাঝপথে canvas clear হলে
+  /// pointerUp নেটওয়ার্কে যেতই না — PC পাশে MOUSEEVENTF_LEFTUP আসত না, মাউস
+  /// চাপা অবস্থায় আটকে থেকে স্ক্রিনজুড়ে দাগ টানত। তাই এখন যে pointer এর জন্য
+  /// একবার down পাঠানো হয়েছে, তার up সব সময় যায় — স্ট্রোক state যা-ই থাকুক।
   void onPointerUp({
     PointerType pointerType = PointerType.finger,
     int pointerId = 0,
     int buttons = 0,
   }) {
-    if (!_isDrawing || _currentStroke == null) return;
-    if (pointerId < 0 || pointerId > 100) return; // Defensive pointerId check
+    if (pointerId < 0) return; // Defensive pointerId check
 
-    _isDrawing = false;
+    final slot = _pointerSlots[pointerId];
+    final slotPosition = slot == null ? null : _slotLastPosition[slot];
+    _releaseSlot(pointerId); // early return এর আগেই স্লট ছাড়া — নাহলে লিক হতো
+
     final now = DateTime.now();
+    final upPosition = _lastPosition ??
+        slotPosition ??
+        (_currentStroke != null && _currentStroke!.points.isNotEmpty
+            ? _currentStroke!.points.last.position
+            : null);
 
-    // Add final point using _lastPosition if available to ensure stroke completeness
-    if (_lastPosition != null && _currentStroke!.points.isNotEmpty) {
-      final lastPoint = StrokePoint(
-        position: _lastPosition!,
-        pressure: _lastPressure,
-        timestamp: now,
-        pointerType: pointerType,
-      );
-      _currentStroke!.addPoint(lastPoint);
-    }
+    if (_isDrawing && _currentStroke != null) {
+      _isDrawing = false;
 
-    // স্ট্রোক সেভ করা (minimum 1 point থাকলে)
-    if (_currentStroke!.points.isNotEmpty) {
-      _strokes.add(_currentStroke!);
-      // Limit strokes history length to prevent memory leak
-      if (_strokes.length > 500) {
-        _strokes.removeAt(0);
+      // Add final point using upPosition if available to ensure stroke completeness
+      if (upPosition != null && _currentStroke!.points.isNotEmpty) {
+        final lastPoint = StrokePoint(
+          position: upPosition,
+          pressure: _lastPressure,
+          timestamp: now,
+          pointerType: pointerType,
+        );
+        _currentStroke!.addPoint(lastPoint);
       }
-    }
-    _currentStroke = null;
-    _resetSmoothingBuffers();
 
-    // ইনপুট ইভেন্ট পাঠানো
-    if (_lastPosition != null) {
+      // স্ট্রোক সেভ করা (minimum 1 point থাকলে)
+      if (_currentStroke!.points.isNotEmpty) {
+        _strokes.add(_currentStroke!);
+        // Limit strokes history length to prevent memory leak
+        if (_strokes.length > 500) {
+          _strokes.removeAt(0);
+        }
+      }
+      _currentStroke = null;
+      _resetSmoothingBuffers();
+    }
+
+    // ইনপুট ইভেন্ট পাঠানো — এই pointer এর down গেছে মানে up-ও যেতেই হবে,
+    // নাহলে PC তে বাটন চাপা থেকে যায়।
+    if (slot != null) {
       _emitInputEvent(
-        InputEventType.pointerUp, _lastPosition!, 0.0, pointerType, pointerId, now,
+        InputEventType.pointerUp, upPosition ?? Offset.zero, 0.0, pointerType, slot, now,
         buttons: buttons,
       );
     }
@@ -353,6 +436,7 @@ class DrawingProvider extends ChangeNotifier {
 
     if (event.type == InputEventType.pointerDown) {
       _isDrawing = true;
+      _resetSmoothingBuffers();
       final point = StrokePoint(
         position: pos,
         pressure: event.pressure,
@@ -363,7 +447,6 @@ class DrawingProvider extends ChangeNotifier {
       _currentStroke!.addPoint(point);
       _lastPosition = pos;
       _lastPressure = event.pressure;
-      _resetSmoothingBuffers();
       _positionBuffer.add(pos);
       _pressureBuffer.add(event.pressure);
       canvasNotifier.notify();
@@ -497,5 +580,14 @@ class DrawingProvider extends ChangeNotifier {
 
     canvasNotifier.notify();
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    // pointer slot map ও canvas notifier ছেড়ে দেওয়া — নাহলে hot restart এর পর
+    // পুরনো স্লট ধরে থাকা state নিয়ে ভুল pointerId ওয়্যারে যেতে পারত।
+    _releaseAllSlots();
+    canvasNotifier.dispose();
+    super.dispose();
   }
 }

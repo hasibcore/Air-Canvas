@@ -10,10 +10,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/input_event.dart';
+import 'secure_channel.dart';
 
 enum ConnectionMode { server, client }
 
@@ -40,6 +42,10 @@ class DiscoveredDevice {
   }) : discoveredAt = discoveredAt ?? DateTime.now();
 }
 
+/// পেয়ারিং PIN-এর দৈর্ঘ্য। C# সার্ভারের GeneratePairingPin() এর সাথে একই মান রাখতে হবে।
+/// ৪ থেকে ৬ করা হয়েছে কারণ ৪ ডিজিটে মাত্র ১০,০০০ সম্ভাবনা।
+const int kPairingPinLength = 6;
+
 class ConnectionProvider extends ChangeNotifier {
   static const int defaultServerPort = 9090;
   static const int defaultDiscoveryPort = 9091;
@@ -59,6 +65,13 @@ class ConnectionProvider extends ChangeNotifier {
   String? _pairingPin;
   bool _isAuthenticated = false;
 
+  // --- Brute-force throttle (server mode) ---
+  // পরপর কয়েকবার ভুল PIN এলে কিছুক্ষণ সব auth চেষ্টা প্রত্যাখ্যান করা হয়।
+  int _consecutiveAuthFailures = 0;
+  DateTime? _authLockoutUntil;
+  static const int _authFailuresBeforeLockout = 5;
+  static const Duration _authLockoutDuration = Duration(seconds: 30);
+
   // --- Settings ---
   bool _hasStylusSupportSetting = false;
   double _maxPressureSetting = 1.0;
@@ -77,10 +90,21 @@ class ConnectionProvider extends ChangeNotifier {
   Timer? _reconnectTimer;
   bool _reconnectInProgress = false;
   Timer? _pingTimer;
+  int _lastReportedRejects = 0;
+
+  /// secure channel না থাকায় যতগুলো ইনপুট প্যাকেট পাঠানো যায়নি।
+  int _unsealedDropCount = 0;
+
   int _lastDataSentOrReceivedTime = 0;
   Completer<bool>? _authCompleter;
   Future<String?> Function()? _clientPinCallback;
-  List<int>? _encryptionKey;
+
+  /// auth সফল হওয়ার পর এই চ্যানেল দিয়েই সব ফ্রেম যায়/আসে।
+  /// null মানে এখনো handshake শেষ হয়নি — তখন কেবল প্লেইনটেক্সট auth মেসেজ চলে।
+  /// আগে এখানে XOR key (`_encryptionKey`) ছিল, যা এনক্রিপশন নয় বরং obfuscation।
+  SecureChannel? _channel;
+
+  /// সার্ভার মোডে এই সেশনের জন্য তৈরি করা ৩২ বাইট session key।
   List<int>? _sessionKey;
 
   ConnectionProvider() {
@@ -144,13 +168,10 @@ class ConnectionProvider extends ChangeNotifier {
     }
   }
 
-  List<int> _crypt(List<int> data, List<int> key) {
-    final result = List<int>.filled(data.length, 0);
-    for (int i = 0; i < data.length; i++) {
-      result[i] = data[i] ^ key[i % key.length];
-    }
-    return result;
-  }
+  /// PIN তুলনা constant-time এ — timing দিয়ে ডিজিট-বাই-ডিজিট অনুমান আটকায়।
+  /// C# সার্ভারের FixedTimeEquals এর সমতুল্য।
+  bool _constantTimeEquals(String a, String b) =>
+      SecureChannel.constantTimeEquals(utf8.encode(a), utf8.encode(b));
 
   // --- Callbacks ---
   void Function(InputEvent)? onInputEventReceived;
@@ -170,6 +191,12 @@ class ConnectionProvider extends ChangeNotifier {
   ServerConfig get serverConfig => _serverConfig;
   List<DiscoveredDevice> get discoveredDevices => _discoveredDevices;
   int get latencyMs => _latencyMs;
+
+  /// MAC/replay চেকে বাতিল হওয়া ফ্রেমের সংখ্যা। স্ট্রোক কেটে কেটে আসছে কেন —
+  /// ক্রিপ্টো ফ্রেম ড্রপ হচ্ছে নাকি WiFi/রেন্ডারিং ধীর — সেটা আলাদা করতে কাজে লাগে।
+  /// ০ থাকা মানে ড্রপের কারণ ক্রিপ্টো নয়।
+  int get rejectedFrames => _channel?.rejectedFrames ?? 0;
+
   String? get pairingPin => _pairingPin;
   bool get isAuthenticated => _isAuthenticated;
   bool get isConnected => _state == ConnectionState.connected;
@@ -186,13 +213,18 @@ class ConnectionProvider extends ChangeNotifier {
       _setState(ConnectionState.discovering);
       _errorMessage = '';
       _isAuthenticated = false;
-      _encryptionKey = null; // নতুন সেশনের জন্য পুরনো এনক্রিপশন কী রিসেট করুন
+      _channel = null; // নতুন সেশনের জন্য পুরনো চ্যানেল রিসেট
 
-      // Default Pairing PIN: 1234 (consistent with C# server)
-      _pairingPin = '1234';
+      // প্রতিবার সার্ভার স্টার্টে নতুন র‍্যান্ডম ৬-ডিজিট PIN।
+      // আগে hardcoded '1234' ছিল — পাবলিক রিপোতে কমিট করা মান কোনো secret নয়,
+      // ফলে PIN যাচাই থাকলেও যে কেউ কানেক্ট করতে পারত।
       final rand = Random.secure();
-      _sessionKey = List<int>.generate(32, (i) => rand.nextInt(256));
-      debugPrint('[Server] Using pairing PIN: $_pairingPin');
+      _pairingPin =
+          List<int>.generate(kPairingPinLength, (_) => rand.nextInt(10)).join();
+      _sessionKey = null; // প্রতিটি সফল auth-এ নতুন session key তৈরি হবে
+      _consecutiveAuthFailures = 0;
+      _authLockoutUntil = null;
+      debugPrint('[Server] New pairing PIN generated (shown in UI)');
 
       // লোকাল IP বের করা
       _localIp = await _getLocalIpAddress();
@@ -230,7 +262,7 @@ class ConnectionProvider extends ChangeNotifier {
         }
         _socket = ws;
         _isAuthenticated = false;
-        _encryptionKey = null; // নতুন ক্লায়েন্টের জন্য পুরনো কী রিসেট
+        _channel = null; // নতুন ক্লায়েন্টের জন্য পুরনো চ্যানেল রিসেট
         debugPrint('[Server] ক্লায়েন্ট কানেক্টেড');
 
         // অথেন্টিকেশন চ্যালেঞ্জ পাঠানো
@@ -242,7 +274,7 @@ class ConnectionProvider extends ChangeNotifier {
           onDone: () {
             debugPrint('[Server] ক্লায়েন্ট ডিসকানেক্টেড');
             _isAuthenticated = false;
-            _encryptionKey = null; // ডিসকানেক্টে কী রিসেট, নাহলে পরের ক্লায়েন্ট ভুল কী পাবে
+            _channel = null; // ডিসকানেক্টে চ্যানেল রিসেট, নাহলে পরের ক্লায়েন্ট ভুল key পাবে
             _setState(ConnectionState.discovering);
             _connectedDeviceName = '';
             _remoteDeviceInfo = null;
@@ -260,57 +292,136 @@ class ConnectionProvider extends ChangeNotifier {
     }
   }
 
+  /// PIN মিলে যাওয়ার পর সার্ভার পাশের কাজ — নতুন session key বানিয়ে PIN-derived
+  /// key এর নিচে মুড়ে ক্লায়েন্টকে পাঠানো, তারপর sealed চ্যানেল চালু করা।
+  ///
+  /// PBKDF2 অংশটা আলাদা isolate-এ, তাই এটা async। এই ফাঁকে ক্লায়েন্ট বদলে গেলে
+  /// (নতুন ডিভাইস কানেক্ট) ফলাফল ফেলে দেওয়া হয়, নাহলে নতুন ক্লায়েন্টের চ্যানেল
+  /// পুরনো key দিয়ে ওভাররাইট হয়ে যেত।
+  Future<void> _completeServerHandshake() async {
+    final socketAtStart = _socket;
+    final pin = _pairingPin;
+    if (socketAtStart == null || pin == null) return;
+
+    final key = SecureChannel.generateSessionKey();
+    final salt = SecureChannel.generateSalt();
+
+    final Uint8List wrapped;
+    try {
+      wrapped = await wrapSessionKeyAsync(key, pin, salt);
+    } catch (e) {
+      debugPrint('[Server] Session key wrap failed: $e');
+      _socket?.close(WebSocketStatus.internalServerError, 'Key exchange failed');
+      return;
+    }
+
+    if (!identical(_socket, socketAtStart)) {
+      debugPrint('[Server] Discarded handshake for a client that went away');
+      return;
+    }
+
+    _sessionKey = key;
+    _sendToClient({
+      'type': 'auth_success',
+      'kx': 'v2',
+      'salt': base64Encode(salt),
+      'iterations': SecureChannel.pbkdf2Iterations,
+      'wrapped_key': base64Encode(wrapped),
+    });
+
+    // এর পর থেকে দুই দিকের সব ফ্রেম AES-256-CBC + HMAC-SHA256 দিয়ে
+    _channel = SecureChannel(key, isServer: true);
+    debugPrint('[Server] Client authenticated successfully');
+    _startLatencyMeasurement();
+  }
+
   void _handleServerReceive(dynamic data) {
     _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
     try {
       if (!_isAuthenticated) {
-        if (data is String) {
-          final json = jsonDecode(data) as Map<String, dynamic>;
-          if (json['type'] == 'auth_response') {
+        // auth হওয়ার আগে কেবল auth_response গ্রহণযোগ্য।
+        // অন্য যেকোনো ফ্রেম (বাইনারি ইনপুট প্যাকেট সহ) এলে কানেকশন বন্ধ —
+        // C# সার্ভারের সাথে একই আচরণ।
+        final lockedOut = _authLockoutUntil != null &&
+            DateTime.now().isBefore(_authLockoutUntil!);
+
+        if (!lockedOut && data is String) {
+          Map<String, dynamic>? json;
+          try {
+            json = jsonDecode(data) as Map<String, dynamic>;
+          } catch (_) {
+            json = null;
+          }
+          if (json != null && json['type'] == 'auth_response') {
             final pin = json['pin'] as String?;
-            if (pin == _pairingPin) {
+            if (pin != null && _pairingPin != null && _constantTimeEquals(pin, _pairingPin!)) {
               _isAuthenticated = true;
-              // Temporarily set encryption key to PIN to securely send the new session key
-              _encryptionKey = utf8.encode(_pairingPin!);
-              _sendToClient({
-                'type': 'auth_success',
-                'session_key': base64Encode(_sessionKey!),
-              });
-              // Rotate to the new session key for all subsequent packets
-              _encryptionKey = _sessionKey;
-              debugPrint('[Server] Client authenticated successfully');
-              _startLatencyMeasurement();
-            } else {
-              _sendToClient({'type': 'auth_fail', 'reason': 'Incorrect pairing PIN'});
-              debugPrint('[Server] Client authentication failed (Incorrect PIN: $pin)');
-              _socket?.close(WebSocketStatus.normalClosure, 'Auth failed');
+              _consecutiveAuthFailures = 0;
+              _authLockoutUntil = null;
+
+              // session key কখনো প্লেইনটেক্সটে যায় না। PIN + random salt থেকে
+              // PBKDF2 দিয়ে wrapping key, তার নিচে key টা sealed হয়ে যায়।
+              // আগে key টা কেবল PIN দিয়ে XOR করা হতো — মানে PIN জানলেই key,
+              // আর PIN ছোট হওয়ায় আড়ি পাতা কেউ সেকেন্ডেই brute-force করতে পারত।
+              //
+              // প্রতিবার auth সফল হলে নতুন key — C# সার্ভারের মতোই। সার্ভার
+              // স্টার্টের key পুনর্ব্যবহার করলে পুরনো সেশনের ফ্রেম নতুন সেশনে
+              // replay করা যেত, কারণ নতুন চ্যানেলে seq কাউন্টার শূন্য থেকে শুরু।
+              //
+              // wrap করার PBKDF2-টা আলাদা isolate-এ, নাহলে ডেস্কটপ UI ওই
+              // সময়টা জমে থাকে আর ইউজার ভাবে কানেক্ট হয়নি।
+              unawaited(_completeServerHandshake());
+              return;
             }
+          }
+        }
+
+        if (lockedOut) {
+          _sendToClient({
+            'type': 'auth_fail',
+            'reason': 'Too many failed attempts, try again later',
+          });
+        } else {
+          // ভুল PIN বা auth-এর আগে অন্য কিছু পাঠানো — দুটোই reject
+          _consecutiveAuthFailures++;
+          if (_consecutiveAuthFailures >= _authFailuresBeforeLockout) {
+            _authLockoutUntil = DateTime.now().add(_authLockoutDuration);
+            _consecutiveAuthFailures = 0;
+            debugPrint('[Server] Auth locked out for '
+                '${_authLockoutDuration.inSeconds}s after repeated failures');
+          }
+          _sendToClient({'type': 'auth_fail', 'reason': 'Incorrect pairing PIN'});
+          debugPrint('[Server] Client authentication rejected (pre-auth frame or wrong PIN)');
+        }
+        _socket?.close(WebSocketStatus.normalClosure, 'Auth failed');
+        return;
+      }
+
+      // auth-এর পর সব বাইনারি ফ্রেম sealed — MAC না মিললে ভিতরে কী আছে দেখাই হয় না।
+      if (data is List<int>) {
+        if (_channel == null) return;
+        final payload = _channel!.open(data);
+        if (payload == null) {
+          // tamper / replay / ভুল key — ফ্রেম ড্রপ, কানেকশন টেকে
+          // (WiFi-তে নষ্ট ফ্রেম আসা স্বাভাবিক)
+          return;
+        }
+        if (payload.length == InputEvent.binaryPacketLength) {
+          onInputEventReceived?.call(InputEvent.fromBinary(payload));
+        } else {
+          try {
+            _handleServerReceiveJson(
+                jsonDecode(utf8.decode(payload)) as Map<String, dynamic>);
+          } catch (e) {
+            debugPrint('[Server] Failed to decode sealed payload: $e');
           }
         }
         return;
       }
 
-      dynamic decryptedData = data;
-      if (_encryptionKey != null && data is List<int>) {
-        decryptedData = _crypt(data, _encryptionKey!);
-      }
-
-      if (decryptedData is List<int>) {
-        // Binary mode (InputEvent.binaryPacketLength bytes event packet)
-        if (decryptedData.length == InputEvent.binaryPacketLength) {
-          final event = InputEvent.fromBinary(decryptedData);
-          onInputEventReceived?.call(event);
-        } else {
-          try {
-            final str = utf8.decode(decryptedData);
-            _handleServerReceiveJson(jsonDecode(str) as Map<String, dynamic>);
-          } catch (e, stackTrace) {
-            debugPrint('[Server] Failed to decode decrypted packet: $e\n$stackTrace');
-          }
-        }
-      } else if (decryptedData is String) {
-        _handleServerReceiveJson(jsonDecode(decryptedData) as Map<String, dynamic>);
-      }
+      // auth-এর পর প্লেইনটেক্সট আর গ্রহণযোগ্য নয় — নাহলে যে কেউ MAC ছাড়াই
+      // ইনপুট পাঠাতে পারত, অর্থাৎ এনক্রিপশনটাই optional হয়ে যেত।
+      debugPrint('[Server] Dropped unsealed frame after authentication');
     } catch (e, stackTrace) {
       debugPrint('[Server] ডেটা পার্স ত্রুটি: $e\n$stackTrace');
     }
@@ -361,10 +472,10 @@ class ConnectionProvider extends ChangeNotifier {
     if (_socket != null) {
       final encoded = data is String ? data : jsonEncode(data);
       try {
-        if (_encryptionKey != null) {
-          final rawBytes = utf8.encode(encoded);
-          _socket!.add(_crypt(rawBytes, _encryptionKey!));
+        if (_channel != null) {
+          _socket!.add(_channel!.seal(utf8.encode(encoded)));
         } else {
+          // কেবল handshake মেসেজ (auth_challenge / auth_fail / auth_success)
           _socket!.add(encoded);
         }
         _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
@@ -377,7 +488,7 @@ class ConnectionProvider extends ChangeNotifier {
   // ==================== CLIENT MODE ====================
 
   /// সার্ভার খুঁজে বের করা (UDP Discovery)
-  Future<void> startDiscovery({int durationSeconds = 5}) async {
+  Future<void> startDiscovery({int durationSeconds = 10}) async {
     _mode = ConnectionMode.client;
     _discoveredDevices.clear();
     _setState(ConnectionState.discovering);
@@ -476,7 +587,7 @@ class ConnectionProvider extends ChangeNotifier {
     _clientUdpSocket?.close();
     _clientUdpSocket = null;
     if (_state == ConnectionState.discovering && _discoveredDevices.isEmpty) {
-      _errorMessage = 'কোনো ডিভাইস পাওয়া যায়নি। একই WiFi-তে আছেন তো?';
+      _errorMessage = 'কোনো ডিভাইস পাওয়া যায়নি। "Manual Connect" বাটন দিয়ে PC-এর IP দিয়ে কানেক্ট করুন।';
       _setState(ConnectionState.error);
     }
   }
@@ -488,6 +599,7 @@ class ConnectionProvider extends ChangeNotifier {
     String ip, {
     int port = defaultServerPort,
     required Future<String?> Function() onPinRequired,
+    String? pin,
     double? screenWidth,
     double? screenHeight,
     bool isReconnecting = false,
@@ -506,7 +618,10 @@ class ConnectionProvider extends ChangeNotifier {
       _clientPinCallback = onPinRequired;
       _authCompleter = Completer<bool>();
       _isAuthenticated = false;
-      _encryptionKey = null; // প্রতিটি নতুন কানেকশনে পুরনো কী রিসেট
+      _channel = null; // প্রতিটি নতুন কানেকশনে পুরনো চ্যানেল রিসেট
+      if (!isReconnecting) {
+        _lastSuccessfulPin = (pin != null && pin.trim().isNotEmpty) ? pin.trim() : null;
+      }
 
       if (screenWidth != null) _clientScreenWidth = screenWidth;
       if (screenHeight != null) _clientScreenHeight = screenHeight;
@@ -531,8 +646,20 @@ class ConnectionProvider extends ChangeNotifier {
         },
       );
 
-      // Wait for authentication challenge to complete
-      final success = await _authCompleter!.future;
+      // হ্যান্ডশেক শেষ হওয়ার অপেক্ষা।
+      //
+      // আগে এখানে কোনো টাইমআউট ছিল না। সার্ভার TCP কানেকশন নিলেও যদি
+      // auth_challenge না পাঠায় (ভুল পোর্টে অন্য কোনো সার্ভিস, অথবা সার্ভার
+      // হ্যান্ডশেকের মাঝপথে আটকে যাওয়া), তাহলে অ্যাপ চিরকাল "connecting"
+      // স্পিনারে বসে থাকত — কোনো এরর মেসেজ ছাড়াই। PBKDF2 ফোনে কয়েক সেকেন্ড
+      // নিতে পারে, তাই সীমাটা উদার রাখা হলো।
+      final success = await _authCompleter!.future
+          .timeout(const Duration(seconds: 25), onTimeout: () {
+        _errorMessage = 'সার্ভার হ্যান্ডশেকের উত্তর দিচ্ছে না। '
+            'পিসিতে AirCanvas সার্ভার চালু আছে কি, আর পোর্ট $port ঠিক আছে কি?';
+        debugPrint('[Client] Handshake timed out after 25s');
+        return false;
+      });
       if (success) {
         _startLatencyMeasurement();
         _setState(ConnectionState.connected);
@@ -574,7 +701,7 @@ class ConnectionProvider extends ChangeNotifier {
         _setState(ConnectionState.error);
       }
       if (_authCompleter != null && !_authCompleter!.isCompleted) {
-        _authCompleter!.complete(false);
+        _completeAuth(false);
       }
       return false;
     }
@@ -583,20 +710,35 @@ class ConnectionProvider extends ChangeNotifier {
   void _handleClientReceive(dynamic data) {
     _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
     try {
-      dynamic decryptedData = data;
-      if (_encryptionKey != null && data is List<int>) {
-        decryptedData = _crypt(data, _encryptionKey!);
+      if (data is List<int>) {
+        // handshake শেষ হওয়ার আগে বাইনারি ফ্রেম আসার কথা নয়
+        if (_channel == null) {
+          debugPrint('[Client] Dropped binary frame received before key exchange');
+          return;
+        }
+        final payload = _channel!.open(data);
+        if (payload == null) {
+          debugPrint('[Client] Dropped frame that failed MAC/replay check');
+          return;
+        }
+        try {
+          _handleClientReceiveJson(
+              jsonDecode(utf8.decode(payload)) as Map<String, dynamic>);
+        } catch (e) {
+          debugPrint('[Client] Failed to decode sealed payload: $e');
+        }
+        return;
       }
 
-      if (decryptedData is List<int>) {
-        try {
-          final str = utf8.decode(decryptedData);
-          _handleClientReceiveJson(jsonDecode(str) as Map<String, dynamic>);
-        } catch (e, stackTrace) {
-          debugPrint('[Client] Failed to decode decrypted packet: $e\n$stackTrace');
+      if (data is String) {
+        final json = jsonDecode(data) as Map<String, dynamic>;
+        // auth শেষ হওয়ার পর প্লেইনটেক্সট আর গ্রহণযোগ্য নয় — নাহলে আক্রমণকারী
+        // অথেন্টিকেশনের পরেও sealed চ্যানেল বাইপাস করে মেসেজ ঢোকাতে পারত।
+        if (_channel != null) {
+          debugPrint('[Client] Dropped unsealed frame after key exchange');
+          return;
         }
-      } else if (decryptedData is String) {
-        _handleClientReceiveJson(jsonDecode(decryptedData) as Map<String, dynamic>);
+        _handleClientReceiveJson(json);
       }
     } catch (e, stackTrace) {
       debugPrint('[Client] ডেটা পার্স ত্রুটি: $e\n$stackTrace');
@@ -614,54 +756,35 @@ class ConnectionProvider extends ChangeNotifier {
               'type': 'auth_response',
               'pin': _lastSuccessfulPin,
             });
-            _encryptionKey = utf8.encode(_lastSuccessfulPin!); // Temporarily use PIN for auth_success decryption
           } else if (_clientPinCallback != null) {
             _clientPinCallback!().then((pin) {
               if (pin != null) {
-                _lastSuccessfulPin = pin; // Store provisionally, clear if auth_fail
+                // provisionally রাখা হচ্ছে — auth_fail এলে মুছে ফেলা হয়।
+                // auth_success এর wrapped key খুলতে এই PIN দরকার।
+                _lastSuccessfulPin = pin;
                 _sendToServer({
                   'type': 'auth_response',
                   'pin': pin,
                 });
-                _encryptionKey = utf8.encode(pin); // Temporarily use PIN for auth_success decryption
               } else {
                 _errorMessage = 'অথেন্টিকেশন বাতিল করা হয়েছে।';
-                _authCompleter?.complete(false);
+                _completeAuth(false);
               }
             });
           } else {
-            _authCompleter?.complete(false);
+            _completeAuth(false);
           }
           break;
         case 'auth_success':
-          _isAuthenticated = true;
-          if (json.containsKey('session_key')) {
-             _encryptionKey = base64Decode(json['session_key'] as String);
-          } else {
-             _encryptionKey = utf8.encode(_lastSuccessfulPin!); // Fallback
-          }
-          debugPrint('[Client] Authenticated successfully with rotated key');
-          // Device info পাঠানো
-          final deviceInfo = DeviceInfo(
-            deviceName: kIsWeb ? 'Web Browser' : Platform.localHostname,
-            deviceModel: kIsWeb ? 'Web' : Platform.operatingSystem,
-            platform: kIsWeb ? 'web' : (Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'windows')),
-            screenWidth: _clientScreenWidth,
-            screenHeight: _clientScreenHeight,
-            hasStylusSupport: _hasStylusSupportSetting,
-            maxPressure: _maxPressureSetting,
-          );
-          _sendToServer({
-            'type': 'device_info',
-            'data': deviceInfo.toJson(),
-          });
-          _authCompleter?.complete(true);
+          // PBKDF2 আলাদা isolate-এ চলে, তাই এটা async। এখানে await করার কিছু
+          // নেই — ফলাফল _authCompleter দিয়ে connectToServer এ পৌঁছে যায়।
+          unawaited(_handleAuthSuccess(json));
           break;
         case 'auth_fail':
-          _encryptionKey = null; // Clear the temporary wrong PIN key
+          _channel = null;
           _errorMessage = json['reason'] as String? ?? 'Authentication failed';
           _lastSuccessfulPin = null; // Clear cached PIN on failure
-          _authCompleter?.complete(false);
+          _completeAuth(false);
           break;
         case 'server_config':
           if (json['data'] is Map<String, dynamic>) {
@@ -683,11 +806,92 @@ class ConnectionProvider extends ChangeNotifier {
     }
   }
 
-  void _handleDisconnection() {
-    if (_authCompleter != null && !_authCompleter!.isCompleted) {
-      _authCompleter!.complete(false);
+  /// সার্ভারের auth_success এসেছে — এতে session key সরাসরি নেই, বরং PIN থেকে
+  /// PBKDF2 করে পাওয়া key এর নিচে sealed অবস্থায় আছে। MAC মিললেই বোঝা যায়
+  /// অন্য পাশে সত্যিই একই PIN জানা সার্ভার বসে আছে (mutual proof)।
+  ///
+  /// PBKDF2 ১ লাখ ইটারেশন — pairing-এর সময় একবারই চলে, প্রতি প্যাকেটে নয়।
+  /// pointycastle native নয়, তাই কাজটা [unwrapSessionKeyAsync] দিয়ে আলাদা
+  /// isolate-এ পাঠানো হয়; নাহলে ফোনে কয়েক সেকেন্ড UI জমে থাকত এবং সেটাকেই
+  /// "কানেক্ট হচ্ছে না" মনে হতো।
+  Future<void> _handleAuthSuccess(Map<String, dynamic> json) async {
+    final pin = _lastSuccessfulPin;
+    final saltB64 = json['salt'] as String?;
+    final wrappedB64 = json['wrapped_key'] as String?;
+
+    if (pin == null || saltB64 == null || wrappedB64 == null) {
+      // পুরনো (v1) সার্ভার এখানে 'session_key' প্লেইনটেক্সটে পাঠাত। ওটা আর
+      // মানা হয় না — নাহলে আক্রমণকারী v1 হ্যান্ডশেক জোর করে downgrade করাতে পারত।
+      _errorMessage = 'সার্ভারটি পুরনো ভার্সনের (v1 handshake)। '
+          'পিসির AirCanvas সার্ভার আপডেট করুন।';
+      debugPrint('[Client] Rejected auth_success without v2 key exchange');
+      _completeAuth(false);
+      return;
     }
-    if (_state == ConnectionState.connected || _state == ConnectionState.connecting) {
+
+    List<int>? sessionKey;
+    try {
+      sessionKey = await unwrapSessionKeyAsync(
+        base64Decode(wrappedB64),
+        pin,
+        base64Decode(saltB64),
+        iterations: (json['iterations'] as num?)?.toInt() ?? SecureChannel.pbkdf2Iterations,
+      );
+    } catch (e) {
+      debugPrint('[Client] Key unwrap threw: $e');
+      sessionKey = null;
+    }
+
+    // isolate-এ কাজ চলার সময় সকেট বন্ধ হয়ে যেতে পারে — তখন এই ফলাফল বাসি।
+    if (_socket == null || (_authCompleter?.isCompleted ?? true)) {
+      debugPrint('[Client] Discarded stale key unwrap result');
+      return;
+    }
+
+    if (sessionKey == null) {
+      _errorMessage = 'সার্ভারের পাঠানো কী যাচাই করা যায়নি। PIN ঠিক আছে কি?';
+      _lastSuccessfulPin = null;
+      debugPrint('[Client] Session key unwrap failed (bad PIN or tampered frame)');
+      _completeAuth(false);
+      return;
+    }
+
+    _isAuthenticated = true;
+    _channel = SecureChannel(sessionKey, isServer: false);
+    debugPrint('[Client] Authenticated; secure channel established');
+
+    final deviceInfo = DeviceInfo(
+      deviceName: kIsWeb ? 'Web Browser' : Platform.localHostname,
+      deviceModel: kIsWeb ? 'Web' : Platform.operatingSystem,
+      platform: kIsWeb ? 'web' : (Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'windows')),
+      screenWidth: _clientScreenWidth,
+      screenHeight: _clientScreenHeight,
+      hasStylusSupport: _hasStylusSupportSetting,
+      maxPressure: _maxPressureSetting,
+    );
+    _sendToServer({
+      'type': 'device_info',
+      'data': deviceInfo.toJson(),
+    });
+    _completeAuth(true);
+  }
+
+  /// auth completer একবারই complete হতে পারে। আগে সব জায়গায়
+  /// `_authCompleter?.complete(...)` লেখা ছিল — একের বেশি পথ একসাথে চললে
+  /// (যেমন isolate থেকে ফেরার আগেই সকেট বন্ধ) "Future already completed"
+  /// এক্সসেপশন উঠত এবং সেটা onError-এ গিয়ে কানেকশন ভেঙে দিত।
+  void _completeAuth(bool success) {
+    final completer = _authCompleter;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(success);
+    }
+  }
+
+  void _handleDisconnection() {
+    _completeAuth(false);
+    // Only auto-reconnect if we were successfully connected and the connection dropped.
+    // Do NOT reconnect on initial handshake failure or incorrect PIN.
+    if (_state == ConnectionState.connected) {
       _setState(ConnectionState.reconnecting);
 
       // আগের reconnect timer থাকলে বন্ধ করুন (prevent stacking)
@@ -740,6 +944,20 @@ class ConnectionProvider extends ChangeNotifier {
   void sendInputEvent(InputEvent event) {
     if (_socket == null || !isConnected) return;
 
+    // চ্যানেল ছাড়া পাঠানোর কোনো অর্থ নেই: সার্ভার ৪৮ বাইটের চেয়ে ছোট বা
+    // MAC-হীন ফ্রেম নিঃশব্দে ফেলে দেয়। আগে এখানে `_socket!.add(rawBytes)`
+    // fallback ছিল — প্যাকেটগুলো তখন কালো গর্তে চলে যেত, ইউজার শুধু দেখত
+    // "কানেক্টেড কিন্তু আঁকা হচ্ছে না"। এখন গোনা হয় ও লগ করা হয়।
+    final channel = _channel;
+    if (channel == null) {
+      _unsealedDropCount++;
+      if (_unsealedDropCount == 1 || _unsealedDropCount % 120 == 0) {
+        debugPrint('[Client] Secure channel নেই, $_unsealedDropCount টি ইনপুট '
+            'প্যাকেট পাঠানো হয়নি — আবার পেয়ার করুন।');
+      }
+      return;
+    }
+
     final List<int> rawBytes;
     if (_serverConfig.useBinaryProtocol) {
       rawBytes = event.toBinary();
@@ -751,11 +969,7 @@ class ConnectionProvider extends ChangeNotifier {
     }
 
     try {
-      if (_encryptionKey != null) {
-        _socket!.add(_crypt(rawBytes, _encryptionKey!));
-      } else {
-        _socket!.add(rawBytes);
-      }
+      _socket!.add(channel.seal(rawBytes));
       _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
     } catch (e, stackTrace) {
       debugPrint('[Client] Input send exception: $e\n$stackTrace');
@@ -767,10 +981,10 @@ class ConnectionProvider extends ChangeNotifier {
     if (_socket != null) {
       final encoded = data is String ? data : jsonEncode(data);
       try {
-        if (_encryptionKey != null) {
-          final rawBytes = utf8.encode(encoded);
-          _socket!.add(_crypt(rawBytes, _encryptionKey!));
+        if (_channel != null) {
+          _socket!.add(_channel!.seal(utf8.encode(encoded)));
         } else {
+          // কেবল handshake মেসেজ (auth_response) — তখনও চ্যানেল তৈরি হয়নি
           _socket!.add(encoded);
         }
         _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
@@ -788,7 +1002,7 @@ class ConnectionProvider extends ChangeNotifier {
         InternetAddress.anyIPv4,
         defaultDiscoveryPort,
         reuseAddress: true,
-        reusePort: true,
+        reusePort: !kIsWeb && !Platform.isWindows,
       );
       _serverUdpSocket!.broadcastEnabled = true;
       _serverUdpSocket!.listen((event) {
@@ -829,8 +1043,18 @@ class ConnectionProvider extends ChangeNotifier {
 
   void _startLatencyMeasurement() {
     _pingTimer?.cancel();
+    _lastReportedRejects = 0;
     // Ping adaptive (5 seconds interval when idle)
     _pingTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      // ফ্রেম ড্রপ হচ্ছে কিনা সেটা লগে তোলা — smoothness ডিবাগ করার সময়
+      // এটাই বলে দেয় সমস্যা ক্রিপ্টোতে নাকি নেটওয়ার্কে/রেন্ডারিংয়ে।
+      final rejects = rejectedFrames;
+      if (rejects > _lastReportedRejects) {
+        debugPrint('[SecureChannel] Rejected frames: $rejects '
+            '(+${rejects - _lastReportedRejects} in last 5s)');
+        _lastReportedRejects = rejects;
+      }
+
       if (_socket != null) {
         final now = DateTime.now().millisecondsSinceEpoch;
         // Skip ping if we recently communicated to save network traffic
@@ -866,7 +1090,7 @@ class ConnectionProvider extends ChangeNotifier {
   // ==================== UTILITY ====================
 
   String _getSubnetBroadcast(String ip) {
-    if (ip.isEmpty) return '255.255.255.255';
+    if (ip.isEmpty || ip == '0.0.0.0' || ip.startsWith('127.')) return '255.255.255.255';
     final parts = ip.split('.');
     if (parts.length == 4) {
       return '${parts[0]}.${parts[1]}.${parts[2]}.255';
@@ -940,7 +1164,8 @@ class ConnectionProvider extends ChangeNotifier {
       _authCompleter!.complete(false);
     }
     _lastSuccessfulPin = null;
-    _encryptionKey = null;
+    _channel = null;
+    _sessionKey = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _reconnectInProgress = false;

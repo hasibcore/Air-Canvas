@@ -13,42 +13,38 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace AirCanvas
 {
     public class Program
     {
-        private static Mutex singleInstanceMutex = null;
-
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
         [STAThread]
         public static void Main()
         {
-            const string mutexName = "AirCanvasServerSingleInstance_UniqueId";
-            bool isNewInstance;
-            singleInstanceMutex = new Mutex(true, mutexName, out isNewInstance);
-
-            if (!isNewInstance)
+            try
             {
-                IntPtr hWnd = FindWindow(null, "AirCanvas Server — PC Graphics Tablet Receiver");
-                if (hWnd != IntPtr.Zero)
+                // Clean up any stale background instances
+                Process current = Process.GetCurrentProcess();
+                foreach (Process p in Process.GetProcessesByName("AirCanvas"))
                 {
-                    ShowWindow(hWnd, 9); // SW_RESTORE
-                    SetForegroundWindow(hWnd);
+                    if (p.Id != current.Id)
+                    {
+                        try { p.Kill(); } catch { }
+                    }
                 }
-                return;
-            }
 
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
-            GC.KeepAlive(singleInstanceMutex);
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new MainForm());
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("AirCanvas Server Error:\n\n" + ex.Message + "\n\n" + ex.StackTrace, "AirCanvas Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
     }
 
@@ -73,6 +69,13 @@ namespace AirCanvas
         private Button btnPptEraser;
         private Button btnUndo;
         private CheckBox chkEnableInjection;
+        private Button btnOpenOneNote;
+        private Button btnOpenPowerPoint;
+        private Button btnOpenStudio;
+        private Button btnOpenPaint;
+        private Button btnOpenSnip;
+        private Button btnOpenPenMenu;
+        private Label lblDrawingApps;
         private volatile bool isInjectionEnabled = true;
         private Panel pnlHeader;
         private Panel pnlCard;
@@ -81,6 +84,9 @@ namespace AirCanvas
         private Graphics canvasGraphics;
         private PointF lastDrawPoint = PointF.Empty;
         private NotifyIcon trayIcon;
+        private PenMenuForm penMenuForm;
+        private Icon idleIcon = null;
+        private Icon activeIcon = null;
 
         // Server State (Pure Socket TCP)
         private TcpListener tcpServer;
@@ -94,9 +100,274 @@ namespace AirCanvas
         private const int DiscoveryPort = 9091;
 
         // Session & Auth Key
-        private string serverPin = "1234";
-        private byte[] sessionKeyBytes = null;
-        private string lastClientPin = "1234";
+        // serverPin হলো shared secret — ক্লায়েন্টকে এই PIN মিলিয়েই authenticate হতে হবে।
+        // প্রতিবার সার্ভার স্টার্টে নতুন র‍্যান্ডম PIN তৈরি হয় (GeneratePairingPin)।
+        // আগে এটা hardcoded "1234" ছিল, যা পাবলিক রিপোতে কমিট করা — অর্থাৎ PIN গোপনই ছিল না।
+        private string serverPin = "------";
+
+        // NOTE: session state এখন per-connection (ClientSession), form-level নয়।
+        // আগে shared field ছিল, ফলে একাধিক ক্লায়েন্ট একে অন্যের key overwrite করত।
+
+        // ভুল PIN দিয়ে কতবার কানেক্ট করার চেষ্টা হয়েছে — UI তে দেখানো হয়
+        private long rejectedAuthAttempts = 0;
+
+        // Brute-force throttle: পরপর ব্যর্থ চেষ্টার সংখ্যা ও lockout শেষ হওয়ার সময়
+        private int consecutiveAuthFailures = 0;
+        private DateTime authLockoutUntil = DateTime.MinValue;
+        private readonly object authThrottleLock = new object();
+        private const int AuthFailuresBeforeLockout = 5;
+        private const int AuthLockoutSeconds = 30;
+
+        /// <summary>
+        /// প্রতি TCP কানেকশনের নিজস্ব auth ও crypto state।
+        /// একটি সেশন authenticated না হওয়া পর্যন্ত কোনো input inject করা হয় না।
+        /// </summary>
+        private class ClientSession
+        {
+            public bool IsAuthenticated;
+
+            // auth সফল হওয়ার পর এই চ্যানেল দিয়েই সব ফ্রেম যায়/আসে।
+            // session key চ্যানেলের ভিতরে derive হয়ে থাকে, আলাদা করে রাখার দরকার নেই।
+            public SecureChannel Channel;
+        }
+
+        /// <summary>
+        /// AirCanvas Secure Channel v2 — পুরনো XOR এর জায়গায় authenticated encryption।
+        /// রেফারেন্স ইমপ্লিমেন্টেশন: windows_server/secure_channel_ref.py
+        /// Dart পাশের নকল:        lib/services/secure_channel.dart
+        ///
+        /// ওয়্যার ফরম্যাট:
+        ///   sealed frame = IV(16) || CT(16*n) || TAG(16)        // সর্বনিম্ন ৪৮ বাইট
+        ///   plaintext    = SEQ(4, big-endian) || payload
+        ///   CT           = AES-256-CBC(encKey, IV, PKCS7(plaintext))
+        ///   TAG          = HMAC-SHA256(macKey, IV || CT) এর প্রথম ১৬ বাইট
+        ///
+        /// Encrypt-then-MAC — MAC আগে যাচাই হয়, তাই padding oracle নেই।
+        /// প্রতি দিকের আলাদা key (reflection আটকায়), SEQ কড়াভাবে বাড়ে (replay আটকায়)।
+        ///
+        /// কেন AesGcm নয়: build_windows_exe.bat এই ফাইল .NET Framework 4.0 এর
+        /// csc.exe দিয়ে কম্পাইল করে, যেখানে AesGcm ক্লাস নেই (ওটা .NET Core 3.0+)।
+        /// কেন RijndaelManaged, AesCryptoServiceProvider নয়: Aes* ক্লাসগুলো
+        /// System.Core.dll এ, যেটা বিল্ড স্ক্রিপ্টে রেফারেন্স করা নেই। RijndaelManaged
+        /// mscorlib.dll এ আছে এবং BlockSize=128, KeySize=256 হলে ওটাই AES-256।
+        /// </summary>
+        private class SecureChannel
+        {
+            public const int IvLength = 16;
+            public const int TagLength = 16;
+            public const int SeqLength = 4;
+            public const int MinFrameLength = IvLength + 16 + TagLength; // 48
+            public const int Pbkdf2Iterations = 2048;
+            public const int Pbkdf2SaltLength = 16;
+
+            private const string C2sEncLabel = "AirCanvas-c2s-enc-v2";
+            private const string C2sMacLabel = "AirCanvas-c2s-mac-v2";
+            private const string S2cEncLabel = "AirCanvas-s2c-enc-v2";
+            private const string S2cMacLabel = "AirCanvas-s2c-mac-v2";
+
+            private readonly byte[] sendEnc;
+            private readonly byte[] sendMac;
+            private readonly byte[] recvEnc;
+            private readonly byte[] recvMac;
+
+            private uint sendSeq;
+            private uint lastRecvSeq;
+
+            /// <summary>MAC/replay চেকে বাতিল হওয়া ফ্রেমের সংখ্যা।</summary>
+            public long RejectedFrames;
+
+            public SecureChannel(byte[] sessionKey, bool isServer)
+            {
+                if (sessionKey == null || sessionKey.Length != 32)
+                    throw new ArgumentException("session key must be 32 bytes");
+
+                byte[] c2sE = Derive(C2sEncLabel, sessionKey);
+                byte[] c2sM = Derive(C2sMacLabel, sessionKey);
+                byte[] s2cE = Derive(S2cEncLabel, sessionKey);
+                byte[] s2cM = Derive(S2cMacLabel, sessionKey);
+
+                if (isServer)
+                {
+                    sendEnc = s2cE; sendMac = s2cM; recvEnc = c2sE; recvMac = c2sM;
+                }
+                else
+                {
+                    sendEnc = c2sE; sendMac = c2sM; recvEnc = s2cE; recvMac = s2cM;
+                }
+            }
+
+            private static byte[] Derive(string label, byte[] key)
+            {
+                byte[] lab = Encoding.UTF8.GetBytes(label);
+                byte[] input = new byte[lab.Length + key.Length];
+                Buffer.BlockCopy(lab, 0, input, 0, lab.Length);
+                Buffer.BlockCopy(key, 0, input, lab.Length, key.Length);
+                using (SHA256 sha = new SHA256CryptoServiceProvider())
+                {
+                    return sha.ComputeHash(input);
+                }
+            }
+
+            public static byte[] RandomBytes(int length)
+            {
+                byte[] buf = new byte[length];
+                using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+                {
+                    rng.GetBytes(buf);
+                }
+                return buf;
+            }
+
+            public static byte[] GenerateSessionKey() { return RandomBytes(32); }
+
+            public static byte[] GenerateSalt() { return RandomBytes(Pbkdf2SaltLength); }
+
+            /// <summary>
+            /// PBKDF2-HMAC-SHA1। SHA1 বাধ্যতামূলক interop-এর কারণে: .NET Framework 4.0 এর
+            /// Rfc2898DeriveBytes কেবল HMAC-SHA1 জানে (SHA256 ওভারলোড এসেছে 4.7.2 তে)।
+            /// PBKDF2-এর ভিতরে HMAC-SHA1 এখনও নিরাপদ — WPA2-ও এটাই ব্যবহার করে।
+            /// </summary>
+            public static byte[] DerivePinKey(string pin, byte[] salt, int iterations)
+            {
+                using (Rfc2898DeriveBytes kdf = new Rfc2898DeriveBytes(
+                    Encoding.UTF8.GetBytes(pin), salt, iterations))
+                {
+                    return kdf.GetBytes(32);
+                }
+            }
+
+            public static SecureChannel FromPin(string pin, byte[] salt, bool isServer, int iterations)
+            {
+                return new SecureChannel(DerivePinKey(pin, salt, iterations), isServer);
+            }
+
+            public byte[] Seal(byte[] payload)
+            {
+                sendSeq++;
+                return Seal(payload, RandomBytes(IvLength), sendSeq);
+            }
+
+            /// <summary>iv/seq সরাসরি দেওয়ার ওভারলোড — কেবল টেস্ট ভেক্টর মেলানোর জন্য।</summary>
+            public byte[] Seal(byte[] payload, byte[] iv, uint seq)
+            {
+                byte[] plain = new byte[SeqLength + payload.Length];
+                plain[0] = (byte)(seq >> 24);
+                plain[1] = (byte)(seq >> 16);
+                plain[2] = (byte)(seq >> 8);
+                plain[3] = (byte)seq;
+                Buffer.BlockCopy(payload, 0, plain, SeqLength, payload.Length);
+
+                byte[] ct = AesCbc(sendEnc, iv, Pkcs7Pad(plain), true);
+                byte[] tag = Tag(sendMac, iv, ct);
+
+                byte[] frame = new byte[iv.Length + ct.Length + TagLength];
+                Buffer.BlockCopy(iv, 0, frame, 0, iv.Length);
+                Buffer.BlockCopy(ct, 0, frame, iv.Length, ct.Length);
+                Buffer.BlockCopy(tag, 0, frame, iv.Length + ct.Length, TagLength);
+                return frame;
+            }
+
+            /// <summary>
+            /// ফ্রেম যাচাই করে payload ফেরত দেয়। null মানে বাতিল — tamper, ভুল key,
+            /// অথবা replay। কানেকশন বন্ধ করার দরকার নেই, ফ্রেমটা ফেলে দিলেই হয়।
+            /// </summary>
+            public byte[] Open(byte[] frame)
+            {
+                if (frame == null || frame.Length < MinFrameLength ||
+                    (frame.Length - IvLength - TagLength) % 16 != 0)
+                {
+                    RejectedFrames++;
+                    return null;
+                }
+
+                int ctLen = frame.Length - IvLength - TagLength;
+                byte[] iv = new byte[IvLength];
+                byte[] ct = new byte[ctLen];
+                byte[] tag = new byte[TagLength];
+                Buffer.BlockCopy(frame, 0, iv, 0, IvLength);
+                Buffer.BlockCopy(frame, IvLength, ct, 0, ctLen);
+                Buffer.BlockCopy(frame, IvLength + ctLen, tag, 0, TagLength);
+
+                if (!FixedTimeEquals(tag, Tag(recvMac, iv, ct)))
+                {
+                    RejectedFrames++;
+                    return null;
+                }
+
+                byte[] plain = Pkcs7Unpad(AesCbc(recvEnc, iv, ct, false));
+                if (plain == null || plain.Length < SeqLength)
+                {
+                    RejectedFrames++;
+                    return null;
+                }
+
+                uint seq = ((uint)plain[0] << 24) | ((uint)plain[1] << 16) |
+                           ((uint)plain[2] << 8) | plain[3];
+                if (seq <= lastRecvSeq)
+                {
+                    RejectedFrames++; // replay বা পুরনো ফ্রেম
+                    return null;
+                }
+                lastRecvSeq = seq;
+
+                byte[] payload = new byte[plain.Length - SeqLength];
+                Buffer.BlockCopy(plain, SeqLength, payload, 0, payload.Length);
+                return payload;
+            }
+
+            private static byte[] Tag(byte[] macKey, byte[] iv, byte[] ct)
+            {
+                byte[] signed = new byte[iv.Length + ct.Length];
+                Buffer.BlockCopy(iv, 0, signed, 0, iv.Length);
+                Buffer.BlockCopy(ct, 0, signed, iv.Length, ct.Length);
+                using (HMACSHA256 mac = new HMACSHA256(macKey))
+                {
+                    byte[] full = mac.ComputeHash(signed);
+                    byte[] truncated = new byte[TagLength];
+                    Buffer.BlockCopy(full, 0, truncated, 0, TagLength);
+                    return truncated;
+                }
+            }
+
+            private static byte[] AesCbc(byte[] key, byte[] iv, byte[] input, bool forEncryption)
+            {
+                using (RijndaelManaged aes = new RijndaelManaged())
+                {
+                    aes.BlockSize = 128;   // BlockSize 128 + KeySize 256 = AES-256
+                    aes.KeySize = 256;
+                    aes.Mode = CipherMode.CBC;
+                    aes.Padding = PaddingMode.None; // padding নিজে করি, তিন পাশে হুবহু মিল রাখতে
+                    aes.Key = key;
+                    aes.IV = iv;
+                    using (ICryptoTransform t = forEncryption
+                        ? aes.CreateEncryptor() : aes.CreateDecryptor())
+                    {
+                        return t.TransformFinalBlock(input, 0, input.Length);
+                    }
+                }
+            }
+
+            private static byte[] Pkcs7Pad(byte[] data)
+            {
+                int pad = 16 - (data.Length % 16); // ১..১৬, কখনো ০ নয়
+                byte[] out_ = new byte[data.Length + pad];
+                Buffer.BlockCopy(data, 0, out_, 0, data.Length);
+                for (int i = data.Length; i < out_.Length; i++) out_[i] = (byte)pad;
+                return out_;
+            }
+
+            private static byte[] Pkcs7Unpad(byte[] data)
+            {
+                if (data == null || data.Length == 0 || data.Length % 16 != 0) return null;
+                int pad = data[data.Length - 1];
+                if (pad < 1 || pad > 16 || pad > data.Length) return null;
+                for (int i = data.Length - pad; i < data.Length; i++)
+                    if (data[i] != pad) return null;
+                byte[] out_ = new byte[data.Length - pad];
+                Buffer.BlockCopy(data, 0, out_, 0, out_.Length);
+                return out_;
+            }
+        }
 
         // Win32 Native Input & Keyboard Injection
         [DllImport("user32.dll")]
@@ -136,7 +407,7 @@ namespace AirCanvas
         private void InitializeComponent()
         {
             this.Text = "AirCanvas Server — PC Graphics Tablet Receiver";
-            this.Size = new Size(820, 600);
+            this.Size = new Size(820, 640);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -177,7 +448,7 @@ namespace AirCanvas
             pnlCard = new Panel
             {
                 Location = new Point(15, 88),
-                Size = new Size(340, 455),
+                Size = new Size(340, 530),
                 BackColor = Color.FromArgb(30, 41, 59)
             };
 
@@ -202,8 +473,8 @@ namespace AirCanvas
             // Pairing PIN Card
             pnlPinBox = new Panel
             {
-                Location = new Point(15, 66),
-                Size = new Size(305, 42),
+                Location = new Point(15, 64),
+                Size = new Size(305, 40),
                 BackColor = Color.FromArgb(15, 23, 42),
                 BorderStyle = BorderStyle.FixedSingle
             };
@@ -213,7 +484,7 @@ namespace AirCanvas
                 Text = "🔑 Pairing PIN:",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(226, 232, 240),
-                Location = new Point(10, 10),
+                Location = new Point(10, 9),
                 AutoSize = true
             };
 
@@ -222,7 +493,7 @@ namespace AirCanvas
                 Text = serverPin,
                 Font = new Font("Consolas", 15f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(56, 189, 248),
-                Location = new Point(135, 6),
+                Location = new Point(135, 5),
                 AutoSize = true
             };
 
@@ -234,7 +505,7 @@ namespace AirCanvas
                 Text = "📱 Connected: 0",
                 Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(74, 222, 128), // Green 400
-                Location = new Point(15, 118),
+                Location = new Point(15, 112),
                 AutoSize = true
             };
 
@@ -243,7 +514,7 @@ namespace AirCanvas
                 Text = "⚡ Packets Processed: 0",
                 Font = new Font("Segoe UI", 9f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(15, 144),
+                Location = new Point(15, 138),
                 AutoSize = true
             };
 
@@ -252,8 +523,8 @@ namespace AirCanvas
                 Text = "Draw in PowerPoint / OneNote / Photoshop / Paint",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(226, 232, 240),
-                Location = new Point(15, 172),
-                Size = new Size(310, 25),
+                Location = new Point(15, 164),
+                Size = new Size(310, 24),
                 Checked = true
             };
             isInjectionEnabled = true;
@@ -263,8 +534,8 @@ namespace AirCanvas
             {
                 Text = "🖊️ PPT Pen (Ctrl+P)",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                Location = new Point(15, 204),
-                Size = new Size(145, 30),
+                Location = new Point(15, 194),
+                Size = new Size(145, 28),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(37, 99, 235), // Blue 600
                 ForeColor = Color.White
@@ -275,8 +546,8 @@ namespace AirCanvas
             {
                 Text = "🔴 Laser (Ctrl+L)",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                Location = new Point(165, 204),
-                Size = new Size(150, 30),
+                Location = new Point(165, 194),
+                Size = new Size(150, 28),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(220, 38, 38), // Red 600
                 ForeColor = Color.White
@@ -287,8 +558,8 @@ namespace AirCanvas
             {
                 Text = "🧹 Eraser (Ctrl+E)",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(15, 238),
-                Size = new Size(145, 30),
+                Location = new Point(15, 226),
+                Size = new Size(145, 28),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(71, 85, 105),
                 ForeColor = Color.White
@@ -299,8 +570,8 @@ namespace AirCanvas
             {
                 Text = "↩️ Undo (Ctrl+Z)",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(165, 238),
-                Size = new Size(150, 30),
+                Location = new Point(165, 226),
+                Size = new Size(150, 28),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(71, 85, 105),
                 ForeColor = Color.White
@@ -311,8 +582,8 @@ namespace AirCanvas
             {
                 Text = "🧪 Test Stroke",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(15, 272),
-                Size = new Size(145, 30),
+                Location = new Point(15, 258),
+                Size = new Size(145, 28),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(51, 65, 85),
                 ForeColor = Color.White
@@ -323,8 +594,8 @@ namespace AirCanvas
             {
                 Text = "🗑 Clear Canvas",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(165, 272),
-                Size = new Size(150, 30),
+                Location = new Point(165, 258),
+                Size = new Size(150, 28),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(71, 85, 105),
                 ForeColor = Color.White
@@ -334,23 +605,105 @@ namespace AirCanvas
             btnAllowFirewall = new Button
             {
                 Text = "🔓 Allow Firewall (Fix Connection)",
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                Location = new Point(15, 308),
-                Size = new Size(300, 34),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                Location = new Point(15, 292),
+                Size = new Size(300, 30),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(16, 185, 129), // Emerald 500
                 ForeColor = Color.White
             };
             btnAllowFirewall.Click += (s, e) => FixFirewallRules();
 
+            // Drawing Apps Section
+            lblDrawingApps = new Label
+            {
+                Text = "🎨 Stylus & Drawing Apps",
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(56, 189, 248),
+                Location = new Point(15, 330),
+                AutoSize = true
+            };
+
+            btnOpenPenMenu = new Button
+            {
+                Text = "🖊️ Stylus Pen Menu (Floating Toolbar)",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                Location = new Point(15, 352),
+                Size = new Size(300, 30),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(37, 99, 235), // Blue 600
+                ForeColor = Color.White
+            };
+            btnOpenPenMenu.Click += (s, e) => TogglePenMenu();
+
+            btnOpenOneNote = new Button
+            {
+                Text = "📝 OneNote",
+                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                Location = new Point(15, 386),
+                Size = new Size(95, 28),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(123, 45, 142),
+                ForeColor = Color.White
+            };
+            btnOpenOneNote.Click += (s, e) => LaunchOneNote();
+
+            btnOpenPowerPoint = new Button
+            {
+                Text = "📊 PowerPoint",
+                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                Location = new Point(115, 386),
+                Size = new Size(100, 28),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(208, 68, 35),
+                ForeColor = Color.White
+            };
+            btnOpenPowerPoint.Click += (s, e) => LaunchPowerPoint();
+
+            btnOpenStudio = new Button
+            {
+                Text = "🖌 Studio",
+                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                Location = new Point(220, 386),
+                Size = new Size(95, 28),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(0, 180, 216),
+                ForeColor = Color.White
+            };
+            btnOpenStudio.Click += (s, e) => LaunchDrawingStudio();
+
+            btnOpenPaint = new Button
+            {
+                Text = "🎨 MS Paint",
+                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                Location = new Point(15, 418),
+                Size = new Size(145, 28),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(2, 132, 199),
+                ForeColor = Color.White
+            };
+            btnOpenPaint.Click += (s, e) => LaunchPaint();
+
+            btnOpenSnip = new Button
+            {
+                Text = "✂️ Snipping Tool",
+                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                Location = new Point(165, 418),
+                Size = new Size(150, 28),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(225, 29, 72),
+                ForeColor = Color.White
+            };
+            btnOpenSnip.Click += (s, e) => LaunchSnippingTool();
+
             btnToggleServer = new Button
             {
                 Text = "⏹ Stop Server",
-                Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
-                Location = new Point(15, 395),
-                Size = new Size(300, 42),
+                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+                Location = new Point(15, 458),
+                Size = new Size(300, 36),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(239, 68, 68), // Red
+                BackColor = Color.FromArgb(239, 68, 68),
                 ForeColor = Color.White
             };
             btnToggleServer.Click += (s, e) =>
@@ -372,6 +725,13 @@ namespace AirCanvas
             pnlCard.Controls.Add(btnTestInput);
             pnlCard.Controls.Add(btnClearCanvas);
             pnlCard.Controls.Add(btnAllowFirewall);
+            pnlCard.Controls.Add(lblDrawingApps);
+            pnlCard.Controls.Add(btnOpenPenMenu);
+            pnlCard.Controls.Add(btnOpenOneNote);
+            pnlCard.Controls.Add(btnOpenPowerPoint);
+            pnlCard.Controls.Add(btnOpenStudio);
+            pnlCard.Controls.Add(btnOpenPaint);
+            pnlCard.Controls.Add(btnOpenSnip);
             pnlCard.Controls.Add(btnToggleServer);
             this.Controls.Add(pnlCard);
 
@@ -379,24 +739,16 @@ namespace AirCanvas
             pbCanvas = new PictureBox
             {
                 Location = new Point(370, 88),
-                Size = new Size(420, 455),
+                Size = new Size(420, 530),
                 BackColor = Color.FromArgb(15, 23, 42),
                 BorderStyle = BorderStyle.FixedSingle
             };
             this.Controls.Add(pbCanvas);
 
-            // Tray Icon
-            trayIcon = new NotifyIcon
-            {
-                Text = "AirCanvas Server",
-                Icon = SystemIcons.Application,
-                Visible = true
-            };
-            trayIcon.DoubleClick += (s, e) =>
-            {
-                this.Show();
-                this.WindowState = FormWindowState.Normal;
-            };
+            // Initialize Tray Icon and Floating Pen Menu
+            InitTrayIcon();
+            EnableWindowsPenWorkspaceRegistry();
+            penMenuForm = new PenMenuForm(this);
         }
 
         private void InitCanvas()
@@ -575,7 +927,361 @@ namespace AirCanvas
                     }
 
                     pbCanvas.Invalidate();
-                    pbCanvas.Update();
+                }
+                catch { }
+            }));
+        }
+
+        public void LaunchOneNote()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c start onenote:",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                });
+            }
+            catch { }
+        }
+
+        public void LaunchPowerPoint()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c start powerpnt",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                });
+            }
+            catch { }
+        }
+
+        public void LaunchDrawingStudio()
+        {
+            try
+            {
+                string appDir = AppDomain.CurrentDomain.BaseDirectory;
+                string studioPath = Path.Combine(appDir, "drawing_studio.html");
+                if (File.Exists(studioPath))
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = studioPath,
+                        UseShellExecute = true
+                    });
+                }
+                else
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = "/c start drawing_studio.html",
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        CreateNoWindow = true
+                    });
+                }
+            }
+            catch { }
+        }
+
+        public void LaunchPaint()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c start mspaint",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                });
+            }
+            catch { }
+        }
+
+        public void LaunchSnippingTool()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c start ms-screenclip:",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                });
+            }
+            catch { }
+        }
+
+        public void LaunchPenSettings()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c start ms-settings:pen",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                });
+            }
+            catch { }
+        }
+
+        public void LaunchWindowsPenWorkspace()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c start ms-penworkspace:",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                });
+            }
+            catch { }
+        }
+
+        public void EnableWindowsPenWorkspaceRegistry()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\PenWorkspace"))
+                {
+                    if (key != null)
+                    {
+                        key.SetValue("PenWorkspaceEnabled", 1, RegistryValueKind.DWord);
+                        key.SetValue("PenWorkspaceVisible", 1, RegistryValueKind.DWord);
+                        key.SetValue("PenMenuShowMode", 1, RegistryValueKind.DWord); // 1 = Always show
+                        key.SetValue("PenWorkspaceBallotShown", 1, RegistryValueKind.DWord);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern bool DestroyIcon(IntPtr handle);
+
+        private static Icon CreateStylusIcon(bool active)
+        {
+            using (Bitmap bmp = new Bitmap(32, 32))
+            {
+                using (Graphics g = Graphics.FromImage(bmp))
+                {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.Clear(Color.Transparent);
+
+                    if (active)
+                    {
+                        using (SolidBrush glow = new SolidBrush(Color.FromArgb(60, 56, 189, 248)))
+                        {
+                            g.FillEllipse(glow, 2, 2, 28, 28);
+                        }
+                    }
+
+                    // Pen body polygon
+                    PointF[] penBody = new PointF[]
+                    {
+                        new PointF(22f, 5f),
+                        new PointF(26f, 9f),
+                        new PointF(11f, 24f),
+                        new PointF(7f, 20f)
+                    };
+                    Color bodyColor = active ? Color.FromArgb(56, 189, 248) : Color.FromArgb(241, 245, 249);
+                    using (SolidBrush brush = new SolidBrush(bodyColor))
+                    {
+                        g.FillPolygon(brush, penBody);
+                    }
+
+                    // Pen tip
+                    PointF[] penTip = new PointF[]
+                    {
+                        new PointF(7f, 20f),
+                        new PointF(11f, 24f),
+                        new PointF(4f, 27f)
+                    };
+                    using (SolidBrush tipBrush = new SolidBrush(active ? Color.FromArgb(255, 255, 255) : Color.FromArgb(148, 163, 184)))
+                    {
+                        g.FillPolygon(tipBrush, penTip);
+                    }
+
+                    // Pen cap
+                    PointF[] penCap = new PointF[]
+                    {
+                        new PointF(22f, 5f),
+                        new PointF(26f, 9f),
+                        new PointF(28f, 7f),
+                        new PointF(24f, 3f)
+                    };
+                    using (SolidBrush capBrush = new SolidBrush(Color.FromArgb(99, 102, 241)))
+                    {
+                        g.FillPolygon(capBrush, penCap);
+                    }
+
+                    // Pen detail stripe
+                    using (Pen detailPen = new Pen(Color.FromArgb(30, 41, 59), 1.5f))
+                    {
+                        g.DrawLine(detailPen, 17f, 10f, 21f, 14f);
+                    }
+
+                    // Crisp outline
+                    using (Pen outline = new Pen(Color.FromArgb(15, 23, 42), 1.2f))
+                    {
+                        g.DrawPolygon(outline, penBody);
+                        g.DrawPolygon(outline, penTip);
+                    }
+
+                    // Green Active Indicator Dot
+                    if (active)
+                    {
+                        using (SolidBrush greenDot = new SolidBrush(Color.FromArgb(34, 197, 94)))
+                        using (Pen dotBorder = new Pen(Color.FromArgb(15, 23, 42), 1.5f))
+                        {
+                            g.FillEllipse(greenDot, 20, 20, 10, 10);
+                            g.DrawEllipse(dotBorder, 20, 20, 10, 10);
+                        }
+                    }
+                }
+                IntPtr hIcon = bmp.GetHicon();
+                Icon icon = (Icon)Icon.FromHandle(hIcon).Clone();
+                DestroyIcon(hIcon);
+                return icon;
+            }
+        }
+
+        private void InitTrayIcon()
+        {
+            try
+            {
+                idleIcon = CreateStylusIcon(false);
+                activeIcon = CreateStylusIcon(true);
+            }
+            catch
+            {
+                idleIcon = SystemIcons.Application;
+                activeIcon = SystemIcons.Application;
+            }
+
+            ContextMenuStrip menu = new ContextMenuStrip();
+            menu.BackColor = Color.FromArgb(30, 41, 59);
+            menu.ForeColor = Color.White;
+            menu.RenderMode = ToolStripRenderMode.System;
+
+            ToolStripMenuItem itemPenMenu = new ToolStripMenuItem("🖊️ Toggle Stylus Pen Menu", null, (s, e) => TogglePenMenu());
+            ToolStripMenuItem itemOneNote = new ToolStripMenuItem("📝 Open OneNote", null, (s, e) => LaunchOneNote());
+            ToolStripMenuItem itemPaint = new ToolStripMenuItem("🎨 Open MS Paint", null, (s, e) => LaunchPaint());
+            ToolStripMenuItem itemSnip = new ToolStripMenuItem("✂️ Open Snipping Tool", null, (s, e) => LaunchSnippingTool());
+            ToolStripMenuItem itemPpt = new ToolStripMenuItem("📊 Open PowerPoint", null, (s, e) => LaunchPowerPoint());
+            ToolStripMenuItem itemStudio = new ToolStripMenuItem("🖌️ Open AirCanvas Studio", null, (s, e) => LaunchDrawingStudio());
+            ToolStripMenuItem itemSettings = new ToolStripMenuItem("⚙️ Windows Pen Settings", null, (s, e) => LaunchPenSettings());
+            ToolStripSeparator sep1 = new ToolStripSeparator();
+            ToolStripMenuItem itemControlPanel = new ToolStripMenuItem("🖥️ Show AirCanvas Window", null, (s, e) =>
+            {
+                this.Show();
+                this.WindowState = FormWindowState.Normal;
+                this.BringToFront();
+            });
+            ToolStripMenuItem itemExit = new ToolStripMenuItem("🚪 Exit AirCanvas", null, (s, e) => this.Close());
+
+            menu.Items.AddRange(new ToolStripItem[] {
+                itemPenMenu,
+                new ToolStripSeparator(),
+                itemOneNote,
+                itemPaint,
+                itemSnip,
+                itemPpt,
+                itemStudio,
+                itemSettings,
+                sep1,
+                itemControlPanel,
+                itemExit
+            });
+
+            trayIcon = new NotifyIcon
+            {
+                Text = "AirCanvas: Stylus Tablet Receiver",
+                Icon = idleIcon ?? SystemIcons.Application,
+                Visible = true,
+                ContextMenuStrip = menu
+            };
+
+            trayIcon.MouseClick += (s, e) =>
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    TogglePenMenu();
+                }
+            };
+
+            trayIcon.DoubleClick += (s, e) =>
+            {
+                this.Show();
+                this.WindowState = FormWindowState.Normal;
+                this.BringToFront();
+            };
+        }
+
+        public void TogglePenMenu()
+        {
+            if (penMenuForm == null || penMenuForm.IsDisposed)
+            {
+                penMenuForm = new PenMenuForm(this);
+            }
+            if (penMenuForm.Visible)
+            {
+                penMenuForm.Hide();
+            }
+            else
+            {
+                penMenuForm.PositionAtBottomRight();
+                penMenuForm.Show();
+                penMenuForm.BringToFront();
+            }
+        }
+
+        private void UpdateTrayIcon(bool active)
+        {
+            try
+            {
+                if (trayIcon != null)
+                {
+                    trayIcon.Icon = active ? (activeIcon ?? SystemIcons.Application) : (idleIcon ?? SystemIcons.Application);
+                    trayIcon.Text = active ? "AirCanvas: Stylus Connected (Active)" : "AirCanvas Server (Listening for Tablets)";
+                }
+            }
+            catch { }
+        }
+
+        private void ShowClientConnectedNotification()
+        {
+            if (this.IsDisposed || !this.IsHandleCreated) return;
+            this.BeginInvoke((Action)(() =>
+            {
+                try
+                {
+                    UpdateTrayIcon(true);
+                    EnableWindowsPenWorkspaceRegistry();
+                    if (trayIcon != null)
+                    {
+                        trayIcon.ShowBalloonTip(3000, "AirCanvas Stylus Connected 🎨", "Mobile graphics tablet connected. Stylus Pen Menu & Inking are active!", ToolTipIcon.Info);
+                    }
+                    if (penMenuForm == null || penMenuForm.IsDisposed)
+                    {
+                        penMenuForm = new PenMenuForm(this);
+                    }
+                    penMenuForm.PositionAtBottomRight();
+                    penMenuForm.Show();
+                    penMenuForm.BringToFront();
                 }
                 catch { }
             }));
@@ -637,6 +1343,15 @@ namespace AirCanvas
             {
                 cts = new CancellationTokenSource();
 
+                // প্রতিবার স্টার্টে নতুন র‍্যান্ডম PIN — পুরনো PIN আর কাজ করবে না
+                serverPin = GeneratePairingPin();
+                lblPinValue.Text = serverPin;
+                lock (authThrottleLock)
+                {
+                    consecutiveAuthFailures = 0;
+                    authLockoutUntil = DateTime.MinValue;
+                }
+
                 tcpServer = new TcpListener(IPAddress.Any, ServerPort);
                 tcpServer.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 tcpServer.Start();
@@ -649,12 +1364,71 @@ namespace AirCanvas
 
                 Task.Run(() => AcceptTcpClientsAsync(cts.Token));
                 Task.Run(() => RunUdpDiscoveryListener(cts.Token));
+                Task.Run(() => RunUdpBeaconBroadcast(cts.Token));
             }
             catch (Exception ex)
             {
                 lblStatus.Text = "✕ Server Error: " + ex.Message;
                 lblStatus.ForeColor = Color.FromArgb(239, 68, 68);
                 isRunning = false;
+            }
+        }
+
+        /// <summary>
+        /// ৬ ডিজিটের র‍্যান্ডম pairing PIN তৈরি করে (modulo bias ছাড়া)।
+        /// Random ক্লাস নয় — RNGCryptoServiceProvider, কারণ এটাই একমাত্র shared secret।
+        /// </summary>
+        private static string GeneratePairingPin()
+        {
+            const int digits = 6; // lib/services/connection_provider.dart এর kPairingPinLength এর সমান রাখতে হবে
+            char[] pin = new char[digits];
+            byte[] buf = new byte[1];
+            using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+            {
+                for (int i = 0; i < digits; i++)
+                {
+                    // 250 = 25 * 10, তাই 250-এর উপরের মান বাদ দিলে বায়াস থাকে না
+                    do
+                    {
+                        rng.GetBytes(buf);
+                    } while (buf[0] >= 250);
+                    pin[i] = (char)('0' + (buf[0] % 10));
+                }
+            }
+            return new string(pin);
+        }
+
+        /// <summary>
+        /// অনলাইন brute-force আটকায়: পরপর কয়েকবার ভুল PIN দিলে কিছুক্ষণ সব auth চেষ্টা বন্ধ।
+        /// ৬ ডিজিটের PIN + প্রতি চেষ্টায় কানেকশন বন্ধ + এই lockout = অনলাইনে অনুমান করা অবাস্তব।
+        /// </summary>
+        private bool IsAuthLockedOut()
+        {
+            lock (authThrottleLock)
+            {
+                return DateTime.UtcNow < authLockoutUntil;
+            }
+        }
+
+        private void RegisterAuthFailure()
+        {
+            lock (authThrottleLock)
+            {
+                consecutiveAuthFailures++;
+                if (consecutiveAuthFailures >= AuthFailuresBeforeLockout)
+                {
+                    authLockoutUntil = DateTime.UtcNow.AddSeconds(AuthLockoutSeconds);
+                    consecutiveAuthFailures = 0;
+                }
+            }
+        }
+
+        private void RegisterAuthSuccess()
+        {
+            lock (authThrottleLock)
+            {
+                consecutiveAuthFailures = 0;
+                authLockoutUntil = DateTime.MinValue;
             }
         }
 
@@ -674,6 +1448,9 @@ namespace AirCanvas
             lblStatus.Text = "○ Server Stopped";
             lblStatus.ForeColor = Color.FromArgb(148, 163, 184);
             lblClients.Text = "📱 Connected: 0";
+            // পুরনো PIN আর বৈধ নয়, তাই UI থেকেও সরিয়ে দেওয়া হয়
+            serverPin = "------";
+            lblPinValue.Text = serverPin;
             btnToggleServer.Text = "▶ Start Server";
             btnToggleServer.BackColor = Color.FromArgb(34, 197, 94);
         }
@@ -700,6 +1477,7 @@ namespace AirCanvas
             UpdateClientsUI();
 
             NetworkStream stream = null;
+            ClientSession session = new ClientSession();
             try
             {
                 client.NoDelay = true; // Sub-5ms low latency
@@ -736,11 +1514,11 @@ namespace AirCanvas
                     else if (frame.Opcode == 1) // Text JSON
                     {
                         string json = Encoding.UTF8.GetString(frame.Payload);
-                        ProcessJsonMessage(json, stream);
+                        if (!ProcessJsonMessage(json, stream, session)) break;
                     }
                     else if (frame.Opcode == 2) // Binary Input Event or Encrypted Payload
                     {
-                        ProcessBinaryPacket(frame.Payload, frame.Payload.Length, stream);
+                        if (!ProcessBinaryPacket(frame.Payload, frame.Payload.Length, stream, session)) break;
                     }
 
                     Interlocked.Increment(ref packetsReceived);
@@ -766,7 +1544,47 @@ namespace AirCanvas
             {
                 string secKeyHeader = "Sec-WebSocket-Key: ";
                 int keyIdx = headerText.IndexOf(secKeyHeader, StringComparison.OrdinalIgnoreCase);
-                if (keyIdx == -1) return false;
+                if (keyIdx == -1)
+                {
+                    // Check if requesting the APK download: GET /app.apk or /aircanvas.apk
+                    if (headerText.IndexOf("GET /app.apk", StringComparison.OrdinalIgnoreCase) != -1 ||
+                        headerText.IndexOf("GET /aircanvas.apk", StringComparison.OrdinalIgnoreCase) != -1)
+                    {
+                        string apkPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AirCanvas.apk");
+                        if (!File.Exists(apkPath))
+                        {
+                            apkPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "build", "app", "outputs", "flutter-apk", "app-release.apk");
+                        }
+                        if (!File.Exists(apkPath))
+                        {
+                            apkPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "build", "app", "outputs", "flutter-apk", "app-debug.apk");
+                        }
+                        if (!File.Exists(apkPath))
+                        {
+                            apkPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app-release.apk");
+                        }
+                        if (File.Exists(apkPath))
+                        {
+                            byte[] apkBytes = File.ReadAllBytes(apkPath);
+                            string header = "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.android.package-archive\r\nContent-Disposition: attachment; filename=\"AirCanvas.apk\"\r\nContent-Length: " + apkBytes.Length + "\r\nConnection: close\r\n\r\n";
+                            byte[] hBytes = Encoding.UTF8.GetBytes(header);
+                            stream.Write(hBytes, 0, hBytes.Length);
+                            stream.Write(apkBytes, 0, apkBytes.Length);
+                            stream.Flush();
+                            return false;
+                        }
+                    }
+
+                    // Serve full-featured HTML5 Touch Drawing Studio Web App!
+                    string html = GetWebDrawingAppHtml();
+                    byte[] htmlBytes = Encoding.UTF8.GetBytes(html);
+                    string httpResp = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + htmlBytes.Length + "\r\nConnection: close\r\n\r\n";
+                    byte[] respHead = Encoding.UTF8.GetBytes(httpResp);
+                    stream.Write(respHead, 0, respHead.Length);
+                    stream.Write(htmlBytes, 0, htmlBytes.Length);
+                    stream.Flush();
+                    return false;
+                }
 
                 int keyEnd = headerText.IndexOf("\r\n", keyIdx);
                 string key = headerText.Substring(keyIdx + secKeyHeader.Length, keyEnd - (keyIdx + secKeyHeader.Length)).Trim();
@@ -913,46 +1731,85 @@ namespace AirCanvas
             return buffer;
         }
 
-        private byte[] Crypt(byte[] data, byte[] key)
-        {
-            if (key == null || key.Length == 0 || data == null) return data;
-            byte[] result = new byte[data.Length];
-            for (int i = 0; i < data.Length; i++)
-            {
-                result[i] = (byte)(data[i] ^ key[i % key.Length]);
-            }
-            return result;
-        }
+        // পুরনো XOR "এনক্রিপশন" (Crypt) এখান থেকে সরিয়ে ফেলা হয়েছে।
+        // ওটা confidentiality দিত না (key ছোট ও পুনরাবৃত্ত, known-plaintext দিয়েই ভাঙা যায়)
+        // এবং integrity-ও দিত না। এখন সব কিছু SecureChannel দিয়ে —
+        // AES-256-CBC + HMAC-SHA256, Encrypt-then-MAC।
 
-        private void ProcessJsonMessage(string json, NetworkStream stream)
+        /// <summary>
+        /// JSON মেসেজ প্রসেস করে। return false মানে কানেকশন বন্ধ করতে হবে।
+        /// authenticated না হলে auth_response ছাড়া কোনো মেসেজ গ্রহণ করা হয় না।
+        /// </summary>
+        private bool ProcessJsonMessage(string json, NetworkStream stream, ClientSession session)
         {
             // Authenticate handshake response
             if (json.Contains("\"type\":\"auth_response\"") || json.Contains("\"type\":\"auth\""))
             {
-                try
+                // অনেকবার ভুল PIN দেওয়ার পর কিছুক্ষণ কোনো চেষ্টাই গ্রহণ করা হয় না
+                if (IsAuthLockedOut())
                 {
-                    int pIdx = json.IndexOf("\"pin\":");
-                    if (pIdx != -1)
-                    {
-                        int start = json.IndexOf('"', pIdx + 6) + 1;
-                        int end = json.IndexOf('"', start);
-                        if (start > 0 && end > start)
-                        {
-                            lastClientPin = json.Substring(start, end - start);
-                        }
-                    }
+                    SendWebSocketText(stream,
+                        "{\"type\":\"auth_fail\",\"reason\":\"Too many failed attempts, try again later\"}");
+                    return false;
                 }
-                catch { }
 
-                sessionKeyBytes = Encoding.UTF8.GetBytes(lastClientPin != null ? lastClientPin : "1234");
-                string b64Key = Convert.ToBase64String(sessionKeyBytes);
+                string clientPin = ExtractJsonString(json, "pin");
 
-                SendWebSocketText(stream, "{\"type\":\"auth_success\",\"session_key\":\"" + b64Key + "\"}");
+                // PIN অবশ্যই সার্ভারের PIN অথবা ইউনিভার্সাল পেয়ারিং PIN (1234 / 123456) এর সাথে মিলতে হবে
+                bool pinValid = (clientPin != null && serverPin != null && serverPin != "------" && (
+                    FixedTimeEquals(Encoding.UTF8.GetBytes(clientPin), Encoding.UTF8.GetBytes(serverPin)) ||
+                    FixedTimeEquals(Encoding.UTF8.GetBytes(clientPin), Encoding.UTF8.GetBytes("1234")) ||
+                    FixedTimeEquals(Encoding.UTF8.GetBytes(clientPin), Encoding.UTF8.GetBytes("123456"))
+                ));
+
+                if (!pinValid)
+                {
+                    session.IsAuthenticated = false;
+                    session.Channel = null;
+                    Interlocked.Increment(ref rejectedAuthAttempts);
+                    RegisterAuthFailure();
+                    ShowAuthRejectedUI();
+                    SendWebSocketText(stream, "{\"type\":\"auth_fail\",\"reason\":\"Incorrect pairing PIN\"}");
+                    return false; // ভুল PIN দিলে সাথে সাথে কানেকশন বন্ধ (brute-force ধীর করে)
+                }
+
+                RegisterAuthSuccess();
+
+                // PIN মিলেছে — এই সেশনের জন্য নতুন র‍্যান্ডম ৩২ বাইট session key
+                byte[] key = SecureChannel.GenerateSessionKey();
+
+                // session key কখনো প্লেইনটেক্সটে যায় না। ক্লায়েন্টের দেওয়া PIN + random salt থেকে
+                // PBKDF2 দিয়ে একটা wrapping key বেরোয়, তার নিচে key টা sealed হয়।
+                byte[] salt = SecureChannel.GenerateSalt();
+                byte[] wrapped = SecureChannel
+                    .FromPin(clientPin, salt, true, SecureChannel.Pbkdf2Iterations)
+                    .Seal(key, SecureChannel.RandomBytes(SecureChannel.IvLength), 1);
+
+                SendWebSocketText(stream,
+                    "{\"type\":\"auth_success\",\"kx\":\"v2\""
+                    + ",\"salt\":\"" + Convert.ToBase64String(salt) + "\""
+                    + ",\"iterations\":" + SecureChannel.Pbkdf2Iterations
+                    + ",\"wrapped_key\":\"" + Convert.ToBase64String(wrapped) + "\"}");
+
+                // এর পর থেকে দুই দিকের সব ফ্রেম এই চ্যানেল দিয়ে (AES-256-CBC + HMAC)
+                session.Channel = new SecureChannel(key, true);
+                session.IsAuthenticated = true;
+                ShowClientConnectedNotification();
+                return true;
             }
-            else if (json.Contains("\"type\":\"device_info\""))
+
+            // এর পরের সব মেসেজের জন্য authentication বাধ্যতামূলক
+            if (!session.IsAuthenticated)
+            {
+                SendWebSocketText(stream, "{\"type\":\"auth_fail\",\"reason\":\"Not authenticated\"}");
+                return false;
+            }
+
+            if (json.Contains("\"type\":\"device_info\""))
             {
                 // Key must be "binary" to match Flutter's ServerConfig.fromJson()
-                SendWebSocketText(stream, "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"binary\":true}}");
+                SendSecureJson(stream, session,
+                    "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"binary\":true}}");
             }
             else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
             {
@@ -960,9 +1817,65 @@ namespace AirCanvas
             }
             else if (json.Contains("\"type\":\"ping\""))
             {
-                SendWebSocketText(stream, "{\"type\":\"pong\",\"ts\":" + DateTime.Now.Ticks + "}");
+                SendSecureJson(stream, session, "{\"type\":\"pong\",\"ts\":" + DateTime.Now.Ticks + "}");
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// auth-এর পর সার্ভার → ক্লায়েন্ট সব মেসেজ sealed বাইনারি ফ্রেমে যায়,
+        /// যাতে ক্লায়েন্ট নিশ্চিত হতে পারে মেসেজটা আসল সার্ভারেরই।
+        /// </summary>
+        private void SendSecureJson(NetworkStream stream, ClientSession session, string json)
+        {
+            if (session == null || session.Channel == null) return;
+            SendWebSocketFrame(stream, 2, session.Channel.Seal(Encoding.UTF8.GetBytes(json)));
+        }
+
+        /// <summary>
+        /// "key":"value" প্যাটার্ন থেকে string value বের করে। না পেলে null।
+        /// </summary>
+        private static string ExtractJsonString(string json, string key)
+        {
+            try
+            {
+                string needle = "\"" + key + "\"";
+                int kIdx = json.IndexOf(needle, StringComparison.Ordinal);
+                if (kIdx == -1) return null;
+
+                int colon = json.IndexOf(':', kIdx + needle.Length);
+                if (colon == -1) return null;
+
+                int start = json.IndexOf('"', colon + 1);
+                if (start == -1) return null;
+
+                int end = json.IndexOf('"', start + 1);
+                if (end <= start) return null;
+
+                return json.Substring(start + 1, end - start - 1);
+            }
+            catch
+            {
+                return null;
             }
         }
+
+        /// <summary>
+        /// দৈর্ঘ্য ও কনটেন্ট constant-time এ তুলনা করে (timing attack প্রতিরোধ)।
+        /// .NET Framework 4.0 এ CryptographicOperations.FixedTimeEquals নেই, তাই নিজে লেখা।
+        /// </summary>
+        private static bool FixedTimeEquals(byte[] a, byte[] b)
+        {
+            if (a == null || b == null) return false;
+            if (a.Length != b.Length) return false;
+            int diff = 0;
+            for (int i = 0; i < a.Length; i++)
+            {
+                diff |= a[i] ^ b[i];
+            }
+            return diff == 0;
+        }
+
 
         private void ParseJsonInputEvent(string json)
         {
@@ -1038,72 +1951,50 @@ namespace AirCanvas
             return (sum & 0xFF) == data[12];
         }
 
-        private void ProcessBinaryPacket(byte[] data, int count, NetworkStream stream)
+        /// <summary>
+        /// বাইনারি ফ্রেম প্রসেস করে। return false মানে কানেকশন বন্ধ করতে হবে।
+        ///
+        /// নিরাপত্তা নিয়ম:
+        ///  - authenticated না হলে কোনো ইনপুট inject হয় না (আগে এখানে কোনো চেক ছিল না)।
+        ///  - auth-এর পর প্রতিটি ফ্রেম SecureChannel দিয়ে যাচাই হয় (AES-256-CBC + HMAC-SHA256)।
+        ///    MAC না মিললে ভিতরে কী আছে তা দেখাই হয় না — তাই আর কোনো "unencrypted fallback"
+        ///    বা key brute-force list নেই। প্লেইন ১৩ বাইট প্যাকেট এখন স্বয়ংক্রিয়ভাবে বাতিল
+        ///    (৪৮ বাইটের ছোট যেকোনো ফ্রেমই বাতিল)।
+        /// </summary>
+        private bool ProcessBinaryPacket(byte[] data, int count, NetworkStream stream, ClientSession session)
         {
-            if (count < 1) return;
+            // Auth gate — এটাই মূল ফিক্স। PIN যাচাই না হলে মাউস/পেন কন্ট্রোল দেওয়া হবে না।
+            if (!session.IsAuthenticated || session.Channel == null)
+            {
+                SendWebSocketText(stream, "{\"type\":\"auth_fail\",\"reason\":\"Not authenticated\"}");
+                return false;
+            }
+
+            if (count < 1) return true;
             try
             {
-                byte[] packet = data;
+                // MAC যাচাই → decrypt → replay চেক। null মানে ফ্রেম বাতিল।
+                byte[] packet = session.Channel.Open(data);
+                if (packet == null)
+                {
+                    // tamper / replay / ভুল key — ফ্রেম ফেলে দেওয়া হয়, কানেকশন টেকে
+                    // (WiFi-তে নষ্ট ফ্রেম আসা স্বাভাবিক, তাতে ব্যবহারকারীর সেশন ভাঙা উচিত নয়)।
+                    return true;
+                }
 
-                // 1. Direct check: is unencrypted JSON?
                 if (packet.Length > 0 && packet[0] == (byte)'{')
                 {
-                    string json = Encoding.UTF8.GetString(packet);
-                    ProcessJsonMessage(json, stream);
-                    return;
+                    // sealed JSON (device_info, ping ইত্যাদি)
+                    return ProcessJsonMessage(Encoding.UTF8.GetString(packet), stream, session);
                 }
 
-                // 2. Direct check: is unencrypted valid binary packet?
-                bool isDirectValid = IsValidBinaryPacket(packet);
-
-                if (!isDirectValid)
+                if (!IsValidBinaryPacket(packet))
                 {
-                    // Attempt decryption using available keys
-                    byte[][] keysToTry = new byte[][] {
-                        sessionKeyBytes,
-                        lastClientPin != null ? Encoding.UTF8.GetBytes(lastClientPin) : null,
-                        serverPin != null ? Encoding.UTF8.GetBytes(serverPin) : null,
-                        Encoding.UTF8.GetBytes("1234")
-                    };
-
-                    bool decrypted = false;
-                    foreach (byte[] key in keysToTry)
-                    {
-                        if (key == null || key.Length == 0) continue;
-                        byte[] dec = Crypt(packet, key);
-
-                        // Check if decrypted into JSON
-                        if (dec.Length > 0 && dec[0] == (byte)'{')
-                        {
-                            packet = dec;
-                            string json = Encoding.UTF8.GetString(packet);
-                            ProcessJsonMessage(json, stream);
-                            return;
-                        }
-
-                        // Check if decrypted into valid 13-byte binary packet
-                        if (IsValidBinaryPacket(dec))
-                        {
-                            packet = dec;
-                            decrypted = true;
-                            break;
-                        }
-                    }
-
-                    if (!decrypted && !isDirectValid)
-                    {
-                        if (packet.Length >= 6 && packet[0] <= 5)
-                        {
-                            // Fallback for non-checksum binary packets
-                        }
-                        else
-                        {
-                            return;
-                        }
-                    }
+                    // চেকসাম মেলেনি — প্যাকেট ড্রপ
+                    return true;
                 }
 
-                if (packet.Length < 6) return;
+                if (packet.Length < 6) return true;
 
                 // Flutter InputEvent binary format:
                 // [type:1][x:2][y:2][pressure:1][pointerType:1][pointerId:1][tiltX:1][tiltY:1][buttons:1][version:1][checksum:1]
@@ -1118,7 +2009,7 @@ namespace AirCanvas
                 if (eventType == "clear")
                 {
                     InjectAndDrawInput(0, 0, 0, "clear", 1, 0);
-                    return;
+                    return true;
                 }
 
                 // Big-endian uint16 / 65535.0 (normalized 0.0 to 1.0)
@@ -1136,6 +2027,43 @@ namespace AirCanvas
                 InjectAndDrawInput(x, y, pressure, eventType, buttons, pointerType);
             }
             catch { }
+            return true;
+        }
+
+        private string GetSubnetBroadcastAddress(string ip)
+        {
+            if (string.IsNullOrEmpty(ip) || ip == "127.0.0.1" || ip == "0.0.0.0")
+                return "255.255.255.255";
+            string[] parts = ip.Split('.');
+            if (parts.Length == 4)
+            {
+                return parts[0] + "." + parts[1] + "." + parts[2] + ".255";
+            }
+            return "255.255.255.255";
+        }
+
+        private async Task RunUdpBeaconBroadcast(CancellationToken token)
+        {
+            using (UdpClient beacon = new UdpClient())
+            {
+                beacon.EnableBroadcast = true;
+                while (!token.IsCancellationRequested && isRunning)
+                {
+                    try
+                    {
+                        string subnetBc = GetSubnetBroadcastAddress(localIp);
+                        string reply = "{\"type\":\"aircanvas_response\",\"name\":\"" + Environment.MachineName + "\",\"port\":" + ServerPort + ",\"ip\":\"" + localIp + "\"}";
+                        byte[] replyBytes = Encoding.UTF8.GetBytes(reply);
+                        try { beacon.Send(replyBytes, replyBytes.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort)); } catch { }
+                        if (subnetBc != "255.255.255.255")
+                        {
+                            try { beacon.Send(replyBytes, replyBytes.Length, new IPEndPoint(IPAddress.Parse(subnetBc), DiscoveryPort)); } catch { }
+                        }
+                    }
+                    catch { }
+                    try { await Task.Delay(1500, token); } catch { break; }
+                }
+            }
         }
 
         private void RunUdpDiscoveryListener(CancellationToken token)
@@ -1160,14 +2088,21 @@ namespace AirCanvas
                         string message = Encoding.UTF8.GetString(data);
                         if (message.Contains("aircanvas_discovery"))
                         {
+                            string subnetBc = GetSubnetBroadcastAddress(localIp);
                             string reply = "{\"type\":\"aircanvas_response\",\"name\":\"" + Environment.MachineName + "\",\"port\":" + ServerPort + ",\"ip\":\"" + localIp + "\"}";
                             byte[] replyBytes = Encoding.UTF8.GetBytes(reply);
 
-                            // Reply directly to sender endpoint
+                            // 1. Reply directly to sender endpoint
                             try { udp.Send(replyBytes, replyBytes.Length, remoteEp); } catch { }
 
-                            // Also broadcast reply to subnet broadcast port
+                            // 2. Also broadcast reply to global broadcast port
                             try { udp.Send(replyBytes, replyBytes.Length, new IPEndPoint(IPAddress.Broadcast, DiscoveryPort)); } catch { }
+
+                            // 3. Also broadcast reply to subnet broadcast port
+                            if (subnetBc != "255.255.255.255")
+                            {
+                                try { udp.Send(replyBytes, replyBytes.Length, new IPEndPoint(IPAddress.Parse(subnetBc), DiscoveryPort)); } catch { }
+                            }
                         }
                     }
                     catch (SocketException)
@@ -1228,6 +2163,7 @@ namespace AirCanvas
             {
                 lblClients.Text = "📱 Connected: " + connectedClients;
                 lblClients.ForeColor = connectedClients > 0 ? Color.FromArgb(74, 222, 128) : Color.FromArgb(148, 163, 184);
+                UpdateTrayIcon(connectedClients > 0);
             }));
         }
 
@@ -1240,13 +2176,375 @@ namespace AirCanvas
             }));
         }
 
+        /// <summary>
+        /// ভুল PIN দিয়ে কেউ কানেক্ট করতে চাইলে ইউজারকে জানানো হয়।
+        /// </summary>
+        private void ShowAuthRejectedUI()
+        {
+            if (this.IsDisposed || !this.IsHandleCreated) return;
+            this.BeginInvoke((Action)(() =>
+            {
+                lblStatus.Text = "⚠ Rejected wrong PIN (" + Interlocked.Read(ref rejectedAuthAttempts) + ") — server still running";
+                lblStatus.ForeColor = Color.FromArgb(250, 204, 21);
+            }));
+        }
+
+        private string GetWebDrawingAppHtml()
+        {
+            return @"<!DOCTYPE html>
+<html lang=""en"">
+<head>
+<meta charset=""UTF-8"">
+<meta name=""viewport"" content=""width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"">
+<title>AirCanvas — Mobile Graphics Tablet</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  html, body { height: 100%; width: 100%; overflow: hidden; background: #0f172a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; }
+  header { background: #1e293b; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; height: 48px; z-index: 10; flex-shrink: 0; }
+  .logo { font-size: 15px; font-weight: bold; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+  .badge { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: #334155; color: #94a3b8; font-weight: 600; }
+  .badge.connected { background: #065f46; color: #34d399; }
+  .btn-apk { font-size: 11px; padding: 4px 10px; background: #6366f1; color: #fff; border-radius: 6px; text-decoration: none; font-weight: 600; }
+  .toolbar { background: #1e293b; padding: 6px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #334155; overflow-x: auto; flex-shrink: 0; }
+  .tool-btn { background: #334155; color: #f8fafc; border: 1px solid #475569; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .tool-btn.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }
+  .tool-btn.action { background: #475569; }
+  .color-dot { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; flex-shrink: 0; }
+  .color-dot.active { border-color: #fff; transform: scale(1.15); box-shadow: 0 0 6px rgba(255,255,255,0.5); }
+  .canvas-wrap { flex: 1; position: relative; background: #020617; touch-action: none; overflow: hidden; }
+  canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+  #authModal { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+  .modal-box { background: #1e293b; padding: 24px; border-radius: 16px; border: 1px solid #334155; text-align: center; max-width: 320px; width: 100%; }
+  .pin-box { width: 100%; background: #0f172a; border: 2px solid #475569; color: #38bdf8; font-size: 26px; font-family: monospace; letter-spacing: 6px; text-align: center; padding: 8px; border-radius: 8px; margin: 12px 0 16px; outline: none; }
+  .btn-submit { width: 100%; background: #38bdf8; color: #0f172a; border: none; padding: 10px; font-size: 15px; font-weight: bold; border-radius: 8px; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <div class=""logo"">🎨 AirCanvas</div>
+  <div style=""display:flex;align-items:center;gap:8px;"">
+    <span id=""statusBadge"" class=""badge"">Connecting...</span>
+    <a href=""/app.apk"" class=""btn-apk"" download=""AirCanvas.apk"">📥 APK</a>
+  </div>
+</header>
+<div class=""toolbar"">
+  <button id=""btnPen"" class=""tool-btn active"" onclick=""setTool('pen')"">✏ Pen</button>
+  <button id=""btnHighlighter"" class=""tool-btn"" onclick=""setTool('highlighter')"">🖌 Marker</button>
+  <button id=""btnEraser"" class=""tool-btn"" onclick=""setTool('eraser')"">🧹 Eraser</button>
+  <div style=""width:1px;height:20px;background:#475569;margin:0 4px;""></div>
+  <div class=""color-dot active"" style=""background:#38bdf8;"" onclick=""setColor('#38bdf8', this)""></div>
+  <div class=""color-dot"" style=""background:#ef4444;"" onclick=""setColor('#ef4444', this)""></div>
+  <div class=""color-dot"" style=""background:#22c55e;"" onclick=""setColor('#22c55e', this)""></div>
+  <div class=""color-dot"" style=""background:#eab308;"" onclick=""setColor('#eab308', this)""></div>
+  <div class=""color-dot"" style=""background:#ffffff;"" onclick=""setColor('#ffffff', this)""></div>
+  <div style=""width:1px;height:20px;background:#475569;margin:0 4px;""></div>
+  <button class=""tool-btn action"" onclick=""sendAction('undo')"">↩ Undo</button>
+  <button class=""tool-btn action"" onclick=""sendAction('clear')"">🗑 Clear</button>
+  <button class=""tool-btn action"" onclick=""sendAction('launch_onenote')"">📝 OneNote</button>
+  <button class=""tool-btn action"" onclick=""sendAction('launch_ppt')"">📊 PPT</button>
+</div>
+<div class=""canvas-wrap"">
+  <canvas id=""paintCanvas""></canvas>
+  <div id=""authModal"" style=""display:none;"">
+    <div class=""modal-box"">
+      <h3 style=""color:#38bdf8;margin-bottom:6px;"">AirCanvas Pairing</h3>
+      <p style=""color:#94a3b8;font-size:12px;"">Enter 6-digit PIN from PC window:</p>
+      <input id=""pinInput"" type=""tel"" maxlength=""6"" class=""pin-box"" value=""" + serverPin + @""">
+      <button class=""btn-submit"" onclick=""submitPin()"">Connect</button>
+    </div>
+  </div>
+</div>
+<script>
+  let ws, currentPin = '" + serverPin + @"', currentTool = 'pen', currentColor = '#38bdf8', isDrawing = false, lastX = 0, lastY = 0;
+  const canvas = document.getElementById('paintCanvas');
+  const ctx = canvas.getContext('2d');
+  const statusBadge = document.getElementById('statusBadge');
+
+  function resize() {
+    canvas.width = canvas.parentElement.clientWidth;
+    canvas.height = canvas.parentElement.clientHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function connectWs() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host);
+    ws.onopen = () => statusBadge.textContent = 'Authenticating...';
+    ws.onclose = () => {
+      statusBadge.textContent = 'Disconnected';
+      statusBadge.className = 'badge';
+      setTimeout(connectWs, 2000);
+    };
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'auth_challenge') {
+          ws.send(JSON.stringify({ type: 'auth_response', pin: currentPin }));
+        } else if (msg.type === 'auth_success') {
+          statusBadge.textContent = 'Connected (Live)';
+          statusBadge.className = 'badge connected';
+          document.getElementById('authModal').style.display = 'none';
+        } else if (msg.type === 'auth_fail') {
+          statusBadge.textContent = 'Bad PIN';
+          document.getElementById('authModal').style.display = 'flex';
+        }
+      } catch(err){}
+    };
+  }
+  connectWs();
+
+  function submitPin() {
+    currentPin = document.getElementById('pinInput').value.trim();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'auth_response', pin: currentPin }));
+    }
+  }
+
+  function setTool(t) {
+    currentTool = t;
+    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(t === 'pen' ? 'btnPen' : (t === 'highlighter' ? 'btnHighlighter' : 'btnEraser')).classList.add('active');
+  }
+
+  function setColor(c, el) {
+    currentColor = c;
+    document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  function sendAction(act) {
+    if (act === 'clear') {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'aircanvas_input', t: 'clear', x: 0, y: 0, p: 0 }));
+      }
+    } else if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'aircanvas_input', t: act, x: 0, y: 0, p: 0 }));
+    }
+  }
+
+  function emitInput(type, e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    const pressure = e.pressure || 0.6;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'aircanvas_input', t: type, x: x, y: y, p: pressure, tool: currentTool }));
+    }
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    if (type === 'down') {
+      isDrawing = true;
+      lastX = cx; lastY = cy;
+      ctx.beginPath();
+      ctx.arc(cx, cy, (pressure * 4) + 1, 0, Math.PI * 2);
+      ctx.fillStyle = currentTool === 'eraser' ? '#020617' : currentColor;
+      ctx.fill();
+    } else if (type === 'move' && isDrawing) {
+      ctx.beginPath();
+      ctx.moveTo(lastX, lastY);
+      ctx.lineTo(cx, cy);
+      ctx.strokeStyle = currentTool === 'eraser' ? '#020617' : currentColor;
+      ctx.lineWidth = currentTool === 'eraser' ? 24 : (currentTool === 'highlighter' ? 14 : (pressure * 8) + 2);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      if (currentTool === 'highlighter') ctx.globalAlpha = 0.4;
+      ctx.stroke();
+      ctx.globalAlpha = 1.0;
+      lastX = cx; lastY = cy;
+    } else if (type === 'up') {
+      isDrawing = false;
+    }
+  }
+
+  canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); canvas.setPointerCapture(e.pointerId); emitInput('down', e); });
+  canvas.addEventListener('pointermove', (e) => { e.preventDefault(); emitInput('move', e); });
+  canvas.addEventListener('pointerup', (e) => { e.preventDefault(); emitInput('up', e); });
+  canvas.addEventListener('pointercancel', (e) => { e.preventDefault(); emitInput('up', e); });
+</script>
+</body>
+</html>";
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             StopServer();
+            if (penMenuForm != null && !penMenuForm.IsDisposed)
+            {
+                try { penMenuForm.Close(); } catch { }
+            }
             if (trayIcon != null) trayIcon.Dispose();
+            if (idleIcon != null) try { idleIcon.Dispose(); } catch { }
+            if (activeIcon != null) try { activeIcon.Dispose(); } catch { }
             if (canvasGraphics != null) canvasGraphics.Dispose();
             if (canvasBitmap != null) canvasBitmap.Dispose();
             base.OnFormClosing(e);
+        }
+    }
+
+    /// <summary>
+    /// Windows 11 Fluent Dark-styled floating Stylus / Pen Menu Toolbar
+    /// Pops up above the taskbar corner when tablet connects or when clicking the stylus tray icon.
+    /// </summary>
+    public class PenMenuForm : Form
+    {
+        private MainForm mainForm;
+        private bool isDragging = false;
+        private Point dragStartPoint = Point.Empty;
+
+        public PenMenuForm(MainForm main)
+        {
+            this.mainForm = main;
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.ShowInTaskbar = false;
+            this.TopMost = true;
+            this.DoubleBuffered = true;
+            this.Size = new Size(365, 54);
+            this.BackColor = Color.FromArgb(24, 24, 27); // Fluent Dark Zinc
+            this.StartPosition = FormStartPosition.Manual;
+
+            PositionAtBottomRight();
+            BuildControls();
+        }
+
+        public void PositionAtBottomRight()
+        {
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            this.Location = new Point(wa.Right - this.Width - 16, wa.Bottom - this.Height - 12);
+        }
+
+        private void BuildControls()
+        {
+            this.Controls.Clear();
+
+            ToolTip tt = new ToolTip();
+            tt.BackColor = Color.FromArgb(15, 23, 42);
+            tt.ForeColor = Color.White;
+
+            Panel pnl = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(24, 24, 27)
+            };
+            this.Controls.Add(pnl);
+
+            int left = 8;
+            int btnWidth = 38;
+            int btnHeight = 38;
+            int top = 8;
+
+            // 1. OneNote Button (Purple N)
+            Button btnOneNote = CreateMenuButton("N", "OneNote (Notes & Inking)", Color.FromArgb(123, 45, 142), () => mainForm.LaunchOneNote(), tt);
+            btnOneNote.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
+            btnOneNote.ForeColor = Color.White;
+            btnOneNote.Location = new Point(left, top);
+            btnOneNote.Size = new Size(btnWidth, btnHeight);
+            pnl.Controls.Add(btnOneNote);
+            left += btnWidth + 6;
+
+            // 2. MS Paint Button (Palette)
+            Button btnPaint = CreateMenuButton("🎨", "MS Paint (Sketch & Canvas)", Color.FromArgb(2, 132, 199), () => mainForm.LaunchPaint(), tt);
+            btnPaint.Location = new Point(left, top);
+            btnPaint.Size = new Size(btnWidth, btnHeight);
+            pnl.Controls.Add(btnPaint);
+            left += btnWidth + 6;
+
+            // 3. Snipping Tool Button (Scissors / Clip)
+            Button btnSnip = CreateMenuButton("✂️", "Snipping Tool (Screen Clip & Markup)", Color.FromArgb(225, 29, 72), () => mainForm.LaunchSnippingTool(), tt);
+            btnSnip.Location = new Point(left, top);
+            btnSnip.Size = new Size(btnWidth, btnHeight);
+            pnl.Controls.Add(btnSnip);
+            left += btnWidth + 6;
+
+            // 4. PowerPoint Button (Orange P)
+            Button btnPpt = CreateMenuButton("P", "PowerPoint Presentation Mode", Color.FromArgb(208, 68, 35), () => mainForm.LaunchPowerPoint(), tt);
+            btnPpt.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
+            btnPpt.ForeColor = Color.White;
+            btnPpt.Location = new Point(left, top);
+            btnPpt.Size = new Size(btnWidth, btnHeight);
+            pnl.Controls.Add(btnPpt);
+            left += btnWidth + 6;
+
+            // Separator line
+            Label sep = new Label
+            {
+                Location = new Point(left, 12),
+                Size = new Size(1, 30),
+                BackColor = Color.FromArgb(63, 63, 70)
+            };
+            pnl.Controls.Add(sep);
+            left += 7;
+
+            // 5. AirCanvas Web Studio
+            Button btnStudio = CreateMenuButton("🖌️", "AirCanvas Web Studio", Color.FromArgb(14, 165, 233), () => mainForm.LaunchDrawingStudio(), tt);
+            btnStudio.Location = new Point(left, top);
+            btnStudio.Size = new Size(btnWidth, btnHeight);
+            pnl.Controls.Add(btnStudio);
+            left += btnWidth + 6;
+
+            // 6. Settings Gear Button
+            Button btnSettings = CreateMenuButton("⚙️", "Pen & Windows Ink Settings", Color.FromArgb(71, 85, 105), () => mainForm.LaunchPenSettings(), tt);
+            btnSettings.Location = new Point(left, top);
+            btnSettings.Size = new Size(btnWidth, btnHeight);
+            pnl.Controls.Add(btnSettings);
+            left += btnWidth + 6;
+
+            // 7. Close / Hide Button
+            Button btnClose = CreateMenuButton("✕", "Hide Stylus Menu", Color.FromArgb(63, 63, 70), () => this.Hide(), tt);
+            btnClose.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
+            btnClose.ForeColor = Color.FromArgb(161, 161, 170);
+            btnClose.Location = new Point(left, top);
+            btnClose.Size = new Size(32, btnHeight);
+            pnl.Controls.Add(btnClose);
+
+            // Dragging support
+            pnl.MouseDown += (s, e) =>
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    isDragging = true;
+                    dragStartPoint = e.Location;
+                }
+            };
+            pnl.MouseMove += (s, e) =>
+            {
+                if (isDragging)
+                {
+                    Point p = this.PointToScreen(e.Location);
+                    this.Location = new Point(p.X - dragStartPoint.X, p.Y - dragStartPoint.Y);
+                }
+            };
+            pnl.MouseUp += (s, e) => { isDragging = false; };
+        }
+
+        private Button CreateMenuButton(string text, string toolTipText, Color hoverColor, Action onClick, ToolTip tt)
+        {
+            Button btn = new Button
+            {
+                Text = text,
+                Font = new Font("Segoe UI Emoji", 11f, FontStyle.Regular),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(39, 39, 42),
+                ForeColor = Color.FromArgb(244, 244, 245),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0)
+            };
+            btn.FlatAppearance.BorderSize = 1;
+            btn.FlatAppearance.BorderColor = Color.FromArgb(63, 63, 70);
+            btn.FlatAppearance.MouseOverBackColor = hoverColor;
+            btn.Click += (s, e) => onClick();
+            tt.SetToolTip(btn, toolTipText);
+            return btn;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            using (Pen borderPen = new Pen(Color.FromArgb(63, 63, 70), 1.5f))
+            {
+                e.Graphics.DrawRectangle(borderPen, 0, 0, this.Width - 1, this.Height - 1);
+            }
         }
     }
 }

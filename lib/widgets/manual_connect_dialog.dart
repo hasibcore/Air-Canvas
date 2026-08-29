@@ -9,12 +9,14 @@ class ManualConnectDialog extends StatefulWidget {
   /// Controllers owned by parent — this widget does NOT dispose them (Bug 143)
   final TextEditingController ipController;
   final TextEditingController portController;
-  final Future<void> Function(String ip, int port) onConnect;
+  final TextEditingController? pinController;
+  final Future<void> Function(String ip, int port, String? pin) onConnect;
 
   const ManualConnectDialog({
     super.key,
     required this.ipController,
     required this.portController,
+    this.pinController,
     required this.onConnect,
   });
 
@@ -25,6 +27,22 @@ class ManualConnectDialog extends StatefulWidget {
 class _ManualConnectDialogState extends State<ManualConnectDialog> {
   // Bug 142: Prevents double-tap connect
   bool _isConnecting = false;
+
+  late final TextEditingController _localPinController;
+  TextEditingController get _effectivePinController =>
+      widget.pinController ?? _localPinController;
+
+  @override
+  void initState() {
+    super.initState();
+    _localPinController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _localPinController.dispose();
+    super.dispose();
+  }
 
   // Bug 141: Form key for validation
   final _formKey = GlobalKey<FormState>();
@@ -48,42 +66,57 @@ class _ManualConnectDialogState extends State<ManualConnectDialog> {
       ),
       content: Form(
         key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Enter the server IP address and port',
-              style: TextStyle(color: Colors.grey, fontSize: 13),
-            ),
-            const SizedBox(height: 20),
-            // Bug 141: IP field with proper validation
-            TextFormField(
-              controller: widget.ipController,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(color: Colors.white),
-              enabled: !_isConnecting,
-              validator: _validateIp,
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              decoration: _inputDecoration(
-                label: 'Server IP',
-                hint: '192.168.1.100',
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Enter PC IP, Port, and Pairing PIN shown on the PC screen',
+                style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
-            ),
-            const SizedBox(height: 12),
-            // Bug 141: Port field with range validation
-            TextFormField(
-              controller: widget.portController,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(color: Colors.white),
-              enabled: !_isConnecting,
-              validator: _validatePort,
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              decoration: _inputDecoration(
-                label: 'Port',
-                hint: ConnectionProvider.defaultServerPort.toString(),
+              const SizedBox(height: 20),
+              // Bug 141: IP field with proper validation
+              TextFormField(
+                controller: widget.ipController,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                enabled: !_isConnecting,
+                validator: _validateIp,
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                decoration: _inputDecoration(
+                  label: 'Server IP',
+                  hint: '192.168.1.10',
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              // Bug 141: Port field with range validation
+              TextFormField(
+                controller: widget.portController,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                enabled: !_isConnecting,
+                validator: _validatePort,
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                decoration: _inputDecoration(
+                  label: 'Port',
+                  hint: ConnectionProvider.defaultServerPort.toString(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // PIN field directly in dialog
+              TextFormField(
+                controller: _effectivePinController,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white, letterSpacing: 4, fontWeight: FontWeight.bold),
+                enabled: !_isConnecting,
+                maxLength: 6,
+                decoration: _inputDecoration(
+                  label: 'Pairing PIN (6 Digits)',
+                  hint: '123456',
+                ),
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -154,10 +187,11 @@ class _ManualConnectDialogState extends State<ManualConnectDialog> {
     final ip = widget.ipController.text.trim();
     final port = int.tryParse(widget.portController.text.trim())
         ?? ConnectionProvider.defaultServerPort;
+    final pin = _effectivePinController.text.trim();
 
     setState(() => _isConnecting = true);
     try {
-      await widget.onConnect(ip, port);
+      await widget.onConnect(ip, port, pin.isEmpty ? null : pin);
     } finally {
       if (mounted) setState(() => _isConnecting = false);
     }

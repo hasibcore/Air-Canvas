@@ -315,7 +315,7 @@ class _ActionButtons extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: effectiveColor.withOpacity(disabled ? 0.05 : 0.15),
+              color: effectiveColor.withValues(alpha: disabled ? 0.05 : 0.15),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(icon, color: effectiveColor, size: 20),

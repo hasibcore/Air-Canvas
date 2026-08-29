@@ -255,9 +255,6 @@ class _DrawingScreenState extends State<DrawingScreen> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
-    if (!_showToolbar) { // Only set state if not already visible (Bug 87, 95)
-      setState(() => _showToolbar = true);
-    }
     _resetToolbarTimer();
 
     final drawing = context.read<DrawingProvider>();
@@ -382,7 +379,7 @@ class DrawingPainter extends CustomPainter {
         Paint()
           ..color = settings.mode == BrushMode.eraser
               ? const Color(0xFF0A0A12)
-              : settings.color.withOpacity(settings.opacity.clamp(0.0, 1.0))
+              : settings.color.withValues(alpha: settings.opacity.clamp(0.0, 1.0))
           ..strokeWidth = 1
           ..style = PaintingStyle.fill,
       );
@@ -423,7 +420,7 @@ class DrawingPainter extends CustomPainter {
       final paint = Paint()
         ..color = settings.mode == BrushMode.eraser
             ? const Color(0xFF0A0A12)
-            : settings.color.withOpacity(settings.opacity.clamp(0.0, 1.0))
+            : settings.color.withValues(alpha: settings.opacity.clamp(0.0, 1.0))
         ..strokeWidth = width
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
@@ -452,7 +449,7 @@ class GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFFFFFFFF).withOpacity(0.03)
+      ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.03)
       ..strokeWidth = 0.5;
 
     const gridSize = 40.0;

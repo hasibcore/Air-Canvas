@@ -5,19 +5,24 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:air_canvas/models/input_event.dart';
+import 'package:air_canvas/services/secure_channel.dart';
 
-List<int> crypt(List<int> data, List<int> key) {
-  final result = List<int>.filled(data.length, 0);
-  for (int i = 0; i < data.length; i++) {
-    result[i] = data[i] ^ key[i % key.length];
-  }
-  return result;
-}
+// পুরনো XOR `crypt()` সরিয়ে দেওয়া হয়েছে — সার্ভার এখন কেবল Secure Channel v2
+// ফ্রেম নেয় (AES-256-CBC + HMAC-SHA256)। প্লেইন বা XOR প্যাকেট ড্রপ হবে।
 
-void main() async {
+void main(List<String> args) async {
   print('====================================================');
   print('  AirCanvas Live End-to-End Drawing Simulator');
   print('====================================================');
+
+  // PIN এখন প্রতিবার সার্ভার স্টার্টে র‍্যান্ডম, তাই hardcode করা যায় না।
+  // ব্যবহার: dart run test_live_drawing_e2e.dart <6-digit-pin>
+  if (args.isEmpty || (args.first.length != 6 && args.first.length != 4)) {
+    print('❌ Usage: dart run test_live_drawing_e2e.dart <4-or-6-digit-pin>');
+    print('   সার্ভার উইন্ডোর "🔑 Pairing PIN" থেকে PIN টা নিন, অথবা 1234 ব্যবহার করুন।');
+    exit(64);
+  }
+  final pin = args.first;
 
   // 1. Test UDP Discovery Broadcast
   print('Testing UDP WiFi Discovery on port 9091...');
@@ -64,13 +69,12 @@ void main() async {
   udpSocket.close();
 
   const serverUrl = 'ws://127.0.0.1:9090';
-  const pin = '1234';
 
   print('Connecting to $serverUrl ...');
   final socket = await WebSocket.connect(serverUrl);
   print('✅ WebSocket Connected!');
 
-  List<int>? encryptionKey;
+  SecureChannel? channel;
   bool authenticated = false;
   bool configReceived = false;
   ServerConfig? serverConfig;
@@ -80,16 +84,25 @@ void main() async {
   socket.listen(
     (dynamic data) {
       try {
-        dynamic decryptedData = data;
-        if (encryptionKey != null && data is List<int>) {
-          decryptedData = crypt(data, encryptionKey!);
-        }
-
         String? text;
-        if (decryptedData is String) {
-          text = decryptedData;
-        } else if (decryptedData is List<int>) {
-          text = utf8.decode(decryptedData);
+        if (data is String) {
+          // handshake-পর্বের প্লেইনটেক্সট। auth এর পর সার্ভার আর টেক্সট পাঠায় না।
+          if (channel != null) {
+            print('⚠️ Dropped unsealed text frame after auth');
+            return;
+          }
+          text = data;
+        } else if (data is List<int>) {
+          if (channel == null) {
+            print('⚠️ Dropped binary frame before handshake finished');
+            return;
+          }
+          final opened = channel!.open(data);
+          if (opened == null) {
+            print('⚠️ Dropped invalid frame (MAC/replay)');
+            return;
+          }
+          text = utf8.decode(opened);
         }
 
         if (text != null) {
@@ -100,15 +113,33 @@ void main() async {
           if (type == 'auth_challenge') {
             print('Sending auth_response with PIN: $pin');
             socket.add(jsonEncode({'type': 'auth_response', 'pin': pin}));
-            encryptionKey = utf8.encode(pin);
           } else if (type == 'auth_success') {
-            authenticated = true;
-            if (json.containsKey('session_key')) {
-              encryptionKey = base64Decode(json['session_key'] as String);
-              print('Session key received and applied! (${encryptionKey!.length} bytes)');
-            } else {
-              encryptionKey = utf8.encode(pin);
+            if (json['kx'] != 'v2' ||
+                json['salt'] == null ||
+                json['wrapped_key'] == null) {
+              print('❌ সার্ভারটি পুরনো v1 handshake ব্যবহার করছে — বাতিল।');
+              if (!authCompleter.isCompleted) authCompleter.complete(false);
+              return;
             }
+            final salt = base64Decode(json['salt'] as String);
+            final iterations =
+                (json['iterations'] as num?)?.toInt() ??
+                    SecureChannel.pbkdf2Iterations;
+            final sessionKey = unwrapSessionKey(
+              base64Decode(json['wrapped_key'] as String),
+              pin,
+              salt,
+              iterations: iterations,
+            );
+            if (sessionKey == null) {
+              print('❌ session key খোলা গেল না (PIN ভুল?)');
+              if (!authCompleter.isCompleted) authCompleter.complete(false);
+              return;
+            }
+            authenticated = true;
+            channel = SecureChannel(sessionKey, isServer: false);
+            print('Session key unwrapped! (${sessionKey.length} bytes, '
+                'PBKDF2 iterations=$iterations)');
 
             // Send device_info
             final deviceInfo = {
@@ -123,9 +154,9 @@ void main() async {
                 'maxPressure': 4096.0,
               }
             };
-            print('Sending encrypted device_info...');
+            print('Sending sealed device_info...');
             final raw = utf8.encode(jsonEncode(deviceInfo));
-            socket.add(crypt(raw, encryptionKey!));
+            socket.add(channel!.seal(raw));
             authCompleter.complete(true);
           } else if (type == 'server_config') {
             configReceived = true;
@@ -166,11 +197,13 @@ void main() async {
       raw = utf8.encode(jsonEncode({'type': 'input', 'data': event.toJson()}));
     }
 
-    if (encryptionKey != null) {
-      socket.add(crypt(raw, encryptionKey!));
-    } else {
-      socket.add(raw);
+    // auth এর পর সবকিছুই sealed — channel না থাকলে পাঠানোর মানে নেই।
+    final ch = channel;
+    if (ch == null) {
+      print('⚠️ channel নেই, প্যাকেট পাঠানো হলো না');
+      return;
     }
+    socket.add(ch.seal(raw));
   }
 
   // Stroke 1: Draw a 5-pointed Star in the Center
