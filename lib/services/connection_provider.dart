@@ -598,59 +598,72 @@ class ConnectionProvider extends ChangeNotifier {
     }
   }
 
-  /// Fast Subnet TCP scanner (Scans local subnet for port 9090 in parallel)
+  /// Fast Subnet TCP scanner (Scans local subnet & common Wi-Fi/Hotspot subnets for port 9090 in parallel)
   Future<void> _scanSubnetTcp(String localIp) async {
-    if (localIp.isEmpty || localIp == '127.0.0.1') return;
-    final parts = localIp.split('.');
-    if (parts.length != 4) return;
-    final prefix = '${parts[0]}.${parts[1]}.${parts[2]}.';
+    final Set<String> prefixes = {};
+    if (localIp.isNotEmpty && localIp != '127.0.0.1') {
+      final parts = localIp.split('.');
+      if (parts.length == 4) {
+        prefixes.add('${parts[0]}.${parts[1]}.${parts[2]}.');
+      }
+    }
+    // Always include standard home Wi-Fi & Hotspot subnets as fallbacks
+    prefixes.add('192.168.1.');
+    prefixes.add('192.168.0.');
+    prefixes.add('192.168.43.'); // Android Hotspot
+    prefixes.add('172.20.10.'); // iPhone Hotspot
+    prefixes.add('10.0.0.');
 
     final hostIndices = List.generate(254, (i) => i + 1);
     const batchSize = 32;
 
-    for (int b = 0; b < hostIndices.length; b += batchSize) {
+    for (final prefix in prefixes) {
       if (_state != ConnectionState.discovering) break;
-      final batch = hostIndices.sublist(b, (b + batchSize > hostIndices.length) ? hostIndices.length : b + batchSize);
 
-      await Future.wait(batch.map((host) async {
-        final targetIp = '$prefix$host';
-        try {
-          final socket = await Socket.connect(
-            targetIp,
-            defaultServerPort,
-            timeout: const Duration(milliseconds: 350),
-          );
-          socket.destroy();
+      for (int b = 0; b < hostIndices.length; b += batchSize) {
+        if (_state != ConnectionState.discovering) break;
+        final batch = hostIndices.sublist(b, (b + batchSize > hostIndices.length) ? hostIndices.length : b + batchSize);
 
-          String deviceName = 'AirCanvas PC ($targetIp)';
+        await Future.wait(batch.map((host) async {
+          final targetIp = '$prefix$host';
           try {
-            final client = HttpClient();
-            client.connectionTimeout = const Duration(milliseconds: 350);
-            final req = await client.getUrl(Uri.parse('http://$targetIp:$defaultServerPort/api/info'));
-            final resp = await req.close().timeout(const Duration(milliseconds: 350));
-            if (resp.statusCode == 200) {
-              final body = await resp.transform(utf8.decoder).join();
-              final json = jsonDecode(body) as Map<String, dynamic>;
-              if (json['name'] != null) {
-                deviceName = json['name'] as String;
+            final socket = await Socket.connect(
+              targetIp,
+              defaultServerPort,
+              timeout: const Duration(milliseconds: 250),
+            );
+            socket.destroy();
+
+            String deviceName = 'AirCanvas PC ($targetIp)';
+            try {
+              final client = HttpClient();
+              client.connectionTimeout = const Duration(milliseconds: 300);
+              final req = await client.getUrl(Uri.parse('http://$targetIp:$defaultServerPort/api/info'));
+              final resp = await req.close().timeout(const Duration(milliseconds: 300));
+              if (resp.statusCode == 200) {
+                final body = await resp.transform(utf8.decoder).join();
+                final json = jsonDecode(body) as Map<String, dynamic>;
+                if (json['name'] != null) {
+                  deviceName = json['name'] as String;
+                }
               }
+            } catch (_) {}
+
+            final device = DiscoveredDevice(
+              ip: targetIp,
+              name: deviceName,
+              port: defaultServerPort,
+            );
+
+            if (!_discoveredDevices.any((d) => d.ip == device.ip && d.port == device.port)) {
+              _discoveredDevices.add(device);
+              onDeviceDiscovered?.call(device);
+              notifyListeners();
+              debugPrint('[SubnetScan] PC পাওয়া গেছে: $targetIp:9090 ($deviceName)');
             }
           } catch (_) {}
-
-          final device = DiscoveredDevice(
-            ip: targetIp,
-            name: deviceName,
-            port: defaultServerPort,
-          );
-
-          if (!_discoveredDevices.any((d) => d.ip == device.ip && d.port == device.port)) {
-            _discoveredDevices.add(device);
-            onDeviceDiscovered?.call(device);
-            notifyListeners();
-            debugPrint('[SubnetScan] PC পাওয়া গেছে: $targetIp:9090 ($deviceName)');
-          }
-        } catch (_) {}
-      }));
+        }));
+      }
     }
   }
 
