@@ -79,27 +79,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download Windows Artifact
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: AirCanvas-Windows-x64
           path: release-assets
-
-      - name: Download Android Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: AirCanvas-release.apk
-          path: release-assets
+          merge-multiple: true
 
       - name: Publish Release with Binaries
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          name: AirCanvas ${{ github.ref_name }} - Fixed Wireless Graphics Tablet
           files: |
-            release-assets/AirCanvas-Windows-x64.zip
-            release-assets/AirCanvas-release.apk
+            release-assets/*
             AirCanvas.exe
             Fix_Firewall.bat
-          name: AirCanvas ${{ github.ref_name }} - Fixed Wireless Graphics Tablet
           draft: false
           prerelease: false
           generate_release_notes: true
