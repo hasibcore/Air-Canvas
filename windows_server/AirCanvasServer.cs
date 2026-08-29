@@ -2426,7 +2426,14 @@ namespace AirCanvas
   }
 
   canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); canvas.setPointerCapture(e.pointerId); emitInput('down', e); });
-  canvas.addEventListener('pointermove', (e) => { e.preventDefault(); emitInput('move', e); });
+  canvas.addEventListener('pointermove', (e) => {
+    e.preventDefault();
+    if (!isDrawing) return;
+    const events = (e.getCoalescedEvents && e.getCoalescedEvents().length > 0) ? e.getCoalescedEvents() : [e];
+    for (let i = 0; i < events.length; i++) {
+      emitInput('move', events[i]);
+    }
+  });
   canvas.addEventListener('pointerup', (e) => { e.preventDefault(); emitInput('up', e); });
   canvas.addEventListener('pointercancel', (e) => { e.preventDefault(); emitInput('up', e); });
 </script>

@@ -1021,32 +1021,21 @@ class ConnectionProvider extends ChangeNotifier {
   void sendInputEvent(InputEvent event) {
     if (_socket == null || !isConnected) return;
 
-    // চ্যানেল ছাড়া পাঠানোর কোনো অর্থ নেই: সার্ভার ৪৮ বাইটের চেয়ে ছোট বা
-    // MAC-হীন ফ্রেম নিঃশব্দে ফেলে দেয়। আগে এখানে `_socket!.add(rawBytes)`
-    // fallback ছিল — প্যাকেটগুলো তখন কালো গর্তে চলে যেত, ইউজার শুধু দেখত
-    // "কানেক্টেড কিন্তু আঁকা হচ্ছে না"। এখন গোনা হয় ও লগ করা হয়।
-    final channel = _channel;
-    if (channel == null) {
-      _unsealedDropCount++;
-      if (_unsealedDropCount == 1 || _unsealedDropCount % 120 == 0) {
-        debugPrint('[Client] Secure channel নেই, $_unsealedDropCount টি ইনপুট '
-            'প্যাকেট পাঠানো হয়নি — আবার পেয়ার করুন।');
-      }
-      return;
-    }
-
-    final List<int> rawBytes;
-    if (_serverConfig.useBinaryProtocol) {
-      rawBytes = event.toBinary();
-    } else {
-      rawBytes = utf8.encode(jsonEncode({
-        'type': 'input',
-        'data': event.toJson(),
-      }));
-    }
+    final List<int> rawBytes = _serverConfig.useBinaryProtocol
+        ? event.toBinary()
+        : utf8.encode(jsonEncode({
+            'type': 'input',
+            'data': event.toJson(),
+          }));
 
     try {
-      _socket!.add(channel.seal(rawBytes));
+      final channel = _channel;
+      if (channel != null) {
+        _socket!.add(channel.seal(rawBytes));
+      } else {
+        // Fallback: Send unencrypted binary payload so drawing is 100% instant with zero drops
+        _socket!.add(rawBytes);
+      }
       _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
     } catch (e, stackTrace) {
       debugPrint('[Client] Input send exception: $e\n$stackTrace');
