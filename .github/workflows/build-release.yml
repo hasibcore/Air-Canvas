@@ -19,22 +19,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-          cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build Windows Executable
-        run: flutter build windows --release
+      - name: Compile Native Windows Server Executable
+        shell: cmd
+        run: |
+          C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:AirCanvas.exe /optimize+ /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.dll windows_server\AirCanvasServer.cs
 
       - name: Compress Windows Release Bundle
         shell: pwsh
         run: |
-          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath AirCanvas-Windows-x64.zip
+          Compress-Archive -Path AirCanvas.exe, Fix_Firewall.bat -DestinationPath AirCanvas-Windows-x64.zip
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
