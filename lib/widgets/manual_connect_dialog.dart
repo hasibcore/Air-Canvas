@@ -35,7 +35,7 @@ class _ManualConnectDialogState extends State<ManualConnectDialog> {
   @override
   void initState() {
     super.initState();
-    _localPinController = TextEditingController();
+    _localPinController = TextEditingController(text: '1234');
   }
 
   @override

@@ -641,6 +641,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             final success = await connection.connectToServer(
               device.ip,
               port: device.port,
+              pin: '1234',
               onPinRequired: () => _promptForPin(context),
               screenWidth: size.width,
               screenHeight: size.height,
@@ -892,29 +893,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<String?> _promptForPin(BuildContext context) async {
-    final TextEditingController pinController = TextEditingController();
+    final TextEditingController pinController = TextEditingController(text: '1234');
     return showDialog<String>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (context) {
-        // PIN এখন ৬ ডিজিট ও প্রতিবার সার্ভার স্টার্টে নতুন হয়।
-        // পুরো ৬ ডিজিট না দিলে Connect বাটন নিষ্ক্রিয় থাকে।
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            final bool isComplete = pinController.text.length == kPairingPinLength;
             return AlertDialog(
               backgroundColor: const Color(0xFF1A1A2E),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               title: const Text(
-                'Enter Pairing PIN',
+                'Pairing PIN',
                 style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
               ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Enter the $kPairingPinLength-digit pairing PIN shown on the PC server screen. '
-                    'It changes every time the server is started.',
+                    'Enter pairing PIN (Default: 1234). Server is set to Always Allow.',
                     style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
                   ),
                   const SizedBox(height: 16),
@@ -922,20 +919,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     controller: pinController,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    maxLength: kPairingPinLength,
+                    maxLength: 6,
                     obscureText: false,
                     autofocus: true,
                     onChanged: (_) => setDialogState(() {}),
                     onSubmitted: (value) {
-                      if (value.length == kPairingPinLength) {
-                        Navigator.pop(context, value);
-                      }
+                      Navigator.pop(context, value.isNotEmpty ? value : '1234');
                     },
                     style: const TextStyle(color: Colors.white, fontSize: 20, letterSpacing: 8),
                     textAlign: TextAlign.center,
                     decoration: InputDecoration(
                       counterText: '',
-                      hintText: '•' * kPairingPinLength,
+                      hintText: '1234',
                       hintStyle: TextStyle(color: Colors.grey.shade600, letterSpacing: 8),
                       enabledBorder: OutlineInputBorder(
                         borderSide: const BorderSide(color: Color(0xFF2A2A4A)),
@@ -951,17 +946,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context, null),
-                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                  onPressed: () => Navigator.pop(context, '1234'),
+                  child: const Text('Auto Connect', style: TextStyle(color: Color(0xFF6C63FF))),
                 ),
                 ElevatedButton(
-                  onPressed: isComplete
-                      ? () => Navigator.pop(context, pinController.text)
-                      : null,
+                  onPressed: () => Navigator.pop(context, pinController.text.isNotEmpty ? pinController.text : '1234'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF6C63FF),
                     foregroundColor: Colors.white,
-                    disabledBackgroundColor: const Color(0xFF2A2A4A),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
                   child: const Text('Connect'),

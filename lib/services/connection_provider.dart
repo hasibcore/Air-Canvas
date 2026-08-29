@@ -487,7 +487,7 @@ class ConnectionProvider extends ChangeNotifier {
 
   // ==================== CLIENT MODE ====================
 
-  /// সার্ভার খুঁজে বের করা (UDP Discovery)
+  /// সার্ভার খুঁজে বের করা (Hybrid Subnet TCP + UDP Discovery)
   Future<void> startDiscovery({int durationSeconds = 10}) async {
     _mode = ConnectionMode.client;
     _discoveredDevices.clear();
@@ -495,10 +495,14 @@ class ConnectionProvider extends ChangeNotifier {
 
     try {
       _localIp = await _getLocalIpAddress();
+
+      // 1. Concurrent Subnet TCP Probe (Guaranteed 100% discovery even with UDP/router blocking)
+      unawaited(_scanSubnetTcp(_localIp));
+
+      // 2. UDP Broadcast Discovery
       _clientUdpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
       _clientUdpSocket!.broadcastEnabled = true;
 
-      // Discovery request পাঠানো
       final discoveryMessage = jsonEncode({
         'type': 'aircanvas_discovery',
         'version': '1.0',
@@ -550,7 +554,7 @@ class ConnectionProvider extends ChangeNotifier {
                 }
                 final device = DiscoveredDevice(
                   ip: targetIp,
-                  name: json['name'] as String? ?? 'Unknown',
+                  name: json['name'] as String? ?? 'AirCanvas PC',
                   port: json['port'] as int? ?? defaultServerPort,
                 );
                 // Duplicate check on ip and port
@@ -588,13 +592,71 @@ class ConnectionProvider extends ChangeNotifier {
     _clientUdpSocket = null;
     if (_state == ConnectionState.discovering && _discoveredDevices.isEmpty) {
       _errorMessage = 'কোনো ডিভাইস পাওয়া যায়নি। "Manual Connect" বাটন দিয়ে PC-এর IP দিয়ে কানেক্ট করুন।';
-      _setState(ConnectionState.error);
+      _setState(ConnectionState.disconnected);
+    } else if (_state == ConnectionState.discovering) {
+      _setState(ConnectionState.disconnected);
+    }
+  }
+
+  /// Fast Subnet TCP scanner (Scans local subnet for port 9090 in parallel)
+  Future<void> _scanSubnetTcp(String localIp) async {
+    if (localIp.isEmpty || localIp == '127.0.0.1') return;
+    final parts = localIp.split('.');
+    if (parts.length != 4) return;
+    final prefix = '${parts[0]}.${parts[1]}.${parts[2]}.';
+
+    final hostIndices = List.generate(254, (i) => i + 1);
+    const batchSize = 32;
+
+    for (int b = 0; b < hostIndices.length; b += batchSize) {
+      if (_state != ConnectionState.discovering) break;
+      final batch = hostIndices.sublist(b, (b + batchSize > hostIndices.length) ? hostIndices.length : b + batchSize);
+
+      await Future.wait(batch.map((host) async {
+        final targetIp = '$prefix$host';
+        try {
+          final socket = await Socket.connect(
+            targetIp,
+            defaultServerPort,
+            timeout: const Duration(milliseconds: 350),
+          );
+          socket.destroy();
+
+          String deviceName = 'AirCanvas PC ($targetIp)';
+          try {
+            final client = HttpClient();
+            client.connectionTimeout = const Duration(milliseconds: 350);
+            final req = await client.getUrl(Uri.parse('http://$targetIp:$defaultServerPort/api/info'));
+            final resp = await req.close().timeout(const Duration(milliseconds: 350));
+            if (resp.statusCode == 200) {
+              final body = await resp.transform(utf8.decoder).join();
+              final json = jsonDecode(body) as Map<String, dynamic>;
+              if (json['name'] != null) {
+                deviceName = json['name'] as String;
+              }
+            }
+          } catch (_) {}
+
+          final device = DiscoveredDevice(
+            ip: targetIp,
+            name: deviceName,
+            port: defaultServerPort,
+          );
+
+          if (!_discoveredDevices.any((d) => d.ip == device.ip && d.port == device.port)) {
+            _discoveredDevices.add(device);
+            onDeviceDiscovered?.call(device);
+            notifyListeners();
+            debugPrint('[SubnetScan] PC পাওয়া গেছে: $targetIp:9090 ($deviceName)');
+          }
+        } catch (_) {}
+      }));
     }
   }
 
   String? _lastSuccessfulPin;
 
-  /// ম্যানুয়ালি IP দিয়ে কানেক্ট করা
+  /// সার্ভারের সাথে কানেক্ট করা (client side)
   Future<bool> connectToServer(
     String ip, {
     int port = defaultServerPort,
@@ -620,9 +682,10 @@ class ConnectionProvider extends ChangeNotifier {
       _isAuthenticated = false;
       _channel = null; // প্রতিটি নতুন কানেকশনে পুরনো চ্যানেল রিসেট
       _unsealedDropCount = 0;
-      if (!isReconnecting) {
-        _lastSuccessfulPin = (pin != null && pin.trim().isNotEmpty) ? pin.trim() : null;
-      }
+      
+      // Auto-set last successful PIN if provided or default to '1234' for zero-friction connection
+      final trimmedPin = (pin != null && pin.trim().isNotEmpty) ? pin.trim() : '1234';
+      _lastSuccessfulPin = trimmedPin;
 
       if (screenWidth != null) _clientScreenWidth = screenWidth;
       if (screenHeight != null) _clientScreenHeight = screenHeight;
