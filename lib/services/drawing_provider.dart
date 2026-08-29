@@ -182,6 +182,116 @@ class DrawingProvider extends ChangeNotifier {
   final Map<int, int> _pointerSlots = <int, int>{};
   final Map<int, Offset> _slotLastPosition = <int, Offset>{};
 
+  // --- Palm rejection / single-cursor arbitration ---
+  //
+  // PC পাশে কার্সর একটাই। কিন্তু স্ক্রিনে একসাথে কয়েকটা পয়েন্টার থাকতে পারে —
+  // পেন, পেন ধরা হাতের তালু, আরেকটা আঙুল। আগে সবগুলোর down/move/up একই
+  // কার্সরে ইনজেক্ট হতো, ফলে তালু ছোঁয়ালেই লাইন লাফ দিত আর দুই আঙুল লাগলে
+  // স্ট্রোক এলোমেলো হয়ে যেত — "draw ঠিকমতো হচ্ছে না" এর একটা বড় কারণ।
+  //
+  // নিয়ম (palmRejection চালু থাকলে):
+  //   • কেউ না আঁকলে — প্রথম যে পয়েন্টার নামে, সে-ই স্ট্রোকের মালিক।
+  //   • আঙুল আঁকছিল, পেন নামল — পেন জেতে। আঙুলের জন্য pointerUp পাঠিয়ে
+  //     (PC তে বাটন ছেড়ে) মালিকানা পেনকে দেওয়া হয়।
+  //   • পেন আঁকছে, আঙুল নামল — সেটা তালু, চুপচাপ উপেক্ষা।
+  //   • পেন উঠে যাওয়ার পরেও ৪০০ ms আঙুল উপেক্ষা করা হয়, কারণ তালু সাধারণত
+  //     পেনের একটু পরে ওঠে।
+  //   • একই ধরনের দ্বিতীয় পয়েন্টার — উপেক্ষা (একটাই কার্সর)।
+  //
+  // উপেক্ষিত পয়েন্টারও স্লট পায় এবং তার up ট্র্যাক হয়, শুধু ওয়্যারে কিছু যায় না।
+  static const Duration stylusGracePeriod = Duration(milliseconds: 400);
+  bool _palmRejection = true;
+  int? _drawingPointer;
+  final Map<int, PointerType> _pointerKinds = <int, PointerType>{};
+  DateTime? _lastStylusActivity;
+
+  /// যেসব raw pointer এর জন্য সত্যিই একটা `pointerDown` ওয়্যারে গেছে →
+  /// সেই down টা কোন স্লট নাম্বারে গিয়েছিল।
+  ///
+  /// up পাঠানো হবে কি না এই ম্যাপ দেখেই ঠিক হয়। "down গেছে ⇒ up যেতেই হবে,
+  /// down যায়নি ⇒ up কখনো যাবে না" — এই দুটো একসাথে ধরে রাখলে PC তে বাটন
+  /// চাপা থেকে যাওয়া আর চলতি স্ট্রোকের মাঝপথে বাটন ছেড়ে দেওয়া, দুটোই আটকায়।
+  /// স্লটটাও এখানেই রাখা হয়, কারণ `_pointerSlots` থেকে স্লট কেড়ে নেওয়া হতে
+  /// পারে — তখনও up টা যে স্লটে down গিয়েছিল সেই স্লটেই যাওয়া দরকার।
+  final Map<int, int> _pendingUpSlots = <int, int>{};
+
+  bool get palmRejection => _palmRejection;
+
+  set palmRejection(bool value) {
+    if (_palmRejection == value) return;
+    _palmRejection = value;
+    notifyListeners();
+  }
+
+  static bool _isPen(PointerType kind) =>
+      kind == PointerType.stylus || kind == PointerType.eraser;
+
+  bool get _stylusRecentlyActive {
+    final last = _lastStylusActivity;
+    if (last == null) return false;
+    return DateTime.now().difference(last) < stylusGracePeriod;
+  }
+
+  /// এই pointer টা স্ট্রোক চালানোর অধিকার পাবে কি না ঠিক করে।
+  bool _claimOnDown(int rawPointerId, PointerType kind, DateTime now) {
+    if (!_palmRejection) {
+      _drawingPointer ??= rawPointerId;
+      return _drawingPointer == rawPointerId;
+    }
+
+    final current = _drawingPointer;
+    if (current == null) {
+      if (!_isPen(kind) && _stylusRecentlyActive) return false; // তালু
+      _drawingPointer = rawPointerId;
+      return true;
+    }
+    if (current == rawPointerId) return true;
+
+    final currentKind = _pointerKinds[current] ?? PointerType.finger;
+    if (_isPen(kind) && !_isPen(currentKind)) {
+      _yieldOwnershipTo(rawPointerId, now);
+      return true;
+    }
+    return false; // দ্বিতীয় আঙুল / তালু
+  }
+
+  /// চলতি স্ট্রোক বন্ধ করে মালিকানা [newPointerId] কে দেয়, এবং পুরনো পয়েন্টারের
+  /// জন্য pointerUp পাঠায় যাতে PC তে বাটন চাপা থেকে না যায়।
+  void _yieldOwnershipTo(int newPointerId, DateTime now) {
+    final old = _drawingPointer;
+    _drawingPointer = newPointerId;
+    if (old == null) return;
+
+    // স্লট না থাকলেও up যাবে — _emitPointerUpFor নিজেই down এর রেকর্ড করা স্লট
+    // ব্যবহার করে, তাই পুরনো pointer এর বাটন কোনো অবস্থাতেই চাপা থাকে না।
+    final oldSlot = _pointerSlots[old];
+    _emitPointerUpFor(
+        old, oldSlot == null ? null : _slotLastPosition[oldSlot], now);
+
+    if (_currentStroke != null && _currentStroke!.points.isNotEmpty) {
+      _strokes.add(_currentStroke!);
+      if (_strokes.length > 500) _strokes.removeAt(0);
+    }
+    _currentStroke = null;
+    _isDrawing = false;
+    _resetSmoothingBuffers();
+  }
+
+  /// [rawPointerId] এর জন্য একটা pointerUp পাঠায়, শুধু যদি তার down আগে গিয়ে
+  /// থাকে। রেকর্ডটা মুছেও দেয়, তাই একই pointer এর জন্য দুইবার up যায় না।
+  void _emitPointerUpFor(int rawPointerId, Offset? position, DateTime now) {
+    final slot = _pendingUpSlots.remove(rawPointerId);
+    if (slot == null) return;
+    _emitInputEvent(
+      InputEventType.pointerUp,
+      position ?? _lastPosition ?? Offset.zero,
+      0.0,
+      _pointerKinds[rawPointerId] ?? PointerType.finger,
+      slot,
+      now,
+    );
+  }
+
   /// এই raw pointer এর স্লট, না থাকলে নতুন একটা দেয়।
   ///
   /// সব স্লট ব্যস্ত থাকলে সবচেয়ে পুরনোটা কেড়ে নেওয়া হয়, ব্যর্থ হওয়া হয় না।
@@ -203,7 +313,12 @@ class DrawingProvider extends ChangeNotifier {
     // Map টা insertion-ordered, তাই প্রথম key-ই সবচেয়ে পুরনো pointer।
     final stalest = _pointerSlots.keys.first;
     final reclaimed = _pointerSlots.remove(stalest)!;
+    // স্লট কেড়ে নেওয়ার আগে ওই হারানো pointer এর up পাঠিয়ে দেওয়া, নাহলে PC তে
+    // তার বাটন চিরকাল চাপা থাকত। পজিশনটা মুছে ফেলার আগেই নিতে হয়।
+    _emitPointerUpFor(stalest, _slotLastPosition[reclaimed], DateTime.now());
     _slotLastPosition.remove(reclaimed);
+    _pointerKinds.remove(stalest);
+    if (_drawingPointer == stalest) _drawingPointer = null;
     debugPrint('[Drawing] Reclaimed pointer slot $reclaimed from stale pointer $stalest');
     _pointerSlots[rawPointerId] = reclaimed;
     return reclaimed;
@@ -212,12 +327,28 @@ class DrawingProvider extends ChangeNotifier {
   void _releaseSlot(int rawPointerId) {
     final slot = _pointerSlots.remove(rawPointerId);
     if (slot != null) _slotLastPosition.remove(slot);
+    _pointerKinds.remove(rawPointerId);
+    if (_drawingPointer == rawPointerId) _drawingPointer = null;
   }
 
   /// সব pointer state ছেড়ে দেওয়া (canvas clear, dispose, রিমোট reset)।
-  void _releaseAllSlots() {
+  ///
+  /// [flushPendingUps] true হলে যেসব pointer এর down ওয়্যারে গেছে কিন্তু up যায়নি,
+  /// তাদের জন্য আগে up পাঠানো হয় — নাহলে PC তে বাটন চাপা অবস্থায় আটকে থাকত।
+  void _releaseAllSlots({bool flushPendingUps = false}) {
+    if (flushPendingUps && _pendingUpSlots.isNotEmpty) {
+      final now = DateTime.now();
+      for (final pointerId in _pendingUpSlots.keys.toList()) {
+        final slot = _pendingUpSlots[pointerId];
+        _emitPointerUpFor(
+            pointerId, slot == null ? null : _slotLastPosition[slot], now);
+      }
+    }
+    _pendingUpSlots.clear();
     _pointerSlots.clear();
     _slotLastPosition.clear();
+    _pointerKinds.clear();
+    _drawingPointer = null;
   }
 
   /// UI/ডিবাগের জন্য — এখন কতগুলো পয়েন্টার সক্রিয় ধরে রাখা হয়েছে।
@@ -273,10 +404,21 @@ class DrawingProvider extends ChangeNotifier {
     // Flutter এর গ্লোবাল pointer id কে ছোট স্লটে ম্যাপ করা — উপরের নোট দেখুন।
     final slot = _acquireSlot(pointerId);
     if (slot < 0) return; // ১৬টা স্লটই ব্যস্ত
+
+    final now = DateTime.now();
+    _pointerKinds[pointerId] = pointerType;
+    if (_isPen(pointerType)) _lastStylusActivity = now;
+
+    // তালু / দ্বিতীয় আঙুল হলে এখানেই থামা — স্লট রাখা হয় (যাতে up ট্র্যাক হয়)
+    // কিন্তু স্ট্রোকও শুরু হয় না, ওয়্যারেও কিছু যায় না।
+    if (!_claimOnDown(pointerId, pointerType, now)) {
+      _slotLastPosition[slot] = position;
+      return;
+    }
+
     _isDrawing = true;
 
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
-    final now = DateTime.now();
 
     _resetSmoothingBuffers();
     final point = StrokePoint(
@@ -300,6 +442,8 @@ class DrawingProvider extends ChangeNotifier {
       InputEventType.pointerDown, position, clampedPressure, pointerType, slot, now,
       tiltX: tiltX, tiltY: tiltY, buttons: buttons,
     );
+    // down গেল — এখন এই pointer এর up পাঠানো বাধ্যতামূলক।
+    _pendingUpSlots[pointerId] = slot;
 
     canvasNotifier.notify();
     notifyListeners();
@@ -316,9 +460,14 @@ class DrawingProvider extends ChangeNotifier {
   }) {
     if (!_isDrawing || _currentStroke == null) return;
     if (pointerId < 0) return; // Defensive pointerId check
+    // তালু / দ্বিতীয় আঙুলের move উপেক্ষা — কার্সর একটাই।
+    if (_drawingPointer != null && _drawingPointer != pointerId) return;
     // down মিস হয়ে থাকলেও স্লট দিয়ে দেওয়া হয় — নাহলে পুরো স্ট্রোক হারিয়ে যেত।
     final slot = _pointerSlots[pointerId] ?? _acquireSlot(pointerId);
     if (slot < 0) return;
+    _drawingPointer ??= pointerId;
+    _pointerKinds[pointerId] = pointerType;
+    if (_isPen(pointerType)) _lastStylusActivity = DateTime.now();
 
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
     final now = DateTime.now();
@@ -345,6 +494,16 @@ class DrawingProvider extends ChangeNotifier {
     _slotLastPosition[slot] = smoothedPosition;
 
     // ইনপুট ইভেন্ট পাঠানো
+    if (!_pendingUpSlots.containsKey(pointerId)) {
+      // down কোনোভাবে ওয়্যারে যায়নি (ড্রপ, বা ownership হাতবদলের ঠিক পরে এসেছে)।
+      // এখন শুধু move পাঠালে PC তে বাটন চাপাই হতো না — কার্সর নড়ত, দাগ পড়ত না।
+      // তাই এখানে একটা synthetic down আগে পাঠানো হয়।
+      _emitInputEvent(
+        InputEventType.pointerDown, smoothedPosition, smoothedPressure, pointerType, slot, now,
+        tiltX: tiltX, tiltY: tiltY, buttons: buttons,
+      );
+      _pendingUpSlots[pointerId] = slot;
+    }
     _emitInputEvent(
       InputEventType.pointerMove, smoothedPosition, smoothedPressure, pointerType, slot, now,
       tiltX: tiltX, tiltY: tiltY, buttons: buttons,
@@ -370,7 +529,23 @@ class DrawingProvider extends ChangeNotifier {
 
     final slot = _pointerSlots[pointerId];
     final slotPosition = slot == null ? null : _slotLastPosition[slot];
+    // "এই pointer এর down কি সত্যিই ওয়্যারে গিয়েছিল, আর কোন স্লটে?" — অনুমান
+    // নয়, রেকর্ড। আগে এখানে `_drawingPointer == null || _drawingPointer ==
+    // pointerId` হিউরিস্টিক ছিল, কিন্তু উপেক্ষিত তালুর down কখনো যায় না অথচ তার
+    // সময় _drawingPointer null হতে পারত — ফলে তালু তোলামাত্র একটা ভুয়া up যেত
+    // এবং চলতি পেন স্ট্রোকের মাঝখানে PC তে বাটন ছেড়ে দিত।
+    final downSlot = _pendingUpSlots.remove(pointerId);
+    if (_isPen(_pointerKinds[pointerId] ?? pointerType)) {
+      _lastStylusActivity = DateTime.now();
+    }
+    // লোকাল স্ট্রোক শেষ করার অধিকার। null-ও ধরা হয়েছে ইচ্ছে করেই — নাহলে
+    // _drawingPointer কোনোভাবে হারালে _isDrawing চিরকাল true থেকে যেত।
+    final ownedStroke = _drawingPointer == null || _drawingPointer == pointerId;
     _releaseSlot(pointerId); // early return এর আগেই স্লট ছাড়া — নাহলে লিক হতো
+
+    // তালু / দ্বিতীয় আঙুল উঠল: এর down কখনো পাঠানো হয়নি, তাই up-ও পাঠানো যাবে
+    // না — পাঠালে চলতি পেন স্ট্রোকের মাঝখানে PC তে বাটন ছেড়ে দিত।
+    if (downSlot == null) return;
 
     final now = DateTime.now();
     final upPosition = _lastPosition ??
@@ -379,7 +554,7 @@ class DrawingProvider extends ChangeNotifier {
             ? _currentStroke!.points.last.position
             : null);
 
-    if (_isDrawing && _currentStroke != null) {
+    if (ownedStroke && _isDrawing && _currentStroke != null) {
       _isDrawing = false;
 
       // Add final point using upPosition if available to ensure stroke completeness
@@ -406,13 +581,12 @@ class DrawingProvider extends ChangeNotifier {
     }
 
     // ইনপুট ইভেন্ট পাঠানো — এই pointer এর down গেছে মানে up-ও যেতেই হবে,
-    // নাহলে PC তে বাটন চাপা থেকে যায়।
-    if (slot != null) {
-      _emitInputEvent(
-        InputEventType.pointerUp, upPosition ?? Offset.zero, 0.0, pointerType, slot, now,
-        buttons: buttons,
-      );
-    }
+    // নাহলে PC তে বাটন চাপা থেকে যায়। down যে স্লটে গিয়েছিল সেই স্লটেই যায়,
+    // স্লটটা মাঝপথে অন্য pointer এর কাছে চলে গেলেও।
+    _emitInputEvent(
+      InputEventType.pointerUp, upPosition ?? Offset.zero, 0.0, pointerType, downSlot, now,
+      buttons: buttons,
+    );
 
     canvasNotifier.notify();
     notifyListeners();
@@ -562,6 +736,11 @@ class DrawingProvider extends ChangeNotifier {
     _currentStroke = null;
     _isDrawing = false;
     _resetSmoothingBuffers();
+
+    // আঙুল/পেন এখনো স্ক্রিনে থাকতে পারে। clear এর পর ওই pointer এর move গুলো
+    // ড্রপ হবে (স্ট্রোক নেই), তাই তার up-ও আর যাবে না — সেই কারণে এখানেই বাকি
+    // up গুলো পাঠিয়ে PC এর বাটন ছেড়ে দেওয়া হয়।
+    _releaseAllSlots(flushPendingUps: true);
 
     // Emit clear event to remote side
     final event = InputEvent(

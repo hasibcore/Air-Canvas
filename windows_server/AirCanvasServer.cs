@@ -396,6 +396,16 @@ namespace AirCanvas
         // Windows Ink / Tablet Pen signature recognized by Office, PowerPoint, OneNote, Whiteboard
         private static readonly UIntPtr MI_WP_SIGNATURE = new UIntPtr(0xFF515700);
 
+        // কোন বাটন এখন চাপা আছে — 0 = কিছুই না, 1 = left, 2 = right।
+        //
+        // কেন দরকার: আগে up ইভেন্টে `buttons & 2` দেখে ঠিক করা হতো কোন বাটন
+        // ছাড়তে হবে। কিন্তু Flutter এর PointerUpEvent.buttons সব সময় 0 (আঙুল/পেন
+        // উঠে গেলে কোনো বাটনই আর চাপা নেই)। ফলে barrel button চেপে আঁকলে
+        // RIGHTDOWN যেত কিন্তু LEFTUP আসত — ডান বাটন চিরকাল চাপা থেকে যেত,
+        // পিসিতে context menu খুলতেই থাকত। তাই down এর সময় কোনটা চাপা হয়েছে
+        // সেটা মনে রাখা হয়, আর up এ ঠিক সেটাই ছাড়া হয়।
+        private uint activeButtonDownFlag = 0;
+
         public MainForm()
         {
             InitializeComponent();
@@ -853,7 +863,13 @@ namespace AirCanvas
 
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
+                        // আগের স্ট্রোকের up যদি কোনো কারণে হারিয়ে যায় (WiFi ড্রপ,
+                        // অ্যাপ ব্যাকগ্রাউন্ডে), নতুন down এর আগে সেটা ছেড়ে দেওয়া —
+                        // নাহলে দুটো down পরপর গিয়ে ডাবল-ক্লিক/ড্র্যাগ হয়ে যেত।
+                        ReleaseHeldButton(absX, absY);
+
                         uint downFlag = isRightClick ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
+                        activeButtonDownFlag = downFlag;
                         mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | downFlag, absX, absY, 0, MI_WP_SIGNATURE);
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
@@ -862,11 +878,62 @@ namespace AirCanvas
                     }
                     else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
                     {
-                        uint upFlag = isRightClick ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, MI_WP_SIGNATURE);
+                        // যেটা চাপা হয়েছিল সেটাই ছাড়া — up ইভেন্টের buttons ফিল্ডে
+                        // ভরসা করা যায় না, সেটা সব সময় 0।
+                        if (activeButtonDownFlag != 0)
+                        {
+                            ReleaseHeldButton(absX, absY);
+                        }
+                        else
+                        {
+                            // down কখনো আসেইনি (প্যাকেট হারিয়েছে) — অন্তত কার্সর
+                            // ঠিক জায়গায় নিয়ে যাওয়া, কোনো বাটন ছাড়ার দরকার নেই।
+                            mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, absX, absY, 0, MI_WP_SIGNATURE);
+                        }
                     }
                 }
                 catch { }
+            }
+        }
+
+        /// <summary>
+        /// চাপা থাকা মাউস বাটন ছেড়ে দেয় (যদি থাকে)। idempotent — দুইবার ডাকলেও
+        /// দ্বিতীয়বার কিছুই হয় না।
+        /// </summary>
+        private void ReleaseHeldButton(uint absX, uint absY)
+        {
+            if (activeButtonDownFlag == 0) return;
+
+            uint upFlag = (activeButtonDownFlag == MOUSEEVENTF_RIGHTDOWN)
+                ? MOUSEEVENTF_RIGHTUP
+                : MOUSEEVENTF_LEFTUP;
+            activeButtonDownFlag = 0;
+            try
+            {
+                mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, MI_WP_SIGNATURE);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// কানেকশন ছিঁড়ে গেলে ডাকা হয়। ক্লায়েন্ট যদি স্ট্রোকের মাঝপথে হারিয়ে যায়
+        /// (WiFi ড্রপ, অ্যাপ kill), up প্যাকেট কখনো আসবে না — তখন বাটন চাপা থেকে
+        /// গিয়ে পুরো ডেস্কটপে ড্র্যাগ হতে থাকত। কার্সর যেখানে আছে সেখানেই ছাড়া হয়।
+        /// </summary>
+        private void ReleaseHeldButtonAtCursor()
+        {
+            if (activeButtonDownFlag == 0) return;
+            try
+            {
+                Rectangle screen = Screen.PrimaryScreen.Bounds;
+                Point p = Cursor.Position;
+                uint absX = (uint)(((double)p.X / Math.Max(1, screen.Width - 1)) * 65535.0);
+                uint absY = (uint)(((double)p.Y / Math.Max(1, screen.Height - 1)) * 65535.0);
+                ReleaseHeldButton(absX, absY);
+            }
+            catch
+            {
+                activeButtonDownFlag = 0;
             }
         }
 
@@ -1531,6 +1598,9 @@ namespace AirCanvas
             catch { }
             finally
             {
+                // ক্লায়েন্ট মাঝপথে হারিয়ে গেলে চাপা বাটন ছেড়ে দেওয়া — নাহলে
+                // ডেস্কটপে মাউস চাপা অবস্থায় আটকে থাকত।
+                ReleaseHeldButtonAtCursor();
                 try { if (stream != null) stream.Close(); } catch { }
                 try { client.Close(); } catch { }
                 Interlocked.Decrement(ref connectedClients);

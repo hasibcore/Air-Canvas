@@ -181,6 +181,9 @@ class _DrawingScreenState extends State<DrawingScreen> {
                     isConnected: connection.isConnected,
                     latency: connection.latencyMs,
                     canUndo: drawing.canUndo,
+                    palmRejection: drawing.palmRejection,
+                    onPalmRejectionChanged: (value) =>
+                        drawing.palmRejection = value,
                   );
                 },
               ),
@@ -278,7 +281,11 @@ class _DrawingScreenState extends State<DrawingScreen> {
     }
 
     drawing.onPointerDown(
-      event.position,
+      // `position` গ্লোবাল স্ক্রিন কো-অর্ডিনেট, কিন্তু নরমালাইজেশন হয় ক্যানভাসের
+      // মাপ দিয়ে। এখন ক্যানভাস স্ক্রিনের (0,0) থেকেই শুরু হয় তাই দুটো এক, কিন্তু
+      // ভবিষ্যতে AppBar/padding যোগ হলেই স্ট্রোক সরে যেত। `localPosition`
+      // সব সময় Listener এর ভেতরের কো-অর্ডিনেট, তাই এটাই সঠিক।
+      event.localPosition,
       pressure: pressure,
       pointerType: pointerType,
       pointerId: event.pointer,
@@ -310,7 +317,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
     }
 
     drawing.onPointerMove(
-      event.position,
+      event.localPosition, // down এর মতোই — ক্যানভাস-লোকাল কো-অর্ডিনেট
       pressure: pressure,
       pointerType: pointerType,
       pointerId: event.pointer,

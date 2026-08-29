@@ -12,6 +12,10 @@ class ToolbarWidget extends StatelessWidget {
   final int latency;
   // Bug 146: Undo button state
   final bool canUndo;
+  /// পাম রিজেকশন চালু/বন্ধ। বন্ধ করলে যে পয়েন্টার প্রথমে নামে সে-ই আঁকে,
+  /// তালু বা দ্বিতীয় আঙুল আলাদা করে বাছা হয় না।
+  final bool palmRejection;
+  final ValueChanged<bool> onPalmRejectionChanged;
 
   const ToolbarWidget({
     super.key,
@@ -22,6 +26,8 @@ class ToolbarWidget extends StatelessWidget {
     required this.onDisconnect,
     required this.isConnected,
     required this.latency,
+    required this.palmRejection,
+    required this.onPalmRejectionChanged,
     this.canUndo = true,
   });
 
@@ -57,6 +63,8 @@ class ToolbarWidget extends StatelessWidget {
               onClear: onClear,
               onDisconnect: onDisconnect,
               canUndo: canUndo,
+              palmRejection: palmRejection,
+              onPalmRejectionChanged: onPalmRejectionChanged,
             ),
           ],
         ),
@@ -156,6 +164,8 @@ class _ActionButtons extends StatelessWidget {
   final VoidCallback onClear;
   final VoidCallback onDisconnect;
   final bool canUndo;
+  final bool palmRejection;
+  final ValueChanged<bool> onPalmRejectionChanged;
 
   const _ActionButtons({
     required this.brushSettings,
@@ -164,6 +174,8 @@ class _ActionButtons extends StatelessWidget {
     required this.onClear,
     required this.onDisconnect,
     required this.canUndo,
+    required this.palmRejection,
+    required this.onPalmRejectionChanged,
   });
 
   @override
@@ -190,6 +202,18 @@ class _ActionButtons extends StatelessWidget {
             final nextIndex = (modes.indexOf(brushSettings.mode) + 1) % modes.length;
             onBrushChanged(brushSettings.copyWith(mode: modes[nextIndex]));
           },
+        ),
+        const SizedBox(width: 6),
+        // পাম রিজেকশন টগল — চালু থাকলে পেন আঁকার সময় তালু/দ্বিতীয় আঙুল উপেক্ষা
+        // হয়। কোনো ডিভাইসে stylus কে touch রিপোর্ট করলে এটা বন্ধ করলেই আগের
+        // আচরণ ফিরে আসে, তাই টগলটা হাতের কাছে রাখা হলো।
+        _buildIconButton(
+          icon: palmRejection ? Icons.back_hand : Icons.back_hand_outlined,
+          tooltip: palmRejection
+              ? 'Palm rejection: ON (tap to disable)'
+              : 'Palm rejection: OFF (tap to enable)',
+          onTap: () => onPalmRejectionChanged(!palmRejection),
+          color: palmRejection ? null : Colors.grey.shade500,
         ),
         const SizedBox(width: 6),
         // Bug 146: Undo button visually disabled when no strokes

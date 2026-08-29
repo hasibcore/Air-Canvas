@@ -15,11 +15,13 @@ void main(List<String> args) async {
   print('  AirCanvas Live End-to-End Drawing Simulator');
   print('====================================================');
 
-  // PIN এখন প্রতিবার সার্ভার স্টার্টে র‍্যান্ডম, তাই hardcode করা যায় না।
+  // PIN এখন প্রতিবার সার্ভার স্টার্টে র‍্যান্ডম ৬ ডিজিট, তাই hardcode করা যায় না।
   // ব্যবহার: dart run test_live_drawing_e2e.dart <6-digit-pin>
-  if (args.isEmpty || (args.first.length != 6 && args.first.length != 4)) {
-    print('❌ Usage: dart run test_live_drawing_e2e.dart <4-or-6-digit-pin>');
-    print('   সার্ভার উইন্ডোর "🔑 Pairing PIN" থেকে PIN টা নিন, অথবা 1234 ব্যবহার করুন।');
+  if (args.isEmpty || args.first.length != 6 ||
+      int.tryParse(args.first) == null) {
+    print('❌ Usage: dart run test_live_drawing_e2e.dart <6-digit-pin>');
+    print('   সার্ভার উইন্ডোর "🔑 Pairing PIN" থেকে PIN টা নিন।');
+    print('   (পুরনো hardcoded 1234 আর কাজ করে না — প্রতি স্টার্টে নতুন PIN হয়।)');
     exit(64);
   }
   final pin = args.first;

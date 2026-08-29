@@ -9,9 +9,11 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
-analyzer:
-  errors:
-    deprecated_member_use: ignore
+# আগে এখানে `analyzer: errors: deprecated_member_use: ignore` ছিল। সেটা সরানো
+# হয়েছে, কারণ ওটা `flutter analyze` কে চুপ করাত মাত্র — deprecation গুলো কোডে
+# থেকেই যেত, শুধু দেখা যেত না। এখন repo তে একটাও deprecated API ব্যবহার নেই
+# (`.withOpacity` সব `.withValues(alpha:)` হয়ে গেছে), তাই suppression টার আর
+# দরকার নেই এবং ভবিষ্যতে নতুন deprecation এলে সাথে সাথে ধরা পড়বে।
 
 linter:
   # The lint rules applied to this project can be customized in the

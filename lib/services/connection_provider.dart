@@ -619,6 +619,7 @@ class ConnectionProvider extends ChangeNotifier {
       _authCompleter = Completer<bool>();
       _isAuthenticated = false;
       _channel = null; // প্রতিটি নতুন কানেকশনে পুরনো চ্যানেল রিসেট
+      _unsealedDropCount = 0;
       if (!isReconnecting) {
         _lastSuccessfulPin = (pin != null && pin.trim().isNotEmpty) ? pin.trim() : null;
       }
@@ -1160,9 +1161,7 @@ class ConnectionProvider extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
-    if (_authCompleter != null && !_authCompleter!.isCompleted) {
-      _authCompleter!.complete(false);
-    }
+    _completeAuth(false);
     _lastSuccessfulPin = null;
     _channel = null;
     _sessionKey = null;
