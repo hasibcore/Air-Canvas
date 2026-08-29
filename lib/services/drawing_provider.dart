@@ -99,6 +99,8 @@ class Stroke {
   final BrushSettings settings;
   final DateTime startTime;
   double _pressureSum = 0.0;
+  Path? _cachedPath;
+  Paint? _cachedPaint;
 
   Stroke({
     List<StrokePoint>? points,
@@ -119,6 +121,50 @@ class Stroke {
     final pressureVal = point.pressure.isNaN || point.pressure.isInfinite ? 0.5 : point.pressure.clamp(0.0, 1.0);
     _points.add(point);
     _pressureSum += pressureVal;
+    _cachedPath = null;
+  }
+
+  Path get path {
+    if (_cachedPath != null) return _cachedPath!;
+    final p = Path();
+    if (_points.isEmpty) return _cachedPath = p;
+
+    p.moveTo(_points.first.position.dx, _points.first.position.dy);
+    if (_points.length == 2) {
+      p.lineTo(_points.last.position.dx, _points.last.position.dy);
+    } else if (_points.length > 2) {
+      for (int i = 1; i < _points.length - 1; i++) {
+        final p1 = _points[i].position;
+        final p2 = _points[i + 1].position;
+        final midX = (p1.dx + p2.dx) / 2;
+        final midY = (p1.dy + p2.dy) / 2;
+        p.quadraticBezierTo(p1.dx, p1.dy, midX, midY);
+      }
+      p.lineTo(_points.last.position.dx, _points.last.position.dy);
+    }
+    return _cachedPath = p;
+  }
+
+  Paint get paint {
+    if (_cachedPaint != null) return _cachedPaint!;
+    final avgPressure = averagePressure;
+    final width = settings.baseWidth * (0.3 + avgPressure * 0.7 * settings.pressureSensitivity);
+
+    final p = Paint()
+      ..color = settings.mode == BrushMode.eraser
+          ? const Color(0xFF0A0A12)
+          : settings.color.withValues(alpha: settings.opacity.clamp(0.0, 1.0))
+      ..strokeWidth = width
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+
+    if (settings.mode == BrushMode.pencil) {
+      p.strokeWidth = width * 0.7;
+    } else if (settings.mode == BrushMode.brush) {
+      p.maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+    }
+    return _cachedPaint = p;
   }
 
   double get averagePressure {

@@ -374,11 +374,9 @@ class DrawingPainter extends CustomPainter {
 
   void _drawStroke(Canvas canvas, Stroke stroke, Size size) {
     if (stroke.points.isEmpty) return;
-    final settings = stroke.settings;
-
     if (stroke.points.length == 1) {
-      // Single dot
       final point = stroke.points.first;
+      final settings = stroke.settings;
       final width = settings.baseWidth * (0.3 + point.pressure * 0.7 * settings.pressureSensitivity);
       canvas.drawCircle(
         point.position,
@@ -392,48 +390,7 @@ class DrawingPainter extends CustomPainter {
       );
       return;
     }
-
-    // Path তৈরি
-    final path = Path();
-    path.moveTo(stroke.points.first.position.dx, stroke.points.first.position.dy);
-
-    if (stroke.points.length == 2) {
-      path.lineTo(stroke.points.last.position.dx, stroke.points.last.position.dy);
-    } else {
-      // High-precision smooth handwriting curve (Quadratic Bezier to Midpoint)
-      for (int i = 1; i < stroke.points.length - 1; i++) {
-        final p1 = stroke.points[i].position;
-        final p2 = stroke.points[i + 1].position;
-        final midX = (p1.dx + p2.dx) / 2;
-        final midY = (p1.dy + p2.dy) / 2;
-        path.quadraticBezierTo(p1.dx, p1.dy, midX, midY);
-      }
-      path.lineTo(stroke.points.last.position.dx, stroke.points.last.position.dy);
-    }
-
-    // Variable width stroke simulation
-    if (stroke.points.length >= 2) {
-      // Simple approach: draw path with average width
-      final avgPressure = stroke.averagePressure;
-      final width = settings.baseWidth * (0.3 + avgPressure * 0.7 * settings.pressureSensitivity);
-
-      final paint = Paint()
-        ..color = settings.mode == BrushMode.eraser
-            ? const Color(0xFF0A0A12)
-            : settings.color.withValues(alpha: settings.opacity.clamp(0.0, 1.0))
-        ..strokeWidth = width
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-
-      if (settings.mode == BrushMode.pencil) {
-        paint.strokeWidth = width * 0.7;
-      } else if (settings.mode == BrushMode.brush) {
-        paint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
-      }
-
-      canvas.drawPath(path, paint);
-    }
+    canvas.drawPath(stroke.path, stroke.paint);
   }
 
   @override

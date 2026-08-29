@@ -887,30 +887,6 @@ namespace AirCanvas
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
                     {
-                        // High-precision smooth handwriting interpolation
-                        if (!lastInjectedPoint.IsEmpty)
-                        {
-                            float dx = (float)x - lastInjectedPoint.X;
-                            float dy = (float)y - lastInjectedPoint.Y;
-                            float dist = (float)Math.Sqrt(dx * dx + dy * dy);
-                            if (dist > 0.004f && dist < 0.25f)
-                            {
-                                int steps = Math.Min(5, (int)(dist / 0.002f));
-                                for (int step = 1; step < steps; step++)
-                                {
-                                    float t = (float)step / steps;
-                                    float ix = lastInjectedPoint.X + dx * t;
-                                    float iy = lastInjectedPoint.Y + dy * t;
-                                    int iTargetX = (int)(ix * (screen.Width - 1));
-                                    int iTargetY = (int)(iy * (screen.Height - 1));
-                                    SetCursorPos(iTargetX, iTargetY);
-                                    uint iAbsX = (uint)((ix * 65535.0f) + 0.5f);
-                                    uint iAbsY = (uint)((iy * 65535.0f) + 0.5f);
-                                    mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, iAbsX, iAbsY, 0, MI_WP_SIGNATURE);
-                                }
-                            }
-                        }
-
                         mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, absX, absY, 0, MI_WP_SIGNATURE);
                         lastInjectedPoint = new PointF((float)x, (float)y);
                     }
