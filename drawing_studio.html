@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AirCanvas Drawing Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    /* ========== DESIGN TOKENS ========== */
+    :root {
+      --bg: #030c14;
+      --bg2: #07111d;
+      --panel: rgba(7, 15, 28, 0.88);
+      --panel-solid: #0a1525;
+      --c: #00e5ff;
+      --c2: #00b4d8;
+      --accent: #a855f7;
+      --border: rgba(0, 229, 255, 0.12);
+      --border-active: rgba(0, 229, 255, 0.45);
+      --glow: rgba(0, 229, 255, 0.25);
+      --danger: #f43f5e;
+      --success: #22c55e;
+      --warn: #f59e0b;
+      --text: #e2e8f0;
+      --text-dim: rgba(255,255,255,0.45);
+      --radius: 14px;
+      --radius-sm: 8px;
+      --shadow: 0 20px 60px rgba(0,0,0,0.6);
+    }
+
+    /* ========== RESET ========== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); user-select: none; -webkit-user-select: none; }
+
+    /* ========== LAYOUT ========== */
+    .app { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ========== PAGE TABS BAR ========== */
+    .page-tabs-bar {
+      display: flex; align-items: center; gap: 4px;
+      height: 44px; min-height: 44px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      padding: 0 12px;
+      overflow-x: auto; overflow-y: hidden;
+      scrollbar-width: none;
+    }
+    .page-tabs-bar::-webkit-scrollbar { display: none; }
+
+    .page-tab {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 8px 8px 0 0;
+      background: transparent; border: 1px solid transparent;
+      border-bottom: none;
+      color: var(--text-dim); font-size: 0.78rem; font-weight: 600;
+      cursor: pointer; transition: all 0.2s; white-space: nowrap;
+      position: relative;
+    }
+    .page-tab:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+    .page-tab.active {
+      color: var(--c); background: var(--bg);
+      border-color: var(--border);
+      box-shadow: inset 0 2px 0 var(--c);
+    }
+    .page-tab .close-tab {
+      width: 16px; height: 16px; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; color: var(--text-dim);
+      transition: all 0.15s; cursor: pointer;
+    }
+    .page-tab .close-tab:hover { background: var(--danger); color: #fff; }
+
+    .add-page-btn {
+      width: 30px; height: 30px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; border: 1px dashed var(--border);
+      color: var(--text-dim); font-size: 1.1rem; font-weight: 400;
+      cursor: pointer; transition: all 0.2s; flex-shrink: 0;
+    }
+    .add-page-btn:hover { border-color: var(--c); color: var(--c); background: rgba(0,229,255,0.06); }
+
+    /* brand */
+    .tab-brand {
+      display: flex; align-items: center; gap: 8px;
+      margin-right: 12px; padding-right: 12px;
+      border-right: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .tab-brand-icon { width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, var(--c), var(--c2)); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; }
+    .tab-brand-name { font-size: 0.82rem; font-weight: 800; color: #fff; letter-spacing: -0.02em; }
+
+    /* ========== CANVAS AREA ========== */
+    .canvas-area {
+      flex: 1; position: relative; overflow: hidden;
+      background: var(--bg);
+    }
+    .canvas-area canvas {
+      display: block; width: 100%; height: 100%;
+      cursor: crosshair; touch-action: none;
+    }
+
+    /* Inserted images layer */
+    .image-layer {
+      position: absolute; inset: 0; pointer-events: none; z-index: 2;
+    }
+    .inserted-img {
+      position: absolute; pointer-events: all; cursor: move;
+      border: 2px solid transparent; border-radius: 4px;
+      transition: border-color 0.15s;
+    }
+    .inserted-img:hover, .inserted-img.selected { border-color: var(--c); }
+    .inserted-img img, .inserted-img video { width: 100%; height: 100%; object-fit: contain; pointer-events: none; border-radius: 2px; }
+    .img-delete {
+      position: absolute; top: -10px; right: -10px;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--danger); color: #fff; border: 2px solid var(--bg);
+      display: none; align-items: center; justify-content: center;
+      font-size: 0.65rem; cursor: pointer; z-index: 5;
+    }
+    .inserted-img:hover .img-delete, .inserted-img.selected .img-delete { display: flex; }
+    .img-resize {
+      position: absolute; bottom: -6px; right: -6px;
+      width: 14px; height: 14px; border-radius: 3px;
+      background: var(--c); border: 2px solid var(--bg);
+      cursor: nwse-resize; display: none; z-index: 5;
+    }
+    .inserted-img:hover .img-resize, .inserted-img.selected .img-resize { display: block; }
+
+    /* ========== FLOATING TOOLBAR ========== */
+    .toolbar {
+      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: var(--panel); backdrop-filter: blur(24px) saturate(1.4);
+      border: 1px solid var(--border); border-radius: 22px;
+      padding: 10px 18px; display: flex; align-items: center; gap: 14px;
+      box-shadow: var(--shadow); z-index: 50;
+      transition: opacity 0.3s, transform 0.3s;
+      max-width: calc(100vw - 32px); overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .toolbar::-webkit-scrollbar { display: none; }
+
+    .tool-sep { width: 1px; height: 26px; background: var(--border); flex-shrink: 0; }
+
+    .tool-group { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .tool-label { font-size: 0.68rem; color: var(--text-dim); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+
+    /* Color swatches */
+    .swatch {
+      width: 24px; height: 24px; border-radius: 50%;
+      border: 2px solid transparent; cursor: pointer;
+      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+      flex-shrink: 0;
+    }
+    .swatch:hover { transform: scale(1.18); }
+    .swatch.active { border-color: #fff; transform: scale(1.22); box-shadow: 0 0 10px currentColor; }
+
+    .color-picker-wrap {
+      position: relative; width: 24px; height: 24px; flex-shrink: 0;
+    }
+    .color-picker-wrap input[type="color"] {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      opacity: 0; cursor: pointer;
+    }
+    .color-picker-visual {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: conic-gradient(red, yellow, lime, aqua, blue, magenta, red);
+      border: 2px solid rgba(255,255,255,0.2);
+      pointer-events: none;
+    }
+
+    /* Sliders */
+    .slider-group { display: flex; align-items: center; gap: 6px; }
+    .slider-group input[type="range"] {
+      width: 72px; accent-color: var(--c); cursor: pointer;
+      height: 4px;
+    }
+    .slider-val { font-size: 0.72rem; color: var(--c); font-weight: 700; font-family: monospace; min-width: 26px; text-align: center; }
+
+    /* Buttons */
+    .tb-btn {
+      padding: 7px 12px; border-radius: 10px;
+      background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);
+      color: #fff; font-size: 0.75rem; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; gap: 5px;
+      transition: all 0.15s; white-space: nowrap; flex-shrink: 0;
+    }
+    .tb-btn:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.2); }
+    .tb-btn.active { background: rgba(0,229,255,0.15); border-color: var(--c); color: var(--c); }
+    .tb-btn.primary { background: linear-gradient(135deg, var(--c), var(--c2)); color: #000; border: none; }
+    .tb-btn.primary:hover { box-shadow: 0 0 16px var(--glow); }
+    .tb-btn.danger { color: var(--danger); border-color: rgba(244,63,94,0.2); }
+    .tb-btn.danger:hover { background: rgba(244,63,94,0.12); }
+    .tb-btn:disabled { opacity: 0.35; pointer-events: none; }
+    .tb-btn .icon { font-size: 0.9rem; }
+
+    /* Pressure indicator */
+    .pressure-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--c); transition: transform 0.1s;
+    }
+
+    /* ========== SIDE PANEL (Insert Image) ========== */
+    .side-panel {
+      position: absolute; top: 0; right: -320px; bottom: 0;
+      width: 310px; background: var(--panel-solid);
+      border-left: 1px solid var(--border);
+      z-index: 60; padding: 20px;
+      transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      overflow-y: auto;
+    }
+    .side-panel.open { right: 0; }
+    .side-panel h3 { font-size: 0.95rem; font-weight: 800; margin-bottom: 16px; color: #fff; }
+    .side-panel .close-panel {
+      position: absolute; top: 16px; right: 16px;
+      width: 28px; height: 28px; border-radius: 8px;
+      background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+      color: var(--text-dim); display: flex; align-items: center; justify-content: center;
+      cursor: pointer; font-size: 0.85rem; transition: all 0.15s;
+    }
+    .side-panel .close-panel:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+    .upload-zone {
+      border: 2px dashed var(--border); border-radius: var(--radius);
+      padding: 32px 16px; text-align: center; cursor: pointer;
+      transition: all 0.2s;
+    }
+    .upload-zone:hover { border-color: var(--c); background: rgba(0,229,255,0.04); }
+    .upload-zone .icon { font-size: 2rem; margin-bottom: 8px; }
+    .upload-zone p { font-size: 0.82rem; color: var(--text-dim); }
+    .upload-zone input { display: none; }
+
+    .upload-section { margin-bottom: 24px; }
+    .upload-section h4 { font-size: 0.82rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+
+    /* ========== HUD ========== */
+    .hud {
+      position: absolute; top: 10px; right: 12px;
+      background: rgba(7, 15, 28, 0.7); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 14px; font-size: 0.72rem; z-index: 40;
+      display: flex; gap: 16px; pointer-events: none;
+    }
+    .hud-item { display: flex; align-items: center; gap: 4px; color: var(--text-dim); }
+    .hud-val { color: var(--c); font-weight: 700; font-family: monospace; }
+
+    /* ========== TOAST ========== */
+    .toast {
+      position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%) translateY(20px);
+      background: var(--panel-solid); border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px 20px;
+      font-size: 0.82rem; font-weight: 600; color: var(--c);
+      box-shadow: var(--shadow); z-index: 999;
+      opacity: 0; transition: all 0.3s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ========== CONFIRM DIALOG ========== */
+    .dialog-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px); z-index: 200;
+      display: none; align-items: center; justify-content: center;
+    }
+    .dialog-overlay.show { display: flex; }
+    .dialog-box {
+      background: var(--panel-solid); border: 1px solid var(--border);
+      border-radius: 18px; padding: 28px; min-width: 320px;
+      box-shadow: var(--shadow); text-align: center;
+    }
+    .dialog-box h3 { font-size: 1.05rem; font-weight: 800; margin-bottom: 8px; }
+    .dialog-box p { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 20px; }
+    .dialog-actions { display: flex; gap: 10px; justify-content: center; }
+    .dialog-actions button {
+      padding: 8px 20px; border-radius: 10px; font-size: 0.82rem; font-weight: 700;
+      cursor: pointer; border: 1px solid var(--border); transition: all 0.15s;
+    }
+    .dialog-cancel { background: rgba(255,255,255,0.06); color: #fff; }
+    .dialog-cancel:hover { background: rgba(255,255,255,0.12); }
+    .dialog-confirm { background: var(--danger); color: #fff; border-color: var(--danger); }
+    .dialog-confirm:hover { opacity: 0.85; }
+
+    /* ========== RESPONSIVE ========== */
+    @media (max-width: 768px) {
+      .toolbar { padding: 8px 12px; gap: 8px; border-radius: 16px; bottom: 12px; }
+      .swatch { width: 20px; height: 20px; }
+      .tb-btn { padding: 6px 8px; font-size: 0.7rem; }
+      .slider-group input[type="range"] { width: 50px; }
+      .hud { font-size: 0.65rem; padding: 6px 10px; gap: 10px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== PAGE TABS ===== -->
+  <div class="page-tabs-bar">
+    <div class="tab-brand">
+      <div class="tab-brand-icon">🎨</div>
+      <span class="tab-brand-name">AirCanvas Studio</span>
+    </div>
+    <div id="pageTabs"></div>
+    <div class="add-page-btn" id="addPageBtn" title="Add new page">+</div>
+  </div>
+
+  <!-- ===== CANVAS ===== -->
+  <div class="canvas-area" id="canvasArea">
+    <canvas id="mainCanvas"></canvas>
+    <div class="image-layer" id="imageLayer"></div>
+
+    <!-- HUD -->
+    <div class="hud">
+      <div class="hud-item">Mode: <span class="hud-val" id="hudMode">Pen</span></div>
+      <div class="hud-item">Pressure: <span class="hud-val" id="hudPressure">50%</span></div>
+      <div class="hud-item">Page: <span class="hud-val" id="hudPage">1/1</span></div>
+    </div>
+
+    <!-- TOOLBAR -->
+    <div class="toolbar" id="toolbar">
+      <!-- Colors -->
+      <div class="tool-group">
+        <div class="swatch active" style="background:#00e5ff" data-color="#00e5ff"></div>
+        <div class="swatch" style="background:#a855f7" data-color="#a855f7"></div>
+        <div class="swatch" style="background:#3b82f6" data-color="#3b82f6"></div>
+        <div class="swatch" style="background:#22c55e" data-color="#22c55e"></div>
+        <div class="swatch" style="background:#f43f5e" data-color="#f43f5e"></div>
+        <div class="swatch" style="background:#ffffff" data-color="#ffffff"></div>
+        <div class="swatch" style="background:#f59e0b" data-color="#f59e0b"></div>
+        <div class="swatch" style="background:#ec4899" data-color="#ec4899"></div>
+        <div class="color-picker-wrap" title="Custom color">
+          <div class="color-picker-visual"></div>
+          <input type="color" id="customColor" value="#00e5ff">
+        </div>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Size -->
+      <div class="tool-group">
+        <span class="tool-label">Size</span>
+        <div class="slider-group">
+          <input type="range" id="brushSize" min="1" max="80" value="6">
+          <span class="slider-val" id="brushSizeVal">6</span>
+        </div>
+      </div>
+
+      <!-- Opacity -->
+      <div class="tool-group">
+        <span class="tool-label">Opacity</span>
+        <div class="slider-group">
+          <input type="range" id="brushOpacity" min="10" max="100" value="100">
+          <span class="slider-val" id="brushOpacityVal">100</span>
+        </div>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Pressure -->
+      <div class="tool-group">
+        <button class="tb-btn" id="pressureBtn" title="Toggle pressure sensitivity">
+          <span class="icon">🖊️</span> Pressure
+        </button>
+        <div class="slider-group" id="pressureSliderGroup" style="display:none">
+          <input type="range" id="pressureSens" min="10" max="200" value="100">
+          <span class="slider-val" id="pressureSensVal">1.0x</span>
+        </div>
+      </div>
+
+      <div class="tool-sep"></div>
+
+      <!-- Eraser -->
+      <button class="tb-btn" id="eraserBtn"><span class="icon">🧹</span> Eraser</button>
+
+      <!-- Undo / Redo -->
+      <button class="tb-btn" id="undoBtn" title="Undo (Ctrl+Z)"><span class="icon">↩️</span></button>
+      <button class="tb-btn" id="redoBtn" title="Redo (Ctrl+Y)"><span class="icon">↪️</span></button>
+
+      <div class="tool-sep"></div>
+
+      <!-- Insert -->
+      <button class="tb-btn" id="insertImgBtn"><span class="icon">🖼️</span> Insert</button>
+
+      <!-- Clear -->
+      <button class="tb-btn danger" id="clearBtn"><span class="icon">🗑️</span> Clear</button>
+
+      <!-- Save -->
+      <button class="tb-btn primary" id="saveBtn"><span class="icon">💾</span> Save PNG</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SIDE PANEL (Insert) ===== -->
+<div class="side-panel" id="insertPanel">
+  <div class="close-panel" id="closeInsertPanel">✕</div>
+  <h3>Insert Media</h3>
+
+  <div class="upload-section">
+    <h4>Image</h4>
+    <div class="upload-zone" id="imgUploadZone">
+      <div class="icon">🖼️</div>
+      <p>Click or drag to upload<br><small>PNG, JPG, SVG, WebP</small></p>
+      <input type="file" id="imgFileInput" accept="image/*">
+    </div>
+  </div>
+
+  <div class="upload-section">
+    <h4>Animation / GIF</h4>
+    <div class="upload-zone" id="gifUploadZone">
+      <div class="icon">🎬</div>
+      <p>Click or drag to upload<br><small>GIF, WebP (animated), MP4</small></p>
+      <input type="file" id="gifFileInput" accept="image/gif,image/webp,video/mp4,video/webm">
+    </div>
+  </div>
+</div>
+
+<!-- ===== CONFIRM DIALOG ===== -->
+<div class="dialog-overlay" id="confirmDialog">
+  <div class="dialog-box">
+    <h3 id="dialogTitle">Delete Page?</h3>
+    <p id="dialogMsg">This action cannot be undone.</p>
+    <div class="dialog-actions">
+      <button class="dialog-cancel" id="dialogCancel">Cancel</button>
+      <button class="dialog-confirm" id="dialogConfirm">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TOAST ===== -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+//  AirCanvas Drawing Studio — Core Engine
+// ============================================================
+
+(() => {
+'use strict';
+
+// --- Constants ---
+const BG_COLOR = '#030c14';
+const MAX_HISTORY = 50;
+
+// --- State ---
+let pages = []; // [{id, name, strokes, redoStack, images}]
+let activePageIndex = 0;
+let currentColor = '#00e5ff';
+let brushSize = 6;
+let brushOpacity = 1.0;
+let isEraser = false;
+let pressureEnabled = false;
+let pressureSensitivity = 1.0;
+
+// Drawing state
+let isDrawing = false;
+let currentStroke = null;
+let lastX = 0, lastY = 0;
+let currentPressure = 0.5;
+
+// Image dragging state
+let dragTarget = null;
+let dragOffsetX = 0, dragOffsetY = 0;
+let resizeTarget = null;
+let resizeStartW = 0, resizeStartH = 0, resizeStartX = 0, resizeStartY = 0;
+
+// --- DOM ---
+const canvas = document.getElementById('mainCanvas');
+const ctx = canvas.getContext('2d');
+const imageLayer = document.getElementById('imageLayer');
+const pageTabsContainer = document.getElementById('pageTabs');
+const addPageBtn = document.getElementById('addPageBtn');
+const toolbar = document.getElementById('toolbar');
+
+// HUD
+const hudMode = document.getElementById('hudMode');
+const hudPressure = document.getElementById('hudPressure');
+const hudPage = document.getElementById('hudPage');
+
+// Controls
+const brushSizeInput = document.getElementById('brushSize');
+const brushSizeVal = document.getElementById('brushSizeVal');
+const brushOpacityInput = document.getElementById('brushOpacity');
+const brushOpacityVal = document.getElementById('brushOpacityVal');
+const pressureBtn = document.getElementById('pressureBtn');
+const pressureSliderGroup = document.getElementById('pressureSliderGroup');
+const pressureSensInput = document.getElementById('pressureSens');
+const pressureSensVal = document.getElementById('pressureSensVal');
+const eraserBtn = document.getElementById('eraserBtn');
+const undoBtn = document.getElementById('undoBtn');
+const redoBtn = document.getElementById('redoBtn');
+const clearBtn = document.getElementById('clearBtn');
+const saveBtn = document.getElementById('saveBtn');
+const insertImgBtn = document.getElementById('insertImgBtn');
+const customColorInput = document.getElementById('customColor');
+
+// Insert panel
+const insertPanel = document.getElementById('insertPanel');
+const closeInsertPanel = document.getElementById('closeInsertPanel');
+const imgUploadZone = document.getElementById('imgUploadZone');
+const imgFileInput = document.getElementById('imgFileInput');
+const gifUploadZone = document.getElementById('gifUploadZone');
+const gifFileInput = document.getElementById('gifFileInput');
+
+// Dialog
+const confirmDialog = document.getElementById('confirmDialog');
+const dialogTitle = document.getElementById('dialogTitle');
+const dialogMsg = document.getElementById('dialogMsg');
+const dialogCancel = document.getElementById('dialogCancel');
+const dialogConfirm = document.getElementById('dialogConfirm');
+let dialogCallback = null;
+
+// Toast
+const toastEl = document.getElementById('toast');
+let toastTimeout = null;
+
+// ============================================================
+//  CANVAS SETUP
+// ============================================================
+function resizeCanvas() {
+  const area = document.getElementById('canvasArea');
+  const w = area.clientWidth;
+  const h = area.clientHeight;
+  // Save current image data before resizing
+  let imageData = null;
+  if (canvas.width > 0 && canvas.height > 0) {
+    imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  }
+  canvas.width = w;
+  canvas.height = h;
+  // Restore image data
+  if (imageData) {
+    ctx.putImageData(imageData, 0, 0);
+  } else {
+    clearCanvasContent();
+  }
+}
+
+function clearCanvasContent() {
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+// ============================================================
+//  PAGE MANAGEMENT
+// ============================================================
+let pageIdCounter = 0;
+
+function createPage(name) {
+  const page = {
+    id: ++pageIdCounter,
+    name: name || `Page ${pageIdCounter}`,
+    strokes: [],
+    redoStack: [],
+    imageData: null, // stored canvas snapshot
+    images: [], // inserted media elements
+  };
+  pages.push(page);
+  return page;
+}
+
+function switchToPage(index) {
+  if (index < 0 || index >= pages.length) return;
+  // Save current page snapshot
+  saveCurrent();
+  activePageIndex = index;
+  // Restore target page
+  restorePage(pages[index]);
+  renderPageTabs();
+  updateHUD();
+}
+
+function saveCurrent() {
+  if (pages.length === 0) return;
+  const page = pages[activePageIndex];
+  if (canvas.width > 0 && canvas.height > 0) {
+    page.imageData = canvas.toDataURL('image/png');
+  }
+  // Save inserted images positions
+  page.images = getInsertedImagesState();
+}
+
+function restorePage(page) {
+  clearCanvasContent();
+  if (page.imageData) {
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = page.imageData;
+  }
+  // Restore inserted images
+  restoreInsertedImages(page.images || []);
+  updateUndoRedoButtons();
+}
+
+function deletePage(index) {
+  if (pages.length <= 1) { showToast('Cannot delete the last page'); return; }
+  showConfirm('Delete Page?', `"${pages[index].name}" will be permanently deleted.`, () => {
+    // Remove image elements for that page
+    pages.splice(index, 1);
+    if (activePageIndex >= pages.length) activePageIndex = pages.length - 1;
+    restorePage(pages[activePageIndex]);
+    renderPageTabs();
+    updateHUD();
+    showToast('Page deleted');
+  });
+}
+
+function renderPageTabs() {
+  pageTabsContainer.innerHTML = '';
+  pages.forEach((page, i) => {
+    const tab = document.createElement('div');
+    tab.className = 'page-tab' + (i === activePageIndex ? ' active' : '');
+    tab.innerHTML = `
+      <span>📄 ${page.name}</span>
+      <div class="close-tab" data-index="${i}" title="Close page">✕</div>
+    `;
+    tab.addEventListener('click', (e) => {
+      if (e.target.classList.contains('close-tab')) {
+        deletePage(parseInt(e.target.dataset.index));
+      } else {
+        switchToPage(i);
+      }
+    });
+    pageTabsContainer.appendChild(tab);
+  });
+  updateHUD();
+}
+
+// ============================================================
+//  DRAWING ENGINE
+// ============================================================
+function startStroke(x, y, pressure) {
+  isDrawing = true;
+  currentStroke = {
+    points: [{ x, y, pressure }],
+    color: isEraser ? BG_COLOR : currentColor,
+    size: brushSize,
+    opacity: isEraser ? 1.0 : brushOpacity,
+    isEraser: isEraser,
+  };
+  lastX = x;
+  lastY = y;
+  currentPressure = pressure;
+}
+
+function continueStroke(x, y, pressure) {
+  if (!isDrawing || !currentStroke) return;
+  currentStroke.points.push({ x, y, pressure });
+
+  // Resolve effective size
+  let effectiveSize = currentStroke.size;
+  if (pressureEnabled && !currentStroke.isEraser) {
+    effectiveSize = currentStroke.size * (0.2 + pressure * 0.8 * pressureSensitivity);
+  }
+  if (currentStroke.isEraser) effectiveSize *= 2.5;
+
+  ctx.save();
+  ctx.globalAlpha = currentStroke.opacity;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(1, effectiveSize);
+
+  if (currentStroke.isEraser) {
+    ctx.strokeStyle = BG_COLOR;
+    ctx.globalAlpha = 1;
+  } else {
+    ctx.strokeStyle = currentStroke.color;
+    // Subtle glow
+    ctx.shadowBlur = Math.min(12, effectiveSize * 0.6);
+    ctx.shadowColor = currentStroke.color;
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(lastX, lastY);
+  ctx.lineTo(x, y);
+  ctx.stroke();
+  ctx.restore();
+
+  lastX = x;
+  lastY = y;
+  currentPressure = pressure;
+}
+
+function endStroke() {
+  if (!isDrawing || !currentStroke) return;
+  isDrawing = false;
+  // Save stroke for undo
+  const page = pages[activePageIndex];
+  page.strokes.push(currentStroke);
+  if (page.strokes.length > MAX_HISTORY) page.strokes.shift();
+  page.redoStack = []; // Clear redo on new stroke
+  currentStroke = null;
+  updateUndoRedoButtons();
+}
+
+// Full redraw from strokes
+function redrawFromStrokes(page) {
+  clearCanvasContent();
+  for (const stroke of page.strokes) {
+    if (stroke.points.length < 2) continue;
+    for (let i = 1; i < stroke.points.length; i++) {
+      const prev = stroke.points[i - 1];
+      const pt = stroke.points[i];
+      let effectiveSize = stroke.size;
+      if (pressureEnabled && !stroke.isEraser) {
+        effectiveSize = stroke.size * (0.2 + pt.pressure * 0.8 * pressureSensitivity);
+      }
+      if (stroke.isEraser) effectiveSize *= 2.5;
+
+      ctx.save();
+      ctx.globalAlpha = stroke.opacity;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = Math.max(1, effectiveSize);
+      ctx.strokeStyle = stroke.isEraser ? BG_COLOR : stroke.color;
+      if (!stroke.isEraser) {
+        ctx.shadowBlur = Math.min(12, effectiveSize * 0.6);
+        ctx.shadowColor = stroke.color;
+      }
+      ctx.beginPath();
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(pt.x, pt.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+// ============================================================
+//  UNDO / REDO
+// ============================================================
+function undo() {
+  const page = pages[activePageIndex];
+  if (page.strokes.length === 0) return;
+  const stroke = page.strokes.pop();
+  page.redoStack.push(stroke);
+  if (page.redoStack.length > MAX_HISTORY) page.redoStack.shift();
+  redrawFromStrokes(page);
+  updateUndoRedoButtons();
+  showToast('Undo');
+}
+
+function redo() {
+  const page = pages[activePageIndex];
+  if (page.redoStack.length === 0) return;
+  const stroke = page.redoStack.pop();
+  page.strokes.push(stroke);
+  redrawFromStrokes(page);
+  updateUndoRedoButtons();
+  showToast('Redo');
+}
+
+function updateUndoRedoButtons() {
+  const page = pages[activePageIndex];
+  undoBtn.disabled = page.strokes.length === 0;
+  redoBtn.disabled = page.redoStack.length === 0;
+}
+
+// ============================================================
+//  POINTER EVENTS
+// ============================================================
+canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const pressure = (e.pressure > 0 && e.pressure < 1) ? e.pressure : 0.5;
+  startStroke(x, y, pressure);
+  updateHUD();
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  e.preventDefault();
+  if (!isDrawing) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const pressure = (e.pressure > 0 && e.pressure < 1) ? e.pressure : 0.5;
+  continueStroke(x, y, pressure);
+  currentPressure = pressure;
+  updateHUD();
+});
+
+canvas.addEventListener('pointerup', (e) => { e.preventDefault(); endStroke(); updateHUD(); });
+canvas.addEventListener('pointerleave', (e) => { if (isDrawing) { endStroke(); updateHUD(); } });
+canvas.addEventListener('pointercancel', (e) => { if (isDrawing) { endStroke(); updateHUD(); } });
+
+// Prevent context menu on canvas
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ============================================================
+//  TOOLBAR EVENTS
+// ============================================================
+
+// Color swatches
+document.querySelectorAll('.swatch').forEach(sw => {
+  sw.addEventListener('click', () => {
+    document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+    sw.classList.add('active');
+    currentColor = sw.dataset.color;
+    if (isEraser) toggleEraser();
+    updateHUD();
+  });
+});
+
+// Custom color
+customColorInput.addEventListener('input', (e) => {
+  currentColor = e.target.value;
+  document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+  if (isEraser) toggleEraser();
+  updateHUD();
+});
+
+// Brush size
+brushSizeInput.addEventListener('input', (e) => {
+  brushSize = parseInt(e.target.value);
+  brushSizeVal.textContent = brushSize;
+});
+
+// Opacity
+brushOpacityInput.addEventListener('input', (e) => {
+  brushOpacity = parseInt(e.target.value) / 100;
+  brushOpacityVal.textContent = e.target.value;
+});
+
+// Pressure toggle
+pressureBtn.addEventListener('click', () => {
+  pressureEnabled = !pressureEnabled;
+  pressureBtn.classList.toggle('active', pressureEnabled);
+  pressureSliderGroup.style.display = pressureEnabled ? 'flex' : 'none';
+  updateHUD();
+});
+
+pressureSensInput.addEventListener('input', (e) => {
+  pressureSensitivity = parseInt(e.target.value) / 100;
+  pressureSensVal.textContent = pressureSensitivity.toFixed(1) + 'x';
+});
+
+// Eraser
+function toggleEraser() {
+  isEraser = !isEraser;
+  eraserBtn.classList.toggle('active', isEraser);
+  updateHUD();
+}
+eraserBtn.addEventListener('click', toggleEraser);
+
+// Undo / Redo
+undoBtn.addEventListener('click', undo);
+redoBtn.addEventListener('click', redo);
+
+// Clear
+clearBtn.addEventListener('click', () => {
+  showConfirm('Clear Canvas?', 'All strokes on this page will be erased.', () => {
+    const page = pages[activePageIndex];
+    page.strokes = [];
+    page.redoStack = [];
+    clearCanvasContent();
+    updateUndoRedoButtons();
+    showToast('Canvas cleared');
+  });
+});
+
+// Save
+saveBtn.addEventListener('click', () => {
+  // Flatten inserted images onto canvas temporarily
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = canvas.width;
+  tempCanvas.height = canvas.height;
+  const tempCtx = tempCanvas.getContext('2d');
+  tempCtx.drawImage(canvas, 0, 0);
+  // Draw inserted images
+  const imgs = imageLayer.querySelectorAll('.inserted-img');
+  const drawPromises = [];
+  imgs.forEach(container => {
+    const media = container.querySelector('img, video');
+    if (media && media.tagName === 'IMG') {
+      tempCtx.drawImage(media,
+        parseInt(container.style.left),
+        parseInt(container.style.top),
+        parseInt(container.style.width),
+        parseInt(container.style.height)
+      );
+    }
+  });
+  const link = document.createElement('a');
+  link.download = `AirCanvas-${pages[activePageIndex].name}-${Date.now()}.png`;
+  link.href = tempCanvas.toDataURL('image/png');
+  link.click();
+  showToast('Image saved!');
+});
+
+// ============================================================
+//  INSERT IMAGE / ANIMATION
+// ============================================================
+insertImgBtn.addEventListener('click', () => {
+  insertPanel.classList.toggle('open');
+});
+closeInsertPanel.addEventListener('click', () => {
+  insertPanel.classList.remove('open');
+});
+
+// Image upload
+imgUploadZone.addEventListener('click', () => imgFileInput.click());
+imgUploadZone.addEventListener('dragover', (e) => { e.preventDefault(); imgUploadZone.style.borderColor = 'var(--c)'; });
+imgUploadZone.addEventListener('dragleave', () => { imgUploadZone.style.borderColor = ''; });
+imgUploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  imgUploadZone.style.borderColor = '';
+  if (e.dataTransfer.files.length) handleImageFile(e.dataTransfer.files[0], false);
+});
+imgFileInput.addEventListener('change', (e) => {
+  if (e.target.files.length) handleImageFile(e.target.files[0], false);
+  e.target.value = '';
+});
+
+// GIF / Animation upload
+gifUploadZone.addEventListener('click', () => gifFileInput.click());
+gifUploadZone.addEventListener('dragover', (e) => { e.preventDefault(); gifUploadZone.style.borderColor = 'var(--c)'; });
+gifUploadZone.addEventListener('dragleave', () => { gifUploadZone.style.borderColor = ''; });
+gifUploadZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  gifUploadZone.style.borderColor = '';
+  if (e.dataTransfer.files.length) handleImageFile(e.dataTransfer.files[0], true);
+});
+gifFileInput.addEventListener('change', (e) => {
+  if (e.target.files.length) handleImageFile(e.target.files[0], true);
+  e.target.value = '';
+});
+
+function handleImageFile(file, isAnimation) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const isVideo = file.type.startsWith('video/');
+    insertMedia(e.target.result, isVideo, file.name);
+    insertPanel.classList.remove('open');
+    showToast(`${isAnimation ? 'Animation' : 'Image'} inserted!`);
+  };
+  reader.readAsDataURL(file);
+}
+
+function insertMedia(src, isVideo, name) {
+  const container = document.createElement('div');
+  container.className = 'inserted-img';
+  container.style.left = '80px';
+  container.style.top = '80px';
+  container.style.width = '200px';
+  container.style.height = '200px';
+  container.dataset.name = name || '';
+
+  let mediaEl;
+  if (isVideo) {
+    mediaEl = document.createElement('video');
+    mediaEl.src = src;
+    mediaEl.autoplay = true;
+    mediaEl.loop = true;
+    mediaEl.muted = true;
+    mediaEl.playsInline = true;
+  } else {
+    mediaEl = document.createElement('img');
+    mediaEl.src = src;
+    mediaEl.alt = name || 'Inserted image';
+  }
+
+  const deleteBtn = document.createElement('div');
+  deleteBtn.className = 'img-delete';
+  deleteBtn.innerHTML = '✕';
+  deleteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    container.remove();
+    showToast('Image removed');
+  });
+
+  const resizeHandle = document.createElement('div');
+  resizeHandle.className = 'img-resize';
+
+  container.appendChild(mediaEl);
+  container.appendChild(deleteBtn);
+  container.appendChild(resizeHandle);
+  imageLayer.appendChild(container);
+
+  // Drag
+  container.addEventListener('pointerdown', (e) => {
+    if (e.target === resizeHandle) return;
+    e.stopPropagation();
+    container.classList.add('selected');
+    dragTarget = container;
+    dragOffsetX = e.clientX - parseInt(container.style.left);
+    dragOffsetY = e.clientY - parseInt(container.style.top);
+    container.setPointerCapture(e.pointerId);
+  });
+  container.addEventListener('pointermove', (e) => {
+    if (dragTarget === container) {
+      container.style.left = (e.clientX - dragOffsetX) + 'px';
+      container.style.top = (e.clientY - dragOffsetY) + 'px';
+    }
+  });
+  container.addEventListener('pointerup', () => {
+    dragTarget = null;
+  });
+
+  // Resize handle
+  resizeHandle.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    resizeTarget = container;
+    resizeStartW = parseInt(container.style.width);
+    resizeStartH = parseInt(container.style.height);
+    resizeStartX = e.clientX;
+    resizeStartY = e.clientY;
+    resizeHandle.setPointerCapture(e.pointerId);
+  });
+  resizeHandle.addEventListener('pointermove', (e) => {
+    if (resizeTarget === container) {
+      const dw = e.clientX - resizeStartX;
+      const dh = e.clientY - resizeStartY;
+      container.style.width = Math.max(40, resizeStartW + dw) + 'px';
+      container.style.height = Math.max(40, resizeStartH + dh) + 'px';
+    }
+  });
+  resizeHandle.addEventListener('pointerup', () => { resizeTarget = null; });
+}
+
+function getInsertedImagesState() {
+  const results = [];
+  imageLayer.querySelectorAll('.inserted-img').forEach(c => {
+    const media = c.querySelector('img, video');
+    if (!media) return;
+    results.push({
+      src: media.src,
+      isVideo: media.tagName === 'VIDEO',
+      name: c.dataset.name || '',
+      left: c.style.left,
+      top: c.style.top,
+      width: c.style.width,
+      height: c.style.height,
+    });
+  });
+  return results;
+}
+
+function restoreInsertedImages(images) {
+  imageLayer.innerHTML = '';
+  images.forEach(img => {
+    insertMedia(img.src, img.isVideo, img.name);
+    const last = imageLayer.lastElementChild;
+    if (last) {
+      last.style.left = img.left;
+      last.style.top = img.top;
+      last.style.width = img.width;
+      last.style.height = img.height;
+    }
+  });
+}
+
+// ============================================================
+//  KEYBOARD SHORTCUTS
+// ============================================================
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
+  if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
+  if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveBtn.click(); }
+  if (e.key === 'e' || e.key === 'E') { if (!e.ctrlKey) toggleEraser(); }
+});
+
+// ============================================================
+//  HUD UPDATE
+// ============================================================
+function updateHUD() {
+  hudMode.textContent = isEraser ? 'Eraser' : (pressureEnabled ? 'Pen (Pressure)' : 'Pen');
+  hudPressure.textContent = Math.round(currentPressure * 100) + '%';
+  hudPage.textContent = `${activePageIndex + 1}/${pages.length}`;
+}
+
+// ============================================================
+//  DIALOG & TOAST
+// ============================================================
+function showConfirm(title, msg, onConfirm) {
+  dialogTitle.textContent = title;
+  dialogMsg.textContent = msg;
+  dialogCallback = onConfirm;
+  confirmDialog.classList.add('show');
+}
+dialogCancel.addEventListener('click', () => { confirmDialog.classList.remove('show'); dialogCallback = null; });
+dialogConfirm.addEventListener('click', () => {
+  confirmDialog.classList.remove('show');
+  if (dialogCallback) { dialogCallback(); dialogCallback = null; }
+});
+
+function showToast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => toastEl.classList.remove('show'), 1800);
+}
+
+// ============================================================
+//  ADD PAGE BUTTON
+// ============================================================
+addPageBtn.addEventListener('click', () => {
+  saveCurrent();
+  const page = createPage();
+  activePageIndex = pages.length - 1;
+  clearCanvasContent();
+  imageLayer.innerHTML = '';
+  renderPageTabs();
+  updateUndoRedoButtons();
+  showToast(`${page.name} created`);
+});
+
+// ============================================================
+//  INIT
+// ============================================================
+function init() {
+  resizeCanvas();
+  createPage('Page 1');
+  renderPageTabs();
+  updateUndoRedoButtons();
+  updateHUD();
+  clearCanvasContent();
+
+  window.addEventListener('resize', () => {
+    saveCurrent();
+    resizeCanvas();
+    restorePage(pages[activePageIndex]);
+  });
+}
+
+init();
+
+})();
+</script>
+</body>
+</html>
