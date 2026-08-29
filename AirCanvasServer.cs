@@ -1661,6 +1661,21 @@ namespace AirCanvas
                         }
                     }
 
+                    // Check if requesting API discovery info: GET /api/info or GET /discover or GET /info
+                    if (headerText.IndexOf("GET /api/info", StringComparison.OrdinalIgnoreCase) != -1 ||
+                        headerText.IndexOf("GET /discover", StringComparison.OrdinalIgnoreCase) != -1 ||
+                        headerText.IndexOf("GET /info", StringComparison.OrdinalIgnoreCase) != -1)
+                    {
+                        string jsonResp = "{\"type\":\"aircanvas_response\",\"name\":\"" + Environment.MachineName + "\",\"port\":" + ServerPort + ",\"ip\":\"" + localIp + "\"}";
+                        byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonResp);
+                        string header = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + jsonBytes.Length + "\r\nConnection: close\r\n\r\n";
+                        byte[] hBytes = Encoding.UTF8.GetBytes(header);
+                        stream.Write(hBytes, 0, hBytes.Length);
+                        stream.Write(jsonBytes, 0, jsonBytes.Length);
+                        stream.Flush();
+                        return false;
+                    }
+
                     // Serve full-featured HTML5 Touch Drawing Studio Web App!
                     string html = GetWebDrawingAppHtml();
                     byte[] htmlBytes = Encoding.UTF8.GetBytes(html);
