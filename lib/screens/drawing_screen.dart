@@ -397,26 +397,19 @@ class DrawingPainter extends CustomPainter {
     final path = Path();
     path.moveTo(stroke.points.first.position.dx, stroke.points.first.position.dy);
 
-    // Smooth curve through points (Catmull-Rom to Bezier)
-    for (int i = 1; i < stroke.points.length - 1; i++) {
-      final p0 = stroke.points[i - 1].position;
-      final p1 = stroke.points[i].position;
-      final p2 = stroke.points[i + 1].position;
-
-      final controlPoint1 = Offset(
-        p0.dx + (p1.dx - p0.dx) / 3,
-        p0.dy + (p1.dy - p0.dy) / 3,
-      );
-      final controlPoint2 = Offset(
-        p1.dx - (p2.dx - p0.dx) / 6,
-        p1.dy - (p2.dy - p0.dy) / 6,
-      );
-      path.cubicTo(controlPoint1.dx, controlPoint1.dy, controlPoint2.dx, controlPoint2.dy, p1.dx, p1.dy);
+    if (stroke.points.length == 2) {
+      path.lineTo(stroke.points.last.position.dx, stroke.points.last.position.dy);
+    } else {
+      // High-precision smooth handwriting curve (Quadratic Bezier to Midpoint)
+      for (int i = 1; i < stroke.points.length - 1; i++) {
+        final p1 = stroke.points[i].position;
+        final p2 = stroke.points[i + 1].position;
+        final midX = (p1.dx + p2.dx) / 2;
+        final midY = (p1.dy + p2.dy) / 2;
+        path.quadraticBezierTo(p1.dx, p1.dy, midX, midY);
+      }
+      path.lineTo(stroke.points.last.position.dx, stroke.points.last.position.dy);
     }
-
-    // শেষ পয়েন্ট
-    final lastPoint = stroke.points.last;
-    path.lineTo(lastPoint.position.dx, lastPoint.position.dy);
 
     // Variable width stroke simulation
     if (stroke.points.length >= 2) {
