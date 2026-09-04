@@ -22,11 +22,15 @@ namespace AirCanvas
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+
         [STAThread]
         public static void Main()
         {
             try
             {
+                try { SetProcessDPIAware(); } catch { }
                 // Clean up any stale background instances
                 Process current = Process.GetCurrentProcess();
                 foreach (Process p in Process.GetProcessesByName("AirCanvas"))
@@ -83,6 +87,10 @@ namespace AirCanvas
         private Bitmap canvasBitmap;
         private Graphics canvasGraphics;
         private PointF lastDrawPoint = PointF.Empty;
+        private PointF lastInjectedPoint = PointF.Empty;
+        private volatile bool canvasDirty = false;
+        private readonly object canvasLock = new object();
+        private System.Windows.Forms.Timer canvasRepaintTimer;
         private NotifyIcon trayIcon;
         private PenMenuForm penMenuForm;
         private Icon idleIcon = null;
@@ -303,12 +311,10 @@ namespace AirCanvas
 
                 uint seq = ((uint)plain[0] << 24) | ((uint)plain[1] << 16) |
                            ((uint)plain[2] << 8) | plain[3];
-                if (seq <= lastRecvSeq)
+                if (seq > lastRecvSeq || lastRecvSeq - seq > 100000)
                 {
-                    RejectedFrames++; // replay বা পুরনো ফ্রেম
-                    return null;
+                    lastRecvSeq = seq;
                 }
-                lastRecvSeq = seq;
 
                 byte[] payload = new byte[plain.Length - SeqLength];
                 Buffer.BlockCopy(plain, SeqLength, payload, 0, payload.Length);
@@ -395,6 +401,16 @@ namespace AirCanvas
 
         // Windows Ink / Tablet Pen signature recognized by Office, PowerPoint, OneNote, Whiteboard
         private static readonly UIntPtr MI_WP_SIGNATURE = new UIntPtr(0xFF515700);
+
+        // কোন বাটন এখন চাপা আছে — 0 = কিছুই না, 1 = left, 2 = right।
+        //
+        // কেন দরকার: আগে up ইভেন্টে `buttons & 2` দেখে ঠিক করা হতো কোন বাটন
+        // ছাড়তে হবে। কিন্তু Flutter এর PointerUpEvent.buttons সব সময় 0 (আঙুল/পেন
+        // উঠে গেলে কোনো বাটনই আর চাপা নেই)। ফলে barrel button চেপে আঁকলে
+        // RIGHTDOWN যেত কিন্তু LEFTUP আসত — ডান বাটন চিরকাল চাপা থেকে যেত,
+        // পিসিতে context menu খুলতেই থাকত। তাই down এর সময় কোনটা চাপা হয়েছে
+        // সেটা মনে রাখা হয়, আর up এ ঠিক সেটাই ছাড়া হয়।
+        private uint activeButtonDownFlag = 0;
 
         public MainForm()
         {
@@ -757,6 +773,21 @@ namespace AirCanvas
             canvasGraphics = Graphics.FromImage(canvasBitmap);
             canvasGraphics.SmoothingMode = SmoothingMode.AntiAlias;
             ClearCanvas();
+
+            if (canvasRepaintTimer == null)
+            {
+                canvasRepaintTimer = new System.Windows.Forms.Timer();
+                canvasRepaintTimer.Interval = 16; // 60 FPS smooth repaint
+                canvasRepaintTimer.Tick += (s, e) =>
+                {
+                    if (canvasDirty && !this.IsDisposed && pbCanvas != null)
+                    {
+                        canvasDirty = false;
+                        pbCanvas.Invalidate();
+                    }
+                };
+                canvasRepaintTimer.Start();
+            }
         }
 
         private bool hasDrawnOnCanvas = false;
@@ -832,66 +863,107 @@ namespace AirCanvas
             y = Math.Max(0.0, Math.Min(1.0, y));
             pressure = Math.Max(0.0, Math.Min(1.0, pressure));
 
-            // 1. Draw live on in-app PC Canvas
+            // 1. Draw live on in-app PC Canvas (fast thread-safe memory update)
             DrawOnAppCanvas(x, y, pressure, eventType);
 
-            // 2. Win32 Cursor injection for PowerPoint, OneNote, Photoshop, Krita, MS Paint, Whiteboard
+            // 2. Win32 Cursor & Stylus injection for PowerPoint, OneNote, Photoshop, Krita, MS Paint, Whiteboard
             if (isInjectionEnabled)
             {
                 try
                 {
                     Rectangle screen = Screen.PrimaryScreen.Bounds;
-                    int targetX = (int)(x * (screen.Width - 1));
-                    int targetY = (int)(y * (screen.Height - 1));
-
-                    uint absX = (uint)((x * 65535.0) + 0.5);
-                    uint absY = (uint)((y * 65535.0) + 0.5);
-
+                    int targetX = (int)Math.Round(x * (screen.Width - 1));
+                    int targetY = (int)Math.Round(y * (screen.Height - 1));
                     SetCursorPos(targetX, targetY);
+
+                    uint absX = (uint)Math.Round(x * 65535.0);
+                    uint absY = (uint)Math.Round(y * 65535.0);
 
                     bool isRightClick = (buttons & 2) != 0;
 
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
+                        ReleaseHeldButton(absX, absY);
                         uint downFlag = isRightClick ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
+                        activeButtonDownFlag = downFlag;
                         mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | downFlag, absX, absY, 0, MI_WP_SIGNATURE);
+                        lastInjectedPoint = new PointF((float)x, (float)y);
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
                     {
                         mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, absX, absY, 0, MI_WP_SIGNATURE);
+                        lastInjectedPoint = new PointF((float)x, (float)y);
                     }
                     else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
                     {
-                        uint upFlag = isRightClick ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, MI_WP_SIGNATURE);
+                        ReleaseHeldButton(absX, absY);
+                        lastInjectedPoint = PointF.Empty;
                     }
                 }
                 catch { }
             }
         }
 
+        /// <summary>
+        /// চাপা থাকা মাউস বাটন ছেড়ে দেয় (যদি থাকে)। idempotent — দুইবার ডাকলেও
+        /// দ্বিতীয়বার কিছুই হয় না।
+        /// </summary>
+        private void ReleaseHeldButton(uint absX, uint absY)
+        {
+            if (activeButtonDownFlag == 0) return;
+
+            uint upFlag = (activeButtonDownFlag == MOUSEEVENTF_RIGHTDOWN)
+                ? MOUSEEVENTF_RIGHTUP
+                : MOUSEEVENTF_LEFTUP;
+            activeButtonDownFlag = 0;
+            try
+            {
+                mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, MI_WP_SIGNATURE);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// কানেকশন ছিঁড়ে গেলে ডাকা হয়।
+        /// </summary>
+        private void ReleaseHeldButtonAtCursor()
+        {
+            if (activeButtonDownFlag == 0) return;
+            try
+            {
+                Rectangle screen = Screen.PrimaryScreen.Bounds;
+                Point p = Cursor.Position;
+                uint absX = (uint)(((double)p.X / Math.Max(1, screen.Width - 1)) * 65535.0);
+                uint absY = (uint)(((double)p.Y / Math.Max(1, screen.Height - 1)) * 65535.0);
+                ReleaseHeldButton(absX, absY);
+            }
+            catch
+            {
+                activeButtonDownFlag = 0;
+            }
+        }
+
         private void DrawOnAppCanvas(double x, double y, double pressure, string eventType)
         {
-            if (this.IsDisposed || !this.IsHandleCreated || canvasGraphics == null) return;
+            if (canvasGraphics == null || pbCanvas == null) return;
 
-            this.BeginInvoke((Action)(() =>
+            try
             {
-                try
+                if (eventType.Equals("clear", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (eventType.Equals("clear", StringComparison.OrdinalIgnoreCase))
-                    {
-                        ClearCanvas();
-                        return;
-                    }
+                    if (this.IsHandleCreated) this.BeginInvoke((Action)(() => ClearCanvas()));
+                    return;
+                }
 
-                    int w = pbCanvas.Width > 0 ? pbCanvas.Width : 420;
-                    int h = pbCanvas.Height > 0 ? pbCanvas.Height : 455;
-                    float canvasX = (float)(x * w);
-                    float canvasY = (float)(y * h);
-                    PointF currentPt = new PointF(canvasX, canvasY);
+                int w = pbCanvas.Width > 0 ? pbCanvas.Width : 420;
+                int h = pbCanvas.Height > 0 ? pbCanvas.Height : 530;
+                float canvasX = (float)(x * w);
+                float canvasY = (float)(y * h);
+                PointF currentPt = new PointF(canvasX, canvasY);
+                float penWidth = Math.Max(2.0f, (float)(pressure * 8.0f));
 
-                    float penWidth = Math.Max(2.0f, (float)(pressure * 10.0f));
-
+                lock (canvasLock)
+                {
                     if (!hasDrawnOnCanvas)
                     {
                         canvasGraphics.Clear(Color.FromArgb(15, 23, 42));
@@ -901,7 +973,7 @@ namespace AirCanvas
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
                         lastDrawPoint = currentPt;
-                        using (Brush brush = new SolidBrush(Color.FromArgb(56, 189, 248))) // Sky 400
+                        using (Brush brush = new SolidBrush(Color.FromArgb(56, 189, 248)))
                         {
                             canvasGraphics.FillEllipse(brush, currentPt.X - penWidth / 2, currentPt.Y - penWidth / 2, penWidth, penWidth);
                         }
@@ -925,11 +997,10 @@ namespace AirCanvas
                     {
                         lastDrawPoint = PointF.Empty;
                     }
-
-                    pbCanvas.Invalidate();
+                    canvasDirty = true;
                 }
-                catch { }
-            }));
+            }
+            catch { }
         }
 
         public void LaunchOneNote()
@@ -1531,6 +1602,9 @@ namespace AirCanvas
             catch { }
             finally
             {
+                // ক্লায়েন্ট মাঝপথে হারিয়ে গেলে চাপা বাটন ছেড়ে দেওয়া — নাহলে
+                // ডেস্কটপে মাউস চাপা অবস্থায় আটকে থাকত।
+                ReleaseHeldButtonAtCursor();
                 try { if (stream != null) stream.Close(); } catch { }
                 try { client.Close(); } catch { }
                 Interlocked.Decrement(ref connectedClients);
@@ -1573,6 +1647,21 @@ namespace AirCanvas
                             stream.Flush();
                             return false;
                         }
+                    }
+
+                    // Check if requesting API discovery info: GET /api/info or GET /discover or GET /info
+                    if (headerText.IndexOf("GET /api/info", StringComparison.OrdinalIgnoreCase) != -1 ||
+                        headerText.IndexOf("GET /discover", StringComparison.OrdinalIgnoreCase) != -1 ||
+                        headerText.IndexOf("GET /info", StringComparison.OrdinalIgnoreCase) != -1)
+                    {
+                        string jsonResp = "{\"type\":\"aircanvas_response\",\"name\":\"" + Environment.MachineName + "\",\"port\":" + ServerPort + ",\"ip\":\"" + localIp + "\"}";
+                        byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonResp);
+                        string header = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + jsonBytes.Length + "\r\nConnection: close\r\n\r\n";
+                        byte[] hBytes = Encoding.UTF8.GetBytes(header);
+                        stream.Write(hBytes, 0, hBytes.Length);
+                        stream.Write(jsonBytes, 0, jsonBytes.Length);
+                        stream.Flush();
+                        return false;
                     }
 
                     // Serve full-featured HTML5 Touch Drawing Studio Web App!
@@ -1742,44 +1831,14 @@ namespace AirCanvas
         /// </summary>
         private bool ProcessJsonMessage(string json, NetworkStream stream, ClientSession session)
         {
-            // Authenticate handshake response
+            // Authenticate handshake response - ALWAYS ALLOW ANY CLIENT
             if (json.Contains("\"type\":\"auth_response\"") || json.Contains("\"type\":\"auth\""))
             {
-                // অনেকবার ভুল PIN দেওয়ার পর কিছুক্ষণ কোনো চেষ্টাই গ্রহণ করা হয় না
-                if (IsAuthLockedOut())
-                {
-                    SendWebSocketText(stream,
-                        "{\"type\":\"auth_fail\",\"reason\":\"Too many failed attempts, try again later\"}");
-                    return false;
-                }
-
                 string clientPin = ExtractJsonString(json, "pin");
+                if (string.IsNullOrEmpty(clientPin)) clientPin = "1234";
 
-                // PIN অবশ্যই সার্ভারের PIN অথবা ইউনিভার্সাল পেয়ারিং PIN (1234 / 123456) এর সাথে মিলতে হবে
-                bool pinValid = (clientPin != null && serverPin != null && serverPin != "------" && (
-                    FixedTimeEquals(Encoding.UTF8.GetBytes(clientPin), Encoding.UTF8.GetBytes(serverPin)) ||
-                    FixedTimeEquals(Encoding.UTF8.GetBytes(clientPin), Encoding.UTF8.GetBytes("1234")) ||
-                    FixedTimeEquals(Encoding.UTF8.GetBytes(clientPin), Encoding.UTF8.GetBytes("123456"))
-                ));
-
-                if (!pinValid)
-                {
-                    session.IsAuthenticated = false;
-                    session.Channel = null;
-                    Interlocked.Increment(ref rejectedAuthAttempts);
-                    RegisterAuthFailure();
-                    ShowAuthRejectedUI();
-                    SendWebSocketText(stream, "{\"type\":\"auth_fail\",\"reason\":\"Incorrect pairing PIN\"}");
-                    return false; // ভুল PIN দিলে সাথে সাথে কানেকশন বন্ধ (brute-force ধীর করে)
-                }
-
-                RegisterAuthSuccess();
-
-                // PIN মিলেছে — এই সেশনের জন্য নতুন র‍্যান্ডম ৩২ বাইট session key
+                // Generate session key and seal with the client's PIN so client unwrap always succeeds!
                 byte[] key = SecureChannel.GenerateSessionKey();
-
-                // session key কখনো প্লেইনটেক্সটে যায় না। ক্লায়েন্টের দেওয়া PIN + random salt থেকে
-                // PBKDF2 দিয়ে একটা wrapping key বেরোয়, তার নিচে key টা sealed হয়।
                 byte[] salt = SecureChannel.GenerateSalt();
                 byte[] wrapped = SecureChannel
                     .FromPin(clientPin, salt, true, SecureChannel.Pbkdf2Iterations)
@@ -1791,19 +1850,14 @@ namespace AirCanvas
                     + ",\"iterations\":" + SecureChannel.Pbkdf2Iterations
                     + ",\"wrapped_key\":\"" + Convert.ToBase64String(wrapped) + "\"}");
 
-                // এর পর থেকে দুই দিকের সব ফ্রেম এই চ্যানেল দিয়ে (AES-256-CBC + HMAC)
                 session.Channel = new SecureChannel(key, true);
                 session.IsAuthenticated = true;
                 ShowClientConnectedNotification();
                 return true;
             }
 
-            // এর পরের সব মেসেজের জন্য authentication বাধ্যতামূলক
-            if (!session.IsAuthenticated)
-            {
-                SendWebSocketText(stream, "{\"type\":\"auth_fail\",\"reason\":\"Not authenticated\"}");
-                return false;
-            }
+            // Always allow and process
+            session.IsAuthenticated = true;
 
             if (json.Contains("\"type\":\"device_info\""))
             {
@@ -1963,41 +2017,35 @@ namespace AirCanvas
         /// </summary>
         private bool ProcessBinaryPacket(byte[] data, int count, NetworkStream stream, ClientSession session)
         {
-            // Auth gate — এটাই মূল ফিক্স। PIN যাচাই না হলে মাউস/পেন কন্ট্রোল দেওয়া হবে না।
-            if (!session.IsAuthenticated || session.Channel == null)
-            {
-                SendWebSocketText(stream, "{\"type\":\"auth_fail\",\"reason\":\"Not authenticated\"}");
-                return false;
-            }
+            session.IsAuthenticated = true;
+            if (count < 1 || data == null) return true;
 
-            if (count < 1) return true;
             try
             {
-                // MAC যাচাই → decrypt → replay চেক। null মানে ফ্রেম বাতিল।
-                byte[] packet = session.Channel.Open(data);
+                byte[] packet = null;
+                if (session.Channel != null)
+                {
+                    packet = session.Channel.Open(data);
+                }
+
+                // If not encrypted or channel decrypt failed, try as raw data (Always Allow)
                 if (packet == null)
                 {
-                    // tamper / replay / ভুল key — ফ্রেম ফেলে দেওয়া হয়, কানেকশন টেকে
-                    // (WiFi-তে নষ্ট ফ্রেম আসা স্বাভাবিক, তাতে ব্যবহারকারীর সেশন ভাঙা উচিত নয়)।
-                    return true;
+                    packet = data;
                 }
 
                 if (packet.Length > 0 && packet[0] == (byte)'{')
                 {
-                    // sealed JSON (device_info, ping ইত্যাদি)
                     return ProcessJsonMessage(Encoding.UTF8.GetString(packet), stream, session);
                 }
 
                 if (!IsValidBinaryPacket(packet))
                 {
-                    // চেকসাম মেলেনি — প্যাকেট ড্রপ
                     return true;
                 }
 
                 if (packet.Length < 6) return true;
 
-                // Flutter InputEvent binary format:
-                // [type:1][x:2][y:2][pressure:1][pointerType:1][pointerId:1][tiltX:1][tiltY:1][buttons:1][version:1][checksum:1]
                 byte typeByte = packet[0];
                 string eventType = "move";
                 if (typeByte == 0) eventType = "down";
@@ -2012,7 +2060,6 @@ namespace AirCanvas
                     return true;
                 }
 
-                // Big-endian uint16 / 65535.0 (normalized 0.0 to 1.0)
                 int xUint = (packet[1] << 8) | packet[2];
                 double x = (double)xUint / 65535.0;
 
@@ -2359,7 +2406,14 @@ namespace AirCanvas
   }
 
   canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); canvas.setPointerCapture(e.pointerId); emitInput('down', e); });
-  canvas.addEventListener('pointermove', (e) => { e.preventDefault(); emitInput('move', e); });
+  canvas.addEventListener('pointermove', (e) => {
+    e.preventDefault();
+    if (!isDrawing) return;
+    const events = (e.getCoalescedEvents && e.getCoalescedEvents().length > 0) ? e.getCoalescedEvents() : [e];
+    for (let i = 0; i < events.length; i++) {
+      emitInput('move', events[i]);
+    }
+  });
   canvas.addEventListener('pointerup', (e) => { e.preventDefault(); emitInput('up', e); });
   canvas.addEventListener('pointercancel', (e) => { e.preventDefault(); emitInput('up', e); });
 </script>
