@@ -18,6 +18,9 @@ class ToolbarWidget extends StatelessWidget {
   final ValueChanged<bool> onPalmRejectionChanged;
   final bool fullScreenMode;
   final ValueChanged<bool> onFullScreenModeChanged;
+  final bool directTabletMode;
+  final ValueChanged<bool> onDirectTabletModeChanged;
+  final ValueChanged<String>? onClassAction;
 
   const ToolbarWidget({
     super.key,
@@ -32,6 +35,9 @@ class ToolbarWidget extends StatelessWidget {
     required this.onPalmRejectionChanged,
     this.fullScreenMode = true,
     required this.onFullScreenModeChanged,
+    this.directTabletMode = true,
+    required this.onDirectTabletModeChanged,
+    this.onClassAction,
     this.canUndo = true,
   });
 
@@ -71,6 +77,9 @@ class ToolbarWidget extends StatelessWidget {
               onPalmRejectionChanged: onPalmRejectionChanged,
               fullScreenMode: fullScreenMode,
               onFullScreenModeChanged: onFullScreenModeChanged,
+              directTabletMode: directTabletMode,
+              onDirectTabletModeChanged: onDirectTabletModeChanged,
+              onClassAction: onClassAction,
             ),
           ],
         ),
@@ -174,6 +183,9 @@ class _ActionButtons extends StatelessWidget {
   final ValueChanged<bool> onPalmRejectionChanged;
   final bool fullScreenMode;
   final ValueChanged<bool> onFullScreenModeChanged;
+  final bool directTabletMode;
+  final ValueChanged<bool> onDirectTabletModeChanged;
+  final ValueChanged<String>? onClassAction;
 
   const _ActionButtons({
     required this.brushSettings,
@@ -186,6 +198,9 @@ class _ActionButtons extends StatelessWidget {
     required this.onPalmRejectionChanged,
     required this.fullScreenMode,
     required this.onFullScreenModeChanged,
+    required this.directTabletMode,
+    required this.onDirectTabletModeChanged,
+    this.onClassAction,
   });
 
   @override
@@ -211,6 +226,24 @@ class _ActionButtons extends StatelessWidget {
               : 'Tablet Mode: Match PC Aspect Ratio - Tap for Full Width',
           onTap: () => onFullScreenModeChanged(!fullScreenMode),
           color: fullScreenMode ? const Color(0xFF00E5FF) : Colors.grey.shade400,
+        ),
+        const SizedBox(width: 6),
+        // High-Performance 0-Lag Graphics Tablet Mode (Handwriting & Classes)
+        _buildIconButton(
+          icon: Icons.bolt,
+          tooltip: directTabletMode
+              ? '0-Lag High Performance (Best for Online Classes & Handwriting) - ON'
+              : 'Smoothing Stabilizer (For Art Curves) - ON',
+          onTap: () => onDirectTabletModeChanged(!directTabletMode),
+          color: directTabletMode ? const Color(0xFFFFD700) : Colors.grey.shade500,
+        ),
+        const SizedBox(width: 6),
+        // Classroom & Presentation Tools (PPT Pen, Laser, Eraser, OneNote)
+        _buildIconButton(
+          icon: Icons.school_outlined,
+          tooltip: 'Classroom & Presentation Shortcuts (PPT Pen, Laser, Eraser, OneNote)',
+          onTap: () => _showClassroomMenu(context, onClassAction),
+          color: const Color(0xFF38BDF8),
         ),
         const SizedBox(width: 6),
         // Brush mode
@@ -259,6 +292,97 @@ class _ActionButtons extends StatelessWidget {
           color: Colors.red.shade400,
         ),
       ],
+    );
+  }
+
+  void _showClassroomMenu(BuildContext context, ValueChanged<String>? onClassAction) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF161B26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        side: BorderSide(color: Color(0xFF2A374A)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.school, color: Color(0xFF38BDF8), size: 22),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Classroom & Presentation Tools',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.grey, size: 20),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _buildClassChip(ctx, '🖊️ PPT Pen (Ctrl+P)', () {
+                    onClassAction?.call('ppt_pen');
+                    Navigator.pop(ctx);
+                  }),
+                  _buildClassChip(ctx, '🔴 PPT Laser (Ctrl+L)', () {
+                    onClassAction?.call('ppt_laser');
+                    Navigator.pop(ctx);
+                  }),
+                  _buildClassChip(ctx, '🧹 PPT Eraser (Ctrl+E)', () {
+                    onClassAction?.call('ppt_eraser');
+                    Navigator.pop(ctx);
+                  }),
+                  _buildClassChip(ctx, '↩️ Undo (Ctrl+Z)', () {
+                    onClassAction?.call('undo');
+                    Navigator.pop(ctx);
+                  }),
+                  _buildClassChip(ctx, '📝 Open OneNote', () {
+                    onClassAction?.call('launch_onenote');
+                    Navigator.pop(ctx);
+                  }),
+                  _buildClassChip(ctx, '📊 Open PowerPoint', () {
+                    onClassAction?.call('launch_ppt');
+                    Navigator.pop(ctx);
+                  }),
+                  _buildClassChip(ctx, '🎨 Open MS Paint', () {
+                    onClassAction?.call('launch_paint');
+                    Navigator.pop(ctx);
+                  }),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildClassChip(BuildContext context, String label, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          border: Border.all(color: const Color(0xFF334155)),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+      ),
     );
   }
 

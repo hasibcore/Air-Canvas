@@ -237,6 +237,36 @@ class _DrawingScreenState extends State<DrawingScreen> {
                         ),
                       );
                     },
+                    directTabletMode: drawing.directTabletMode,
+                    onDirectTabletModeChanged: (val) {
+                      drawing.directTabletMode = val;
+                      ScaffoldMessenger.of(context).clearSnackBars();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            val
+                                ? '⚡ High-Performance 0-Lag Mode: ON (Crystal-clear handwriting for online classes)'
+                                : 'Smoothing Stabilizer: ON (For slow artistic curves)',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          duration: const Duration(seconds: 2),
+                          backgroundColor: const Color(0xFF1A1A2E),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    onClassAction: (action) {
+                      connection.sendAction(action);
+                      ScaffoldMessenger.of(context).clearSnackBars();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Triggered: $action on PC'),
+                          duration: const Duration(milliseconds: 1200),
+                          backgroundColor: const Color(0xFF1A1A2E),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
                   );
                 },
               ),

@@ -1058,6 +1058,16 @@ class ConnectionProvider extends ChangeNotifier {
     }
   }
 
+  /// ক্লাসরুম অ্যাকশন বা কীবোর্ড শর্টকাট সার্ভারে পাঠানো (যেমন ppt_pen, ppt_laser, ppt_eraser, launch_onenote, launch_ppt)
+  void sendAction(String action) {
+    if (_socket != null && isConnected) {
+      _sendToServer({
+        'type': 'aircanvas_input',
+        't': action,
+      });
+    }
+  }
+
   void _sendToServer(dynamic data) {
     if (_socket != null) {
       final encoded = data is String ? data : jsonEncode(data);

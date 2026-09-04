@@ -206,6 +206,7 @@ class DrawingProvider extends ChangeNotifier {
   double _canvasHeight = 1.0;
   bool _pressureSmoothing = true;
   double _lastPressure = 0.0;
+  bool _directTabletMode = true; // Ultra 0-latency high-performance graphics tablet mode
 
   // Smoothing buffer
   final List<Offset> _positionBuffer = [];
@@ -419,6 +420,19 @@ class DrawingProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// হাই-পারফরম্যান্স গ্রাফিক্স ট্যাবলেট মোড:
+  /// true থাকলে পিসিতে 0-latency তে অবিকল raw touch কো-অর্ডিনেট পাঠানো হয়,
+  /// ফলে অনলাইন ক্লাসে ব্ল্যাকবোর্ড/হোয়াইটবোর্ডে গণিতের সমীকরণ বা দ্রুত হাতের
+  /// লেখা (handwriting) কোনোরকম lag বা বিকৃতি ছাড়া অবিকল ফুটিয়ে তোলা যায়।
+  bool get directTabletMode => _directTabletMode;
+
+  set directTabletMode(bool val) {
+    if (_directTabletMode != val) {
+      _directTabletMode = val;
+      notifyListeners();
+    }
+  }
+
   void updateCanvasSize(double width, double height) {
     _canvasWidth = width <= 0 ? 1.0 : width;
     _canvasHeight = height <= 0 ? 1.0 : height;
@@ -539,19 +553,20 @@ class DrawingProvider extends ChangeNotifier {
     _lastPressure = smoothedPressure;
     _slotLastPosition[slot] = smoothedPosition;
 
-    // ইনপুট ইভেন্ট পাঠানো
+    // ইনপুট ইভেন্ট পাঠানো (Direct Tablet Mode এ raw position পাঠানো হয় যাতে 0-lag handwriting মেলে)
+    final emitPosition = _directTabletMode ? position : smoothedPosition;
     if (!_pendingUpSlots.containsKey(pointerId)) {
       // down কোনোভাবে ওয়্যারে যায়নি (ড্রপ, বা ownership হাতবদলের ঠিক পরে এসেছে)।
       // এখন শুধু move পাঠালে PC তে বাটন চাপাই হতো না — কার্সর নড়ত, দাগ পড়ত না।
       // তাই এখানে একটা synthetic down আগে পাঠানো হয়।
       _emitInputEvent(
-        InputEventType.pointerDown, smoothedPosition, smoothedPressure, pointerType, slot, now,
+        InputEventType.pointerDown, emitPosition, smoothedPressure, pointerType, slot, now,
         tiltX: tiltX, tiltY: tiltY, buttons: buttons,
       );
       _pendingUpSlots[pointerId] = slot;
     }
     _emitInputEvent(
-      InputEventType.pointerMove, smoothedPosition, smoothedPressure, pointerType, slot, now,
+      InputEventType.pointerMove, emitPosition, smoothedPressure, pointerType, slot, now,
       tiltX: tiltX, tiltY: tiltY, buttons: buttons,
     );
 
