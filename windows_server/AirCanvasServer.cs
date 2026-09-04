@@ -385,6 +385,38 @@ namespace AirCanvas
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
+        [DllImport("gdi32.dll")]
+        private static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetDC(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+        private const int DESKTOPHORZRES = 118;
+        private const int DESKTOPVERTRES = 117;
+
+        public static Size GetPhysicalScreenSize()
+        {
+            try
+            {
+                IntPtr hdc = GetDC(IntPtr.Zero);
+                if (hdc != IntPtr.Zero)
+                {
+                    int w = GetDeviceCaps(hdc, DESKTOPHORZRES);
+                    int h = GetDeviceCaps(hdc, DESKTOPVERTRES);
+                    ReleaseDC(IntPtr.Zero, hdc);
+                    if (w > 0 && h > 0)
+                    {
+                        return new Size(w, h);
+                    }
+                }
+            }
+            catch { }
+            return Screen.PrimaryScreen.Bounds.Size;
+        }
+
         private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
         private const uint MOUSEEVENTF_MOVE = 0x0001;
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
@@ -871,13 +903,19 @@ namespace AirCanvas
             {
                 try
                 {
-                    Rectangle screen = Screen.PrimaryScreen.Bounds;
-                    int targetX = (int)Math.Round(x * (screen.Width - 1));
-                    int targetY = (int)Math.Round(y * (screen.Height - 1));
+                    Size phys = GetPhysicalScreenSize();
+                    int screenWidth = Math.Max(1, phys.Width);
+                    int screenHeight = Math.Max(1, phys.Height);
+
+                    int targetX = (int)Math.Round(x * (screenWidth - 1));
+                    int targetY = (int)Math.Round(y * (screenHeight - 1));
+                    targetX = Math.Max(0, Math.Min(screenWidth - 1, targetX));
+                    targetY = Math.Max(0, Math.Min(screenHeight - 1, targetY));
+
                     SetCursorPos(targetX, targetY);
 
-                    uint absX = (uint)Math.Round(x * 65535.0);
-                    uint absY = (uint)Math.Round(y * 65535.0);
+                    uint absX = (uint)Math.Round(((double)targetX / Math.Max(1, screenWidth - 1)) * 65535.0);
+                    uint absY = (uint)Math.Round(((double)targetY / Math.Max(1, screenHeight - 1)) * 65535.0);
 
                     bool isRightClick = (buttons & 2) != 0;
 
@@ -931,10 +969,10 @@ namespace AirCanvas
             if (activeButtonDownFlag == 0) return;
             try
             {
-                Rectangle screen = Screen.PrimaryScreen.Bounds;
+                Size phys = GetPhysicalScreenSize();
                 Point p = Cursor.Position;
-                uint absX = (uint)(((double)p.X / Math.Max(1, screen.Width - 1)) * 65535.0);
-                uint absY = (uint)(((double)p.Y / Math.Max(1, screen.Height - 1)) * 65535.0);
+                uint absX = (uint)(((double)p.X / Math.Max(1, phys.Width - 1)) * 65535.0);
+                uint absY = (uint)(((double)p.Y / Math.Max(1, phys.Height - 1)) * 65535.0);
                 ReleaseHeldButton(absX, absY);
             }
             catch
@@ -1861,9 +1899,9 @@ namespace AirCanvas
 
             if (json.Contains("\"type\":\"device_info\""))
             {
-                // Key must be "binary" to match Flutter's ServerConfig.fromJson()
+                Size phys = GetPhysicalScreenSize();
                 SendSecureJson(stream, session,
-                    "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"binary\":true}}");
+                    "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"binary\":true,\"width\":" + phys.Width + ",\"height\":" + phys.Height + "}}");
             }
             else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
             {

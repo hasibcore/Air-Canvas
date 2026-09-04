@@ -424,6 +424,8 @@ class ServerConfig {
   final int targetFPS;
   final bool enablePressureSmoothing;
   final bool enablePrediction;  // client-side movement prediction
+  final int screenWidth;
+  final int screenHeight;
 
   const ServerConfig({
     this.port = 9090,
@@ -431,6 +433,8 @@ class ServerConfig {
     this.targetFPS = 120,
     this.enablePressureSmoothing = true,
     this.enablePrediction = true,
+    this.screenWidth = 1920,
+    this.screenHeight = 1080,
   });
 
   Map<String, dynamic> toJson() => {
@@ -439,6 +443,8 @@ class ServerConfig {
     'fps': targetFPS,
     'pressureSmooth': enablePressureSmoothing,
     'prediction': enablePrediction,
+    'width': screenWidth,
+    'height': screenHeight,
   };
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) => ServerConfig(
@@ -447,6 +453,8 @@ class ServerConfig {
     targetFPS: json['fps'] as int? ?? 120,
     enablePressureSmoothing: json['pressureSmooth'] as bool? ?? true,
     enablePrediction: json['prediction'] as bool? ?? true,
+    screenWidth: json['width'] as int? ?? 1920,
+    screenHeight: json['height'] as int? ?? 1080,
   );
 
   // Bug 50: copyWith
@@ -456,6 +464,8 @@ class ServerConfig {
     int? targetFPS,
     bool? enablePressureSmoothing,
     bool? enablePrediction,
+    int? screenWidth,
+    int? screenHeight,
   }) {
     return ServerConfig(
       port: port ?? this.port,
@@ -463,6 +473,8 @@ class ServerConfig {
       targetFPS: targetFPS ?? this.targetFPS,
       enablePressureSmoothing: enablePressureSmoothing ?? this.enablePressureSmoothing,
       enablePrediction: enablePrediction ?? this.enablePrediction,
+      screenWidth: screenWidth ?? this.screenWidth,
+      screenHeight: screenHeight ?? this.screenHeight,
     );
   }
 
@@ -476,7 +488,9 @@ class ServerConfig {
           useBinaryProtocol == other.useBinaryProtocol &&
           targetFPS == other.targetFPS &&
           enablePressureSmoothing == other.enablePressureSmoothing &&
-          enablePrediction == other.enablePrediction;
+          enablePrediction == other.enablePrediction &&
+          screenWidth == other.screenWidth &&
+          screenHeight == other.screenHeight;
 
   // Bug 48: HashCode override
   @override
@@ -485,5 +499,7 @@ class ServerConfig {
       useBinaryProtocol.hashCode ^
       targetFPS.hashCode ^
       enablePressureSmoothing.hashCode ^
-      enablePrediction.hashCode;
+      enablePrediction.hashCode ^
+      screenWidth.hashCode ^
+      screenHeight.hashCode;
 }

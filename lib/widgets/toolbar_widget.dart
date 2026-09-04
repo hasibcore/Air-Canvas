@@ -16,6 +16,8 @@ class ToolbarWidget extends StatelessWidget {
   /// তালু বা দ্বিতীয় আঙুল আলাদা করে বাছা হয় না।
   final bool palmRejection;
   final ValueChanged<bool> onPalmRejectionChanged;
+  final bool fullScreenMode;
+  final ValueChanged<bool> onFullScreenModeChanged;
 
   const ToolbarWidget({
     super.key,
@@ -28,6 +30,8 @@ class ToolbarWidget extends StatelessWidget {
     required this.latency,
     required this.palmRejection,
     required this.onPalmRejectionChanged,
+    this.fullScreenMode = true,
+    required this.onFullScreenModeChanged,
     this.canUndo = true,
   });
 
@@ -65,6 +69,8 @@ class ToolbarWidget extends StatelessWidget {
               canUndo: canUndo,
               palmRejection: palmRejection,
               onPalmRejectionChanged: onPalmRejectionChanged,
+              fullScreenMode: fullScreenMode,
+              onFullScreenModeChanged: onFullScreenModeChanged,
             ),
           ],
         ),
@@ -166,6 +172,8 @@ class _ActionButtons extends StatelessWidget {
   final bool canUndo;
   final bool palmRejection;
   final ValueChanged<bool> onPalmRejectionChanged;
+  final bool fullScreenMode;
+  final ValueChanged<bool> onFullScreenModeChanged;
 
   const _ActionButtons({
     required this.brushSettings,
@@ -176,6 +184,8 @@ class _ActionButtons extends StatelessWidget {
     required this.canUndo,
     required this.palmRejection,
     required this.onPalmRejectionChanged,
+    required this.fullScreenMode,
+    required this.onFullScreenModeChanged,
   });
 
   @override
@@ -193,6 +203,16 @@ class _ActionButtons extends StatelessWidget {
         const SizedBox(width: 6),
         _buildColorButton(context, Colors.yellow),
         const Spacer(),
+        // Tablet Surface Mode toggle (Full screen 100% width vs Aspect match)
+        _buildIconButton(
+          icon: fullScreenMode ? Icons.fit_screen : Icons.aspect_ratio,
+          tooltip: fullScreenMode
+              ? 'Tablet Mode: Full Width (Edge-to-Edge) - Tap for Aspect Match'
+              : 'Tablet Mode: Match PC Aspect Ratio - Tap for Full Width',
+          onTap: () => onFullScreenModeChanged(!fullScreenMode),
+          color: fullScreenMode ? const Color(0xFF00E5FF) : Colors.grey.shade400,
+        ),
+        const SizedBox(width: 6),
         // Brush mode
         _buildIconButton(
           icon: _getBrushModeIcon(),

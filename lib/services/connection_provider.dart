@@ -10,7 +10,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -92,9 +91,6 @@ class ConnectionProvider extends ChangeNotifier {
   Timer? _pingTimer;
   int _lastReportedRejects = 0;
 
-  /// secure channel না থাকায় যতগুলো ইনপুট প্যাকেট পাঠানো যায়নি।
-  int _unsealedDropCount = 0;
-
   int _lastDataSentOrReceivedTime = 0;
   Completer<bool>? _authCompleter;
   Future<String?> Function()? _clientPinCallback;
@@ -106,6 +102,7 @@ class ConnectionProvider extends ChangeNotifier {
 
   /// সার্ভার মোডে এই সেশনের জন্য তৈরি করা ৩২ বাইট session key।
   List<int>? _sessionKey;
+  List<int>? get currentSessionKey => _sessionKey;
 
   ConnectionProvider() {
     _loadSettings();
@@ -321,7 +318,7 @@ class ConnectionProvider extends ChangeNotifier {
       wrapped = await wrapSessionKeyAsync(key, pin, salt);
     } catch (e) {
       debugPrint('[Server] Session key wrap failed: $e');
-      _socket?.close(WebSocketStatus.internalServerError, 'Key exchange failed');
+      unawaited(_socket?.close(WebSocketStatus.internalServerError, 'Key exchange failed'));
       return;
     }
 
@@ -707,7 +704,6 @@ class ConnectionProvider extends ChangeNotifier {
       _authCompleter = Completer<bool>();
       _isAuthenticated = false;
       _channel = null; // প্রতিটি নতুন কানেকশনে পুরনো চ্যানেল রিসেট
-      _unsealedDropCount = 0;
       
       // Auto-set last successful PIN if provided or default to '1234' for zero-friction connection
       final trimmedPin = (pin != null && pin.trim().isNotEmpty) ? pin.trim() : '1234';

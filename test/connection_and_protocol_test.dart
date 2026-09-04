@@ -111,12 +111,14 @@ void main() {
       expect(restored.maxPressure, equals(4096.0));
     });
 
-    test('ServerConfig supports binary and custom port configuration', () {
+    test('ServerConfig supports binary, screen dimensions and custom port configuration', () {
       const config = ServerConfig(
         port: 9090,
         useBinaryProtocol: true,
         enablePressureSmoothing: true,
         enablePrediction: true,
+        screenWidth: 1920,
+        screenHeight: 1080,
       );
 
       final json = config.toJson();
@@ -126,6 +128,8 @@ void main() {
       expect(restored.useBinaryProtocol, isTrue);
       expect(restored.enablePressureSmoothing, isTrue);
       expect(restored.enablePrediction, isTrue);
+      expect(restored.screenWidth, equals(1920));
+      expect(restored.screenHeight, equals(1080));
     });
   });
 
