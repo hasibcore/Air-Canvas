@@ -13,6 +13,7 @@
 migrate_working_dir/
 scratch/
 *.apk
+*.zip
 analysis.txt
 node_modules/
 .env
