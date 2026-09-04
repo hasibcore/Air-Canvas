@@ -254,11 +254,21 @@ class ConnectionProvider extends ChangeNotifier {
 
   void _handleIncomingConnection(HttpRequest request) {
     if (WebSocketTransformer.isUpgradeRequest(request)) {
-      WebSocketTransformer.upgrade(request).then((WebSocket ws) {
+      WebSocketTransformer.upgrade(request).then((WebSocket ws) async {
+        if (_socket != null && _socket!.readyState == WebSocket.open) {
+          debugPrint('[Server] Rejecting additional client: already connected');
+          try {
+            ws.add(jsonEncode({
+              'type': 'server_busy',
+              'reason': 'Another device is already connected. Disconnect it first.',
+            }));
+          } catch (_) {}
+          await ws.close(WebSocketStatus.policyViolation, 'Server busy');
+          return;
+        }
         if (_socket != null) {
-          debugPrint('[Server] Closing existing client connection to accept new one');
-          _socket!.close();
-          _socketSubscription?.cancel();
+          await _socketSubscription?.cancel();
+          await _socket?.close();
         }
         _socket = ws;
         _isAuthenticated = false;
@@ -439,6 +449,9 @@ class ConnectionProvider extends ChangeNotifier {
             );
             _connectedDeviceName = _remoteDeviceInfo!.deviceName;
             _setState(ConnectionState.connected);
+            // Device info পাওয়ার পর callback আবার ট্রিগার করলে screen mapping সঠিক
+            // রেজোলিউশনে আপডেট হয় (native injection accuracy)।
+            onClientConnected?.call();
             // কনফিগ পাঠানো (which will now be encrypted)
             _sendToClient({
               'type': 'server_config',
@@ -861,6 +874,12 @@ class ConnectionProvider extends ChangeNotifier {
           _channel = null;
           _errorMessage = json['reason'] as String? ?? 'Authentication failed';
           _lastSuccessfulPin = null; // Clear cached PIN on failure
+          _completeAuth(false);
+          break;
+        case 'server_busy':
+          _channel = null;
+          _errorMessage = json['reason'] as String? ??
+              'Server already has an active client. Disconnect first.';
           _completeAuth(false);
           break;
         case 'server_config':
