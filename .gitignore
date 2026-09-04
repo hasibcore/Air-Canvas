@@ -14,6 +14,8 @@ migrate_working_dir/
 scratch/
 *.apk
 analysis.txt
+node_modules/
+.env
 
 # IntelliJ related
 *.iml
