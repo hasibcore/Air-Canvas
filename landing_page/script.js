@@ -1,3 +1,8 @@
+const APP_CONFIG = window.EDUSITE_CONFIG || {
+    apiBaseUrl: 'https://api.example.com',
+    requireHttpsApi: true,
+};
+
 document.addEventListener('DOMContentLoaded', () => {
     initParticles();
 });
@@ -54,7 +59,34 @@ function switchTab(tabId) {
     const grids = document.querySelectorAll('.platforms-grid');
     grids.forEach(grid => grid.classList.add('hidden'));
 
-    document.getElementById(`\${tabId}-grid`).classList.remove('hidden');
+    document.getElementById(`${tabId}-grid`).classList.remove('hidden');
+}
+
+function getApiBaseUrl() {
+    const base = APP_CONFIG.apiBaseUrl || '';
+    if (APP_CONFIG.requireHttpsApi && base.startsWith('http://')) {
+        throw new Error('Insecure API URL: HTTPS is required');
+    }
+    return base.replace(/\/$/, '');
+}
+
+async function secureApiRequest(path, options = {}) {
+    const url = `${getApiBaseUrl()}${path}`;
+    const response = await fetch(url, {
+        method: options.method || 'GET',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(options.token ? { Authorization: `****** } : {}),
+            ...(options.headers || {}),
+        },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+
+    if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `API request failed (${response.status})`);
+    }
+    return response.json();
 }
 
 // Smooth scrolling for anchor links
