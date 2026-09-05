@@ -20,6 +20,10 @@ class ToolbarWidget extends StatelessWidget {
   final ValueChanged<bool> onFullScreenModeChanged;
   final bool directTabletMode;
   final ValueChanged<bool> onDirectTabletModeChanged;
+  final PrecisionMode precisionMode;
+  final ValueChanged<PrecisionMode>? onPrecisionModeChanged;
+  final PressureCurve pressureCurve;
+  final ValueChanged<PressureCurve>? onPressureCurveChanged;
   final ValueChanged<String>? onClassAction;
 
   const ToolbarWidget({
@@ -33,10 +37,14 @@ class ToolbarWidget extends StatelessWidget {
     required this.latency,
     required this.palmRejection,
     required this.onPalmRejectionChanged,
-    this.fullScreenMode = true,
+    this.fullScreenMode = false,
     required this.onFullScreenModeChanged,
     this.directTabletMode = true,
     required this.onDirectTabletModeChanged,
+    this.precisionMode = PrecisionMode.proAdaptive,
+    this.onPrecisionModeChanged,
+    this.pressureCurve = PressureCurve.standard,
+    this.onPressureCurveChanged,
     this.onClassAction,
     this.canUndo = true,
   });
@@ -79,6 +87,10 @@ class ToolbarWidget extends StatelessWidget {
               onFullScreenModeChanged: onFullScreenModeChanged,
               directTabletMode: directTabletMode,
               onDirectTabletModeChanged: onDirectTabletModeChanged,
+              precisionMode: precisionMode,
+              onPrecisionModeChanged: onPrecisionModeChanged,
+              pressureCurve: pressureCurve,
+              onPressureCurveChanged: onPressureCurveChanged,
               onClassAction: onClassAction,
             ),
           ],
@@ -185,6 +197,10 @@ class _ActionButtons extends StatelessWidget {
   final ValueChanged<bool> onFullScreenModeChanged;
   final bool directTabletMode;
   final ValueChanged<bool> onDirectTabletModeChanged;
+  final PrecisionMode precisionMode;
+  final ValueChanged<PrecisionMode>? onPrecisionModeChanged;
+  final PressureCurve pressureCurve;
+  final ValueChanged<PressureCurve>? onPressureCurveChanged;
   final ValueChanged<String>? onClassAction;
 
   const _ActionButtons({
@@ -200,6 +216,10 @@ class _ActionButtons extends StatelessWidget {
     required this.onFullScreenModeChanged,
     required this.directTabletMode,
     required this.onDirectTabletModeChanged,
+    required this.precisionMode,
+    this.onPrecisionModeChanged,
+    required this.pressureCurve,
+    this.onPressureCurveChanged,
     this.onClassAction,
   });
 
@@ -218,24 +238,30 @@ class _ActionButtons extends StatelessWidget {
         const SizedBox(width: 6),
         _buildColorButton(context, Colors.yellow),
         const Spacer(),
-        // Tablet Surface Mode toggle (Full screen 100% width vs Aspect match)
+        // Tablet Surface Mode toggle (Aspect match 1:1 vs Full screen stretched)
         _buildIconButton(
-          icon: fullScreenMode ? Icons.fit_screen : Icons.aspect_ratio,
-          tooltip: fullScreenMode
-              ? 'Tablet Mode: Full Width (Edge-to-Edge) - Tap for Aspect Match'
-              : 'Tablet Mode: Match PC Aspect Ratio - Tap for Full Width',
+          icon: !fullScreenMode ? Icons.aspect_ratio : Icons.fit_screen,
+          tooltip: !fullScreenMode
+              ? '1:1 PC Aspect Ratio (Active - Zero Distortion) - Tap for Full Screen'
+              : 'Full Screen Stretched (Active - Shapes May Distort) - Tap for 1:1 Match',
           onTap: () => onFullScreenModeChanged(!fullScreenMode),
-          color: fullScreenMode ? const Color(0xFF00E5FF) : Colors.grey.shade400,
+          color: !fullScreenMode ? const Color(0xFF00E5FF) : Colors.amber.shade300,
         ),
         const SizedBox(width: 6),
-        // High-Performance 0-Lag Graphics Tablet Mode (Handwriting & Classes)
+        // Pro Accuracy & Jitter Filter Engine Selector
         _buildIconButton(
-          icon: Icons.bolt,
-          tooltip: directTabletMode
-              ? '0-Lag High Performance (Best for Online Classes & Handwriting) - ON'
-              : 'Smoothing Stabilizer (For Art Curves) - ON',
-          onTap: () => onDirectTabletModeChanged(!directTabletMode),
-          color: directTabletMode ? const Color(0xFFFFD700) : Colors.grey.shade500,
+          icon: precisionMode == PrecisionMode.proAdaptive
+              ? Icons.auto_awesome
+              : (precisionMode == PrecisionMode.rawDirect ? Icons.bolt : Icons.brush),
+          tooltip: precisionMode == PrecisionMode.proAdaptive
+              ? 'Pro Accuracy: 1-Euro Adaptive Filter ON (Zero Jitter, Zero Lag) - Tap to configure'
+              : (precisionMode == PrecisionMode.rawDirect
+                  ? 'Accuracy: Direct Raw (Unfiltered Sensor) - Tap to configure'
+                  : 'Accuracy: Studio Stabilizer (Art Inking) - Tap to configure'),
+          onTap: () => _showPrecisionMenu(context),
+          color: precisionMode == PrecisionMode.proAdaptive
+              ? const Color(0xFFFFD700)
+              : (precisionMode == PrecisionMode.rawDirect ? const Color(0xFF00E5FF) : const Color(0xFFC084FC)),
         ),
         const SizedBox(width: 6),
         // Classroom & Presentation Tools (PPT Pen, Laser, Eraser, OneNote)
@@ -292,6 +318,204 @@ class _ActionButtons extends StatelessWidget {
           color: Colors.red.shade400,
         ),
       ],
+    );
+  }
+
+  void _showPrecisionMenu(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF161B26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        side: BorderSide(color: Color(0xFF2A374A)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFD700).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.auto_awesome, color: Color(0xFFFFD700), size: 20),
+                      ),
+                      const SizedBox(width: 10),
+                      const Text(
+                        'Pro Precision & Stylus Engine',
+                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.grey, size: 20),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    'PRECISION & JITTER ENGINE',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildEngineOption(
+                    title: '1-Euro Adaptive Filter (Pro Recommended)',
+                    subtitle: 'Zero jitter on fine handwriting & math, zero lag on fast sweeps, razor-sharp corners.',
+                    icon: Icons.auto_awesome,
+                    accentColor: const Color(0xFFFFD700),
+                    isSelected: precisionMode == PrecisionMode.proAdaptive,
+                    onTap: () {
+                      onPrecisionModeChanged?.call(PrecisionMode.proAdaptive);
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  _buildEngineOption(
+                    title: 'Direct Raw Stream (Zero Filtering)',
+                    subtitle: '100% unfiltered digitizer input. Direct capacitive sensor pass-through.',
+                    icon: Icons.bolt,
+                    accentColor: const Color(0xFF00E5FF),
+                    isSelected: precisionMode == PrecisionMode.rawDirect,
+                    onTap: () {
+                      onPrecisionModeChanged?.call(PrecisionMode.rawDirect);
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  _buildEngineOption(
+                    title: 'Studio Inking Stabilizer',
+                    subtitle: 'Heavy weighted smoothing for slow, flowing artistic curves and calligraphy.',
+                    icon: Icons.brush,
+                    accentColor: const Color(0xFFC084FC),
+                    isSelected: precisionMode == PrecisionMode.studioSmooth,
+                    onTap: () {
+                      onPrecisionModeChanged?.call(PrecisionMode.studioSmooth);
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'STYLUS PRESSURE CALIBRATION',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _buildPressureChip(
+                        label: 'Standard (1:1 Linear)',
+                        curve: PressureCurve.standard,
+                        current: pressureCurve,
+                        onTap: () {
+                          onPressureCurveChanged?.call(PressureCurve.standard);
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                      _buildPressureChip(
+                        label: 'Soft (Light Touch - Gamma 0.7)',
+                        curve: PressureCurve.soft,
+                        current: pressureCurve,
+                        onTap: () {
+                          onPressureCurveChanged?.call(PressureCurve.soft);
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                      _buildPressureChip(
+                        label: 'Firm (High Control - Gamma 1.4)',
+                        curve: PressureCurve.firm,
+                        current: pressureCurve,
+                        onTap: () {
+                          onPressureCurveChanged?.call(PressureCurve.firm);
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildEngineOption({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color accentColor,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isSelected ? accentColor.withValues(alpha: 0.12) : const Color(0xFF1E2638),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: isSelected ? accentColor : const Color(0xFF2A374A), width: isSelected ? 1.5 : 1.0),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: isSelected ? accentColor : Colors.grey.shade400, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : Colors.grey.shade200,
+                      fontSize: 13,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            if (isSelected) Icon(Icons.check_circle, color: accentColor, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPressureChip({
+    required String label,
+    required PressureCurve curve,
+    required PressureCurve current,
+    required VoidCallback onTap,
+  }) {
+    final isSelected = curve == current;
+    return ChoiceChip(
+      label: Text(label, style: TextStyle(fontSize: 12, color: isSelected ? Colors.white : Colors.grey.shade300)),
+      selected: isSelected,
+      selectedColor: const Color(0xFF6C63FF),
+      backgroundColor: const Color(0xFF1E2638),
+      onSelected: (_) => onTap(),
+      showCheckmark: false,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: isSelected ? const Color(0xFF6C63FF) : const Color(0xFF2A374A)),
+      ),
     );
   }
 

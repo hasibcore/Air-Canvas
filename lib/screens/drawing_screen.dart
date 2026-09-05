@@ -41,8 +41,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
   // Hint text localized helper (Bug 94)
   String get _tapToShowToolbarHint => 'Tap to show toolbar';
 
-  // Graphics Tablet Mode: true = 100% full screen width (no black bars), false = match exact PC monitor ratio
-  bool _fullScreenTabletMode = true;
+  // Graphics Tablet Mode: false = match exact PC monitor ratio (1:1 perfect shapes, no distortion), true = 100% full screen stretched
+  bool _fullScreenTabletMode = false;
 
   @override
   void initState() {
@@ -164,8 +164,18 @@ class _DrawingScreenState extends State<DrawingScreen> {
                           child: Container(
                             decoration: BoxDecoration(
                               color: const Color(0xFF0A0A12),
+                              borderRadius: !_fullScreenTabletMode ? BorderRadius.circular(8) : null,
                               border: !_fullScreenTabletMode
-                                  ? Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.4), width: 1.5)
+                                  ? Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.6), width: 1.5)
+                                  : null,
+                              boxShadow: !_fullScreenTabletMode
+                                  ? [
+                                      BoxShadow(
+                                        color: const Color(0xFF00E5FF).withValues(alpha: 0.12),
+                                        blurRadius: 16,
+                                        spreadRadius: 1,
+                                      ),
+                                    ]
                                   : null,
                             ),
                             child: CustomPaint(
@@ -227,8 +237,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
                         SnackBar(
                           content: Text(
                             val
-                                ? 'Tablet Mode: 100% Full Width (Edge-to-Edge)'
-                                : 'Tablet Mode: Match PC Aspect Ratio (${connection.serverConfig.screenWidth}x${connection.serverConfig.screenHeight})',
+                                ? 'Tablet Mode: Full Screen (Stretched to phone - shapes may distort)'
+                                : 'Tablet Mode: 1:1 Match PC (${connection.serverConfig.screenWidth}x${connection.serverConfig.screenHeight} - Perfect Shapes, Zero Distortion)',
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                           duration: const Duration(seconds: 2),
@@ -255,6 +265,12 @@ class _DrawingScreenState extends State<DrawingScreen> {
                         ),
                       );
                     },
+                    precisionMode: drawing.precisionMode,
+                    onPrecisionModeChanged: (mode) =>
+                        drawing.precisionMode = mode,
+                    pressureCurve: drawing.pressureCurve,
+                    onPressureCurveChanged: (curve) =>
+                        drawing.pressureCurve = curve,
                     onClassAction: (action) {
                       connection.sendAction(action);
                       ScaffoldMessenger.of(context).clearSnackBars();

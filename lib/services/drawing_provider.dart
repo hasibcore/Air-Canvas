@@ -6,8 +6,47 @@
 // - ব্রাশ সেটিংস
 // - অফলাইন ক্যানভাস রেন্ডারিং (client side mirror)
 
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models/input_event.dart';
+import 'one_euro_filter.dart';
+
+/// ড্রয়িং অ্যাকুরেসি ও স্মুথিং ইঞ্জিন মোড
+enum PrecisionMode {
+  /// 🎯 1-Euro অ্যাডাপ্টিভ ফিল্টার (Casiez et al.): ধীরে লিখলে জিটার ১০০% শূন্য করে,
+  /// দ্রুত লিখলে শূন্য ল্যাগে শার্প কোণা বজায় রাখে। প্রো ড্রয়িং ও হ্যান্ডরাইটিং এর জন্য আদর্শ।
+  proAdaptive,
+
+  /// ⚡ আল্ট্রা ডিরেক্ট র (Unfiltered): কোনো প্রকার ফিল্টারিং ছাড়া সরাসরি সেন্সরের ডাটা।
+  rawDirect,
+
+  /// 🎨 স্টুডিও আর্ট স্টেবিলাইজার: ধীরগতির মসৃণ কার্ভ ও ইঙ্কিং এর জন্য।
+  studioSmooth,
+}
+
+/// প্রেশার রেসপন্স কার্ভ
+enum PressureCurve {
+  /// 1:1 লিনিয়ার রেসপন্স
+  standard,
+
+  /// হালকা স্পর্শেই গাঢ় লাইন (ক্যাপাসিটিভ পেন ও হালকা হাতের জন্য উপযোগী - Gamma 0.7)
+  soft,
+
+  /// সূক্ষ্ম নিখুঁত রেখা ও ক্যালিগ্রাফির জন্য উচ্চ নিয়ন্ত্রণ (Gamma 1.4)
+  firm;
+
+  /// প্রেশার ইনপুট ট্রান্সফর্ম করে (0.0 .. 1.0 রেঞ্জ নিশ্চিত করে)
+  double transform(double rawPressure) {
+    switch (this) {
+      case PressureCurve.soft:
+        return math.pow(rawPressure.clamp(0.0, 1.0), 0.7).toDouble().clamp(0.0, 1.0);
+      case PressureCurve.firm:
+        return math.pow(rawPressure.clamp(0.0, 1.0), 1.4).toDouble().clamp(0.0, 1.0);
+      case PressureCurve.standard:
+        return rawPressure.clamp(0.0, 1.0);
+    }
+  }
+}
 
 enum BrushMode {
   pen,      // সাধারণ পেন
@@ -206,7 +245,12 @@ class DrawingProvider extends ChangeNotifier {
   double _canvasHeight = 1.0;
   bool _pressureSmoothing = true;
   double _lastPressure = 0.0;
-  bool _directTabletMode = true; // Ultra 0-latency high-performance graphics tablet mode
+  bool _directTabletMode = true;
+
+  // Pro Precision & Jitter Filter Engine (1-Euro Filter)
+  PrecisionMode _precisionMode = PrecisionMode.proAdaptive;
+  PressureCurve _pressureCurve = PressureCurve.standard;
+  final OneEuroFilter2D _oneEuroFilter = OneEuroFilter2D(minCutoff: 1.2, beta: 0.008);
 
   // Smoothing buffer
   final List<Offset> _positionBuffer = [];
@@ -424,13 +468,31 @@ class DrawingProvider extends ChangeNotifier {
   /// true থাকলে পিসিতে 0-latency তে অবিকল raw touch কো-অর্ডিনেট পাঠানো হয়,
   /// ফলে অনলাইন ক্লাসে ব্ল্যাকবোর্ড/হোয়াইটবোর্ডে গণিতের সমীকরণ বা দ্রুত হাতের
   /// লেখা (handwriting) কোনোরকম lag বা বিকৃতি ছাড়া অবিকল ফুটিয়ে তোলা যায়।
-  bool get directTabletMode => _directTabletMode;
+  PrecisionMode get precisionMode => _precisionMode;
 
-  set directTabletMode(bool val) {
-    if (_directTabletMode != val) {
-      _directTabletMode = val;
+  set precisionMode(PrecisionMode mode) {
+    if (_precisionMode != mode) {
+      _precisionMode = mode;
+      _directTabletMode = (mode != PrecisionMode.studioSmooth);
+      _resetSmoothingBuffers();
       notifyListeners();
     }
+  }
+
+  PressureCurve get pressureCurve => _pressureCurve;
+
+  set pressureCurve(PressureCurve curve) {
+    if (_pressureCurve != curve) {
+      _pressureCurve = curve;
+      notifyListeners();
+    }
+  }
+
+  /// হাই-পারফরম্যান্স গ্রাফিক্স ট্যাবলেট মোড (Backwards-compatible API)
+  bool get directTabletMode => _precisionMode != PrecisionMode.studioSmooth;
+
+  set directTabletMode(bool val) {
+    precisionMode = val ? PrecisionMode.proAdaptive : PrecisionMode.studioSmooth;
   }
 
   void updateCanvasSize(double width, double height) {
@@ -444,11 +506,16 @@ class DrawingProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  double _applyPressureCurve(double rawPressure) {
+    return _pressureCurve.transform(rawPressure);
+  }
+
   void _resetSmoothingBuffers() {
     _lastPosition = null;
     _lastPressure = 0.0;
     _positionBuffer.clear();
     _pressureBuffer.clear();
+    _oneEuroFilter.reset();
   }
 
   /// টাচ/পেন ডাউন - নতুন স্ট্রোক শুরু
@@ -479,11 +546,12 @@ class DrawingProvider extends ChangeNotifier {
     _isDrawing = true;
 
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
+    final calibratedPressure = _applyPressureCurve(clampedPressure);
 
     _resetSmoothingBuffers();
     final point = StrokePoint(
       position: position,
-      pressure: clampedPressure,
+      pressure: calibratedPressure,
       timestamp: now,
       pointerType: pointerType,
     );
@@ -491,15 +559,15 @@ class DrawingProvider extends ChangeNotifier {
     _currentStroke = Stroke(settings: _brushSettings, startTime: now);
     _currentStroke!.addPoint(point);
     _lastPosition = position;
-    _lastPressure = clampedPressure;
+    _lastPressure = calibratedPressure;
     _slotLastPosition[slot] = position;
 
     _positionBuffer.add(position);
-    _pressureBuffer.add(clampedPressure);
+    _pressureBuffer.add(calibratedPressure);
 
     // ইনপুট ইভেন্ট জেনারেট ও পাঠানো
     _emitInputEvent(
-      InputEventType.pointerDown, position, clampedPressure, pointerType, slot, now,
+      InputEventType.pointerDown, position, calibratedPressure, pointerType, slot, now,
       tiltX: tiltX, tiltY: tiltY, buttons: buttons,
     );
     // down গেল — এখন এই pointer এর up পাঠানো বাধ্যতামূলক।
@@ -532,41 +600,44 @@ class DrawingProvider extends ChangeNotifier {
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
     final now = DateTime.now();
 
-    Offset smoothedPosition = position;
-    double smoothedPressure = clampedPressure;
+    // 1. Pro Precision filtering (1-Euro Adaptive vs Studio Smooth vs Raw Direct)
+    Offset precisionPosition = position;
+    if (_precisionMode == PrecisionMode.proAdaptive) {
+      precisionPosition = _oneEuroFilter.filter(position, now);
+    } else if (_precisionMode == PrecisionMode.studioSmooth) {
+      precisionPosition = _smoothPosition(position);
+    } else {
+      precisionPosition = position;
+    }
 
-    // Smoothing apply করা
-    if (_brushSettings.smoothing) {
-      smoothedPosition = _smoothPosition(position);
-      smoothedPressure = _smoothPressure(clampedPressure);
+    // 2. Pro Pressure curve calibration & smoothing
+    double calibratedPressure = _applyPressureCurve(clampedPressure);
+    if (_brushSettings.smoothing && _precisionMode != PrecisionMode.rawDirect) {
+      calibratedPressure = _smoothPressure(calibratedPressure);
     }
 
     final point = StrokePoint(
-      position: smoothedPosition,
-      pressure: smoothedPressure,
+      position: precisionPosition,
+      pressure: calibratedPressure,
       timestamp: now,
       pointerType: pointerType,
     );
 
     _currentStroke!.addPoint(point);
-    _lastPosition = smoothedPosition;
-    _lastPressure = smoothedPressure;
-    _slotLastPosition[slot] = smoothedPosition;
+    _lastPosition = precisionPosition;
+    _lastPressure = calibratedPressure;
+    _slotLastPosition[slot] = precisionPosition;
 
-    // ইনপুট ইভেন্ট পাঠানো (Direct Tablet Mode এ raw position পাঠানো হয় যাতে 0-lag handwriting মেলে)
-    final emitPosition = _directTabletMode ? position : smoothedPosition;
+    // Both local mirror canvas and Windows PC receive the EXACT SAME precision coordinates
     if (!_pendingUpSlots.containsKey(pointerId)) {
-      // down কোনোভাবে ওয়্যারে যায়নি (ড্রপ, বা ownership হাতবদলের ঠিক পরে এসেছে)।
-      // এখন শুধু move পাঠালে PC তে বাটন চাপাই হতো না — কার্সর নড়ত, দাগ পড়ত না।
-      // তাই এখানে একটা synthetic down আগে পাঠানো হয়।
       _emitInputEvent(
-        InputEventType.pointerDown, emitPosition, smoothedPressure, pointerType, slot, now,
+        InputEventType.pointerDown, precisionPosition, calibratedPressure, pointerType, slot, now,
         tiltX: tiltX, tiltY: tiltY, buttons: buttons,
       );
       _pendingUpSlots[pointerId] = slot;
     }
     _emitInputEvent(
-      InputEventType.pointerMove, emitPosition, smoothedPressure, pointerType, slot, now,
+      InputEventType.pointerMove, precisionPosition, calibratedPressure, pointerType, slot, now,
       tiltX: tiltX, tiltY: tiltY, buttons: buttons,
     );
 

@@ -71,16 +71,11 @@ class ServerInputHandler {
   }
 
   void _onClientConnected() {
-    final deviceInfo = _connection.remoteDeviceInfo;
-    if (deviceInfo != null) {
-      // ক্লায়েন্ট স্ক্রিন রেজুলেশন অনুযায়ী Windows স্ক্রিন ম্যাপিং সেট করা
-      if (!kIsWeb && Platform.isWindows && _nativeInjectionAvailable) {
-        WindowsInputInjection.setScreenResolution(
-          deviceInfo.screenWidth.toInt(),
-          deviceInfo.screenHeight.toInt(),
-        );
-      }
-    }
+    // Note: ক্লায়েন্টের ইনপুট ইভেন্টগুলো (event.x, event.y) ইতিমধ্যেই 0.0 থেকে 1.0 এর মধ্যে
+    // নরমালাইজড থাকে। Windows native injection স্বয়ংক্রিয়ভাবে সেটিকে ল্যাপটপের আসল
+    // মনিটর রেজোলিউশনে (monitor_width, monitor_height) ম্যাপ করে।
+    // এখানে ক্লায়েন্টের মোবাইল স্ক্রিন সাইজ ইনজেক্ট করলে ল্যাপটপে কার্সর বাম কোণে আটকে যেত
+    // এবং শেপ বিকৃত হয়ে যেত, তাই এটি আর সেট করা হচ্ছে না।
   }
 
   void _onClientDisconnected() {

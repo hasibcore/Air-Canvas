@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Globalization;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -22,11 +23,15 @@ namespace AirCanvas
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+
         [STAThread]
         public static void Main()
         {
             try
             {
+                try { SetProcessDPIAware(); } catch { }
                 // Clean up any stale background instances
                 Process current = Process.GetCurrentProcess();
                 foreach (Process p in Process.GetProcessesByName("AirCanvas"))
@@ -381,6 +386,38 @@ namespace AirCanvas
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
+        [DllImport("gdi32.dll")]
+        private static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetDC(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+        private const int DESKTOPHORZRES = 118;
+        private const int DESKTOPVERTRES = 117;
+
+        public static Size GetPhysicalScreenSize()
+        {
+            try
+            {
+                IntPtr hdc = GetDC(IntPtr.Zero);
+                if (hdc != IntPtr.Zero)
+                {
+                    int w = GetDeviceCaps(hdc, DESKTOPHORZRES);
+                    int h = GetDeviceCaps(hdc, DESKTOPVERTRES);
+                    ReleaseDC(IntPtr.Zero, hdc);
+                    if (w > 0 && h > 0)
+                    {
+                        return new Size(w, h);
+                    }
+                }
+            }
+            catch { }
+            return Screen.PrimaryScreen.Bounds.Size;
+        }
+
         private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
         private const uint MOUSEEVENTF_MOVE = 0x0001;
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
@@ -395,8 +432,9 @@ namespace AirCanvas
         private const byte VK_E = 0x45; // 'E' (PowerPoint Eraser)
         private const byte VK_Z = 0x5A; // 'Z' (Undo)
 
-        // Windows Ink / Tablet Pen signature recognized by Office, PowerPoint, OneNote, Whiteboard
-        private static readonly UIntPtr MI_WP_SIGNATURE = new UIntPtr(0xFF515700);
+        // Standard genuine mouse/tablet event signature (UIntPtr.Zero) to ensure
+        // Microsoft Whiteboard, OneNote, PowerPoint, Zoom, Photoshop and Paint accept strokes
+        private static readonly UIntPtr MI_WP_SIGNATURE = UIntPtr.Zero;
 
         // কোন বাটন এখন চাপা আছে — 0 = কিছুই না, 1 = left, 2 = right।
         //
@@ -867,8 +905,17 @@ namespace AirCanvas
             {
                 try
                 {
-                    uint absX = (uint)((x * 65535.0) + 0.5);
-                    uint absY = (uint)((y * 65535.0) + 0.5);
+                    Size phys = GetPhysicalScreenSize();
+                    int screenWidth = Math.Max(1, phys.Width);
+                    int screenHeight = Math.Max(1, phys.Height);
+
+                    int targetX = (int)Math.Round(x * (screenWidth - 1));
+                    int targetY = (int)Math.Round(y * (screenHeight - 1));
+                    targetX = Math.Max(0, Math.Min(screenWidth - 1, targetX));
+                    targetY = Math.Max(0, Math.Min(screenHeight - 1, targetY));
+
+                    uint absX = (uint)Math.Round(((double)targetX / Math.Max(1, screenWidth - 1)) * 65535.0);
+                    uint absY = (uint)Math.Round(((double)targetY / Math.Max(1, screenHeight - 1)) * 65535.0);
 
                     bool isRightClick = (buttons & 2) != 0;
 
@@ -877,33 +924,13 @@ namespace AirCanvas
                         ReleaseHeldButton(absX, absY);
                         uint downFlag = isRightClick ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
                         activeButtonDownFlag = downFlag;
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | downFlag, absX, absY, 0, MI_WP_SIGNATURE);
+                        SetCursorPos(targetX, targetY);
+                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | downFlag, absX, absY, 0, UIntPtr.Zero);
                         lastInjectedPoint = new PointF((float)x, (float)y);
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
                     {
-                        // Sub-pixel smooth interpolation if there's a jump between high-speed Wi-Fi packets
-                        if (!lastInjectedPoint.IsEmpty)
-                        {
-                            float dx = (float)x - lastInjectedPoint.X;
-                            float dy = (float)y - lastInjectedPoint.Y;
-                            float dist = (float)Math.Sqrt(dx * dx + dy * dy);
-                            if (dist > 0.012f && dist < 0.25f)
-                            {
-                                int steps = Math.Min(4, (int)(dist / 0.005f));
-                                for (int step = 1; step < steps; step++)
-                                {
-                                    float t = (float)step / steps;
-                                    float ix = lastInjectedPoint.X + dx * t;
-                                    float iy = lastInjectedPoint.Y + dy * t;
-                                    uint iAbsX = (uint)((ix * 65535.0f) + 0.5f);
-                                    uint iAbsY = (uint)((iy * 65535.0f) + 0.5f);
-                                    mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, iAbsX, iAbsY, 0, MI_WP_SIGNATURE);
-                                }
-                            }
-                        }
-
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, absX, absY, 0, MI_WP_SIGNATURE);
+                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, absX, absY, 0, UIntPtr.Zero);
                         lastInjectedPoint = new PointF((float)x, (float)y);
                     }
                     else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
@@ -930,7 +957,7 @@ namespace AirCanvas
             activeButtonDownFlag = 0;
             try
             {
-                mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, MI_WP_SIGNATURE);
+                mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, UIntPtr.Zero);
             }
             catch { }
         }
@@ -943,10 +970,10 @@ namespace AirCanvas
             if (activeButtonDownFlag == 0) return;
             try
             {
-                Rectangle screen = Screen.PrimaryScreen.Bounds;
+                Size phys = GetPhysicalScreenSize();
                 Point p = Cursor.Position;
-                uint absX = (uint)(((double)p.X / Math.Max(1, screen.Width - 1)) * 65535.0);
-                uint absY = (uint)(((double)p.Y / Math.Max(1, screen.Height - 1)) * 65535.0);
+                uint absX = (uint)(((double)p.X / Math.Max(1, phys.Width - 1)) * 65535.0);
+                uint absY = (uint)(((double)p.Y / Math.Max(1, phys.Height - 1)) * 65535.0);
                 ReleaseHeldButton(absX, absY);
             }
             catch
@@ -1873,9 +1900,9 @@ namespace AirCanvas
 
             if (json.Contains("\"type\":\"device_info\""))
             {
-                // Key must be "binary" to match Flutter's ServerConfig.fromJson()
+                Size phys = GetPhysicalScreenSize();
                 SendSecureJson(stream, session,
-                    "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"binary\":true}}");
+                    "{\"type\":\"server_config\",\"data\":{\"port\":9090,\"binary\":true,\"width\":" + phys.Width + ",\"height\":" + phys.Height + "}}");
             }
             else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
             {
@@ -1947,55 +1974,129 @@ namespace AirCanvas
         {
             try
             {
-                double x = 0, y = 0, pressure = 0.5;
+                // 1. Quick classroom & presentation action commands
+                if (json.Contains("\"clear\""))
+                {
+                    InjectAndDrawInput(0, 0, 0, "clear", 1, 0);
+                    return;
+                }
+                if (json.Contains("\"undo\""))
+                {
+                    TriggerUndo();
+                    return;
+                }
+                if (json.Contains("\"launch_onenote\""))
+                {
+                    if (this.IsHandleCreated) this.BeginInvoke((Action)(() => LaunchOneNote()));
+                    return;
+                }
+                if (json.Contains("\"launch_ppt\""))
+                {
+                    if (this.IsHandleCreated) this.BeginInvoke((Action)(() => LaunchPowerPoint()));
+                    return;
+                }
+                if (json.Contains("\"launch_paint\""))
+                {
+                    if (this.IsHandleCreated) this.BeginInvoke((Action)(() => LaunchPaint()));
+                    return;
+                }
+                if (json.Contains("\"ppt_pen\""))
+                {
+                    TriggerPowerPointPen();
+                    return;
+                }
+                if (json.Contains("\"ppt_laser\""))
+                {
+                    TriggerPowerPointLaser();
+                    return;
+                }
+                if (json.Contains("\"ppt_eraser\""))
+                {
+                    TriggerPowerPointEraser();
+                    return;
+                }
+
+                double x = 0.5, y = 0.5, pressure = 0.5;
                 string eventType = "move";
 
-                // Format: t/type, x, y, p/pressure
-                int tIdx = json.IndexOf("\"t\":");
-                if (tIdx == -1) tIdx = json.IndexOf("\"type\":");
+                // 2. Parse event type (down / move / up / cancel / clear)
+                int tIdx = json.IndexOf("\"t\":", StringComparison.OrdinalIgnoreCase);
+                if (tIdx == -1)
+                {
+                    int lastTypeIdx = json.LastIndexOf("\"type\":", StringComparison.OrdinalIgnoreCase);
+                    if (lastTypeIdx > 15) tIdx = lastTypeIdx;
+                }
+
                 if (tIdx != -1)
                 {
-                    int start = json.IndexOf('"', tIdx + 4) + 1;
-                    int end = json.IndexOf('"', start);
-                    if (start > 0 && end > start)
+                    int start = json.IndexOf('"', tIdx + 3);
+                    if (start != -1)
                     {
-                        eventType = json.Substring(start, end - start);
+                        start += 1;
+                        int end = json.IndexOf('"', start);
+                        if (end > start)
+                        {
+                            string rawT = json.Substring(start, end - start).ToLowerInvariant();
+                            if (rawT.Contains("down")) eventType = "down";
+                            else if (rawT.Contains("up")) eventType = "up";
+                            else if (rawT.Contains("cancel")) eventType = "cancel";
+                            else if (rawT.Contains("clear")) eventType = "clear";
+                            else eventType = "move";
+                        }
                     }
                 }
 
-                int xIdx = json.IndexOf("\"x\":");
+                // 3. Parse X coordinate with InvariantCulture
+                int xIdx = json.IndexOf("\"x\":", StringComparison.OrdinalIgnoreCase);
                 if (xIdx != -1)
                 {
-                    int end = json.IndexOfAny(new char[] { ',', '}' }, xIdx);
-                    string val = json.Substring(xIdx + 4, end - (xIdx + 4)).Trim();
-                    double.TryParse(val, out x);
+                    int start = xIdx + 4;
+                    int end = json.IndexOfAny(new char[] { ',', '}', ']' }, start);
+                    if (end > start)
+                    {
+                        string val = json.Substring(start, end - start).Trim('\"', ' ', '\t', '\r', '\n');
+                        double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out x);
+                    }
                 }
 
-                int yIdx = json.IndexOf("\"y\":");
+                // 4. Parse Y coordinate with InvariantCulture
+                int yIdx = json.IndexOf("\"y\":", StringComparison.OrdinalIgnoreCase);
                 if (yIdx != -1)
                 {
-                    int end = json.IndexOfAny(new char[] { ',', '}' }, yIdx);
-                    string val = json.Substring(yIdx + 4, end - (yIdx + 4)).Trim();
-                    double.TryParse(val, out y);
+                    int start = yIdx + 4;
+                    int end = json.IndexOfAny(new char[] { ',', '}' }, start);
+                    if (end > start)
+                    {
+                        string val = json.Substring(start, end - start).Trim('\"', ' ', '\t', '\r', '\n');
+                        double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out y);
+                    }
                 }
 
-                int pIdx = json.IndexOf("\"p\":");
-                if (pIdx == -1) pIdx = json.IndexOf("\"pressure\":");
+                // 5. Parse Pressure with InvariantCulture
+                int pIdx = json.IndexOf("\"p\":", StringComparison.OrdinalIgnoreCase);
+                if (pIdx == -1) pIdx = json.IndexOf("\"pressure\":", StringComparison.OrdinalIgnoreCase);
                 if (pIdx != -1)
                 {
-                    int end = json.IndexOfAny(new char[] { ',', '}' }, pIdx);
-                    string val = json.Substring(pIdx + (pIdx == json.IndexOf("\"p\":") ? 4 : 11), end - (pIdx + (pIdx == json.IndexOf("\"p\":") ? 4 : 11))).Trim();
-                    double.TryParse(val, out pressure);
+                    int offset = (json[pIdx + 1] == 'p' || json[pIdx + 1] == 'P') ? 4 : 11;
+                    int start = pIdx + offset;
+                    int end = json.IndexOfAny(new char[] { ',', '}' }, start);
+                    if (end > start)
+                    {
+                        string val = json.Substring(start, end - start).Trim('\"', ' ', '\t', '\r', '\n');
+                        double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out pressure);
+                    }
                 }
 
-                int bIdx = json.IndexOf("\"b\":");
+                // 6. Parse Buttons
+                int bIdx = json.IndexOf("\"b\":", StringComparison.OrdinalIgnoreCase);
                 int buttons = 1;
                 if (bIdx != -1)
                 {
-                    int end = json.IndexOfAny(new char[] { ',', '}' }, bIdx);
-                    if (end > bIdx + 4)
+                    int start = bIdx + 4;
+                    int end = json.IndexOfAny(new char[] { ',', '}' }, start);
+                    if (end > start)
                     {
-                        string val = json.Substring(bIdx + 4, end - (bIdx + 4)).Trim();
+                        string val = json.Substring(start, end - start).Trim('\"', ' ', '\t', '\r', '\n');
                         int.TryParse(val, out buttons);
                     }
                 }
@@ -2418,7 +2519,14 @@ namespace AirCanvas
   }
 
   canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); canvas.setPointerCapture(e.pointerId); emitInput('down', e); });
-  canvas.addEventListener('pointermove', (e) => { e.preventDefault(); emitInput('move', e); });
+  canvas.addEventListener('pointermove', (e) => {
+    e.preventDefault();
+    if (!isDrawing) return;
+    const events = (e.getCoalescedEvents && e.getCoalescedEvents().length > 0) ? e.getCoalescedEvents() : [e];
+    for (let i = 0; i < events.length; i++) {
+      emitInput('move', events[i]);
+    }
+  });
   canvas.addEventListener('pointerup', (e) => { e.preventDefault(); emitInput('up', e); });
   canvas.addEventListener('pointercancel', (e) => { e.preventDefault(); emitInput('up', e); });
 </script>

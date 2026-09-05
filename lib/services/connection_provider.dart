@@ -10,6 +10,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -230,8 +231,25 @@ class ConnectionProvider extends ChangeNotifier {
       }
 
       // WebSocket Server শুরু করা
-      _httpServer = await HttpServer.bind(InternetAddress.anyIPv4, port);
-      _serverConfig = ServerConfig(port: port, useBinaryProtocol: true);
+      // ল্যাপটপ/পিসির আসল ডিসপ্লে রেজোলিউশন ডিটেক্ট করা (যাতে ক্লায়েন্ট সঠিক Aspect Ratio পায়)
+      int screenW = 1920;
+      int screenH = 1080;
+      try {
+        final displays = ui.PlatformDispatcher.instance.displays;
+        if (displays.isNotEmpty && displays.first.size.width > 0 && displays.first.size.height > 0) {
+          screenW = displays.first.size.width.toInt();
+          screenH = displays.first.size.height.toInt();
+        }
+      } catch (e) {
+        debugPrint('[Server] Display resolution detection fallback: $e');
+      }
+
+      _serverConfig = ServerConfig(
+        port: port,
+        useBinaryProtocol: true,
+        screenWidth: screenW,
+        screenHeight: screenH,
+      );
 
       // UDP Discovery Broadcast শুরু করা
       await _startDiscoveryBroadcast(port);

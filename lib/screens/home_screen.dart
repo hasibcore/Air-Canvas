@@ -679,55 +679,67 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
           ),
           const SizedBox(height: 16),
-          // Live drawing preview canvas for real-time stroke display
+          // Live drawing preview canvas for real-time stroke display (preserving PC display aspect ratio)
           Consumer<DrawingProvider>(
             builder: (context, drawing, _) {
-              return Container(
-                height: 300,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0A0A12),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFF2A2A4A)),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (context.mounted) {
-                          drawing.updateCanvasSize(constraints.maxWidth, constraints.maxHeight);
-                        }
-                      });
-                      return Stack(
-                        children: [
-                          Positioned.fill(
-                            child: CustomPaint(
-                              painter: DrawingPainter(drawingProvider: drawing),
-                              size: Size.infinite,
-                            ),
-                          ),
-                          if (drawing.strokes.isEmpty && drawing.currentStroke == null)
-                            Center(
-                              child: Text(
-                                connection.mode == ConnectionMode.server
-                                    ? 'Draw on your tablet/phone to see it live here!'
-                                    : 'Touch or stylus drawing mirror',
-                                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-                              ),
-                            ),
-                          Positioned(
-                            top: 8,
-                            right: 8,
-                            child: IconButton(
-                              icon: const Icon(Icons.delete_outline, color: Colors.white70, size: 20),
-                              tooltip: 'Clear Canvas',
-                              onPressed: () => drawing.clearCanvas(),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
+              final serverCfg = connection.serverConfig;
+              final targetRatio = (serverCfg.screenWidth > 0 && serverCfg.screenHeight > 0)
+                  ? (serverCfg.screenWidth.toDouble() / serverCfg.screenHeight.toDouble())
+                  : (16.0 / 9.0);
+
+              return Center(
+                child: Container(
+                  height: 280,
+                  alignment: Alignment.center,
+                  child: AspectRatio(
+                    aspectRatio: targetRatio,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0A0A12),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0xFF2A2A4A)),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (context.mounted) {
+                                drawing.updateCanvasSize(constraints.maxWidth, constraints.maxHeight);
+                              }
+                            });
+                            return Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: CustomPaint(
+                                    painter: DrawingPainter(drawingProvider: drawing),
+                                    size: Size.infinite,
+                                  ),
+                                ),
+                                if (drawing.strokes.isEmpty && drawing.currentStroke == null)
+                                  Center(
+                                    child: Text(
+                                      connection.mode == ConnectionMode.server
+                                          ? 'Draw on your tablet/phone to see it live here!'
+                                          : 'Touch or stylus drawing mirror',
+                                      style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                                    ),
+                                  ),
+                                Positioned(
+                                  top: 8,
+                                  right: 8,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.delete_outline, color: Colors.white70, size: 20),
+                                    tooltip: 'Clear Canvas',
+                                    onPressed: () => drawing.clearCanvas(),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               );

@@ -225,17 +225,21 @@ bool FlutterWindow::OnCreate() {
               }
             }
 
-            // Map normalized coords using std::lround for rounding correctness (Bug 59)
+            // Map normalized coords using std::lround for sub-pixel accuracy and boundary clamping
             int target_x = 0;
             int target_y = 0;
             if (g_customWidth > 0 && g_customHeight > 0) {
-              target_x = static_cast<int>(std::lround(clamped_x * g_customWidth));
-              target_y = static_cast<int>(std::lround(clamped_y * g_customHeight));
+              int max_w = std::max(1, g_customWidth - 1);
+              int max_h = std::max(1, g_customHeight - 1);
+              target_x = static_cast<int>(std::lround(clamped_x * max_w));
+              target_y = static_cast<int>(std::lround(clamped_y * max_h));
             } else {
               int monitor_width = monitor_rect.right - monitor_rect.left;
               int monitor_height = monitor_rect.bottom - monitor_rect.top;
-              target_x = monitor_rect.left + static_cast<int>(std::lround(clamped_x * monitor_width));
-              target_y = monitor_rect.top + static_cast<int>(std::lround(clamped_y * monitor_height));
+              int max_w = std::max(1, monitor_width - 1);
+              int max_h = std::max(1, monitor_height - 1);
+              target_x = monitor_rect.left + static_cast<int>(std::lround(clamped_x * max_w));
+              target_y = monitor_rect.top + static_cast<int>(std::lround(clamped_y * max_h));
             }
 
             // Try pointer injection if available
@@ -280,8 +284,8 @@ bool FlutterWindow::OnCreate() {
 
               penInfo.pointerInfo.pointerFlags = pointerFlags;
 
-              // Set Pressure
-              penInfo.pressure = static_cast<UINT32>(clamped_pressure * 1024.0);
+              // Set Pressure (Pro 1024-level high-precision rounding)
+              penInfo.pressure = static_cast<UINT32>(std::lround(clamped_pressure * 1024.0));
               penInfo.penMask |= PEN_MASK_PRESSURE;
 
               // Set Tilt
@@ -311,13 +315,13 @@ bool FlutterWindow::OnCreate() {
 
             double normalized_x = 0.0;
             double normalized_y = 0.0;
-            if (virtual_width > 0 && virtual_height > 0) {
-              normalized_x = static_cast<double>(target_x - virtual_left) / virtual_width;
-              normalized_y = static_cast<double>(target_y - virtual_top) / virtual_height;
+            if (virtual_width > 1 && virtual_height > 1) {
+              normalized_x = static_cast<double>(target_x - virtual_left) / (virtual_width - 1);
+              normalized_y = static_cast<double>(target_y - virtual_top) / (virtual_height - 1);
             }
 
-            input.mi.dx = static_cast<LONG>(normalized_x * 65535.0);
-            input.mi.dy = static_cast<LONG>(normalized_y * 65535.0);
+            input.mi.dx = static_cast<LONG>(std::lround(normalized_x * 65535.0));
+            input.mi.dy = static_cast<LONG>(std::lround(normalized_y * 65535.0));
             input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESKTOP;
 
             if (type == 0) {

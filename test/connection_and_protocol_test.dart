@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:air_canvas/models/input_event.dart';
 import 'package:air_canvas/services/connection_provider.dart';
+import 'package:air_canvas/services/one_euro_filter.dart';
+import 'package:air_canvas/services/drawing_provider.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -140,6 +142,151 @@ void main() {
       expect(provider.isConnected, isFalse);
       expect(provider.discoveredDevices, isEmpty);
       provider.dispose();
+    });
+  });
+
+  group('Aspect Ratio & Shape Preservation Tests', () {
+    test('1:1 Aspect ratio canvas mapping preserves identical circle width/height on PC', () {
+      // Laptop display: 1920x1080 (16:9 ratio)
+      const pcWidth = 1920.0;
+      const pcHeight = 1080.0;
+      const targetRatio = pcWidth / pcHeight; // 1.7777...
+
+      // Mobile phone constraint: 892x412 (modern 20:9 phone screen)
+      const phoneConstraintsW = 892.0;
+      const phoneConstraintsH = 412.0;
+
+      // In 1:1 Aspect Ratio Match mode (letterboxed/pillarboxed active area):
+      final phoneRatio = phoneConstraintsW / phoneConstraintsH;
+      double canvasW = phoneConstraintsW;
+      double canvasH = phoneConstraintsH;
+
+      if (phoneRatio > targetRatio) {
+        canvasH = phoneConstraintsH;
+        canvasW = canvasH * targetRatio;
+      } else {
+        canvasW = phoneConstraintsW;
+        canvasH = canvasW / targetRatio;
+      }
+
+      // Verify canvas aspect ratio exactly matches PC display ratio
+      expect(canvasW / canvasH, closeTo(targetRatio, 0.0001));
+
+      // Simulate drawing a circle of diameter 100px on the mobile canvas
+      const circleDiameter = 100.0;
+      final normalizedXSpan = circleDiameter / canvasW;
+      final normalizedYSpan = circleDiameter / canvasH;
+
+      // When injected onto PC monitor:
+      final pcXSpan = normalizedXSpan * pcWidth;
+      final pcYSpan = normalizedYSpan * pcHeight;
+
+      // The circle must have EQUAL width and height on PC (no distortion / oval effect)
+      expect(pcXSpan, closeTo(pcYSpan, 0.001));
+      expect(pcXSpan / pcYSpan, closeTo(1.0, 0.001));
+    });
+
+    test('Stretched mode without aspect ratio match distorts circle into oval', () {
+      // Laptop display: 1920x1080
+      const pcWidth = 1920.0;
+      const pcHeight = 1080.0;
+
+      // Mobile phone constraint: 892x412 (no letterboxing, full screen stretch)
+      const canvasW = 892.0;
+      const canvasH = 412.0;
+
+      const circleDiameter = 100.0;
+      final normalizedXSpan = circleDiameter / canvasW;
+      final normalizedYSpan = circleDiameter / canvasH;
+
+      final pcXSpan = normalizedXSpan * pcWidth;
+      final pcYSpan = normalizedYSpan * pcHeight;
+
+      // In stretched mode, width and height are significantly mismatched (~22% distortion)
+      expect((pcXSpan - pcYSpan).abs(), greaterThan(10.0));
+      expect(pcXSpan / pcYSpan, isNot(closeTo(1.0, 0.05)));
+    });
+  });
+
+  group('OneEuroFilter2D & Precision Calibration Tests', () {
+    test('OneEuroFilter suppresses digitizer jitter at slow speeds', () {
+      final filter = OneEuroFilter2D(minCutoff: 1.2, beta: 0.007, dCutoff: 1.0);
+
+      const basePoint = Offset(100.0, 100.0);
+      var time = DateTime(2026, 1, 1, 12, 0, 0);
+
+      // First point sets the filter baseline
+      final p0 = filter.filter(basePoint, time);
+      expect(p0.dx, closeTo(100.0, 0.001));
+      expect(p0.dy, closeTo(100.0, 0.001));
+
+      // Simulate slight hand tremor / digitizer noise (+0.5px, -0.5px) at 60 Hz (~16.6ms intervals)
+      final jitterOffsets = [0.5, -0.5, 0.4, -0.4, 0.6, -0.5];
+      for (final jitter in jitterOffsets) {
+        time = time.add(const Duration(microseconds: 16666));
+        final raw = Offset(basePoint.dx + jitter, basePoint.dy + jitter);
+        final filtered = filter.filter(raw, time);
+
+        // Filtered jitter magnitude should be significantly dampened compared to raw jitter
+        final error = (filtered.dx - basePoint.dx).abs();
+        expect(error, lessThan(jitter.abs()));
+      }
+    });
+
+    test('OneEuroFilter adapts cutoff for rapid movement (0-lag dynamic response)', () {
+      final filter = OneEuroFilter2D(minCutoff: 1.2, beta: 0.007, dCutoff: 1.0);
+
+      var time = DateTime(2026, 1, 1, 12, 0, 0);
+      filter.filter(const Offset(0.0, 0.0), time);
+
+      // Fast swipe across screen: 200 pixels in 16.6ms (~12,000 px/sec)
+      time = time.add(const Duration(microseconds: 16666));
+      final fastPoint = const Offset(200.0, 200.0);
+      final fastFiltered = filter.filter(fastPoint, time);
+
+      // Under high velocity, beta dynamically increases cutoff frequency
+      // The filter should track the fast point closely without sluggish drag
+      expect(fastFiltered.dx, greaterThan(150.0));
+      expect(fastFiltered.dy, greaterThan(150.0));
+    });
+
+    test('OneEuroFilter reset clears previous state', () {
+      final filter = OneEuroFilter2D(minCutoff: 1.2, beta: 0.007, dCutoff: 1.0);
+      var time = DateTime(2026, 1, 1, 12, 0, 0);
+      filter.filter(const Offset(500.0, 500.0), time);
+
+      filter.reset();
+
+      // Next point after reset should immediately initialize to new coordinates without smoothing from 500
+      time = time.add(const Duration(seconds: 1));
+      final result = filter.filter(const Offset(10.0, 10.0), time);
+      expect(result.dx, closeTo(10.0, 0.001));
+      expect(result.dy, closeTo(10.0, 0.001));
+    });
+
+    test('PressureCurve transformation functions calculate correct responses', () {
+      const lightPressure = 0.25;
+      const midPressure = 0.50;
+
+      // Standard (linear 1:1)
+      expect(PressureCurve.standard.transform(lightPressure), closeTo(0.25, 0.001));
+      expect(PressureCurve.standard.transform(midPressure), closeTo(0.50, 0.001));
+
+      // Soft: p^0.7 -> boost light touches for effortless thick lines
+      final softLight = PressureCurve.soft.transform(lightPressure);
+      expect(softLight, closeTo(0.379, 0.01));
+      expect(softLight, greaterThan(lightPressure));
+
+      // Firm: p^1.4 -> requires firm hand, excellent for delicate sketching
+      final firmLight = PressureCurve.firm.transform(lightPressure);
+      expect(firmLight, closeTo(0.144, 0.01));
+      expect(firmLight, lessThan(lightPressure));
+
+      // 0.0 and 1.0 boundary values remain preserved across all curves
+      for (final curve in PressureCurve.values) {
+        expect(curve.transform(0.0), closeTo(0.0, 0.001));
+        expect(curve.transform(1.0), closeTo(1.0, 0.001));
+      }
     });
   });
 }
