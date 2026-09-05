@@ -24,6 +24,10 @@ class ToolbarWidget extends StatelessWidget {
   final ValueChanged<PrecisionMode>? onPrecisionModeChanged;
   final PressureCurve pressureCurve;
   final ValueChanged<PressureCurve>? onPressureCurveChanged;
+  final double writingScale;
+  final ValueChanged<double>? onWritingScaleChanged;
+  final WritingAnchor writingAnchor;
+  final ValueChanged<WritingAnchor>? onWritingAnchorChanged;
   final ValueChanged<String>? onClassAction;
 
   const ToolbarWidget({
@@ -37,7 +41,7 @@ class ToolbarWidget extends StatelessWidget {
     required this.latency,
     required this.palmRejection,
     required this.onPalmRejectionChanged,
-    this.fullScreenMode = false,
+    this.fullScreenMode = true,
     required this.onFullScreenModeChanged,
     this.directTabletMode = true,
     required this.onDirectTabletModeChanged,
@@ -45,6 +49,10 @@ class ToolbarWidget extends StatelessWidget {
     this.onPrecisionModeChanged,
     this.pressureCurve = PressureCurve.standard,
     this.onPressureCurveChanged,
+    this.writingScale = 0.55,
+    this.onWritingScaleChanged,
+    this.writingAnchor = WritingAnchor.center,
+    this.onWritingAnchorChanged,
     this.onClassAction,
     this.canUndo = true,
   });
@@ -91,6 +99,10 @@ class ToolbarWidget extends StatelessWidget {
               onPrecisionModeChanged: onPrecisionModeChanged,
               pressureCurve: pressureCurve,
               onPressureCurveChanged: onPressureCurveChanged,
+              writingScale: writingScale,
+              onWritingScaleChanged: onWritingScaleChanged,
+              writingAnchor: writingAnchor,
+              onWritingAnchorChanged: onWritingAnchorChanged,
               onClassAction: onClassAction,
             ),
           ],
@@ -201,6 +213,10 @@ class _ActionButtons extends StatelessWidget {
   final ValueChanged<PrecisionMode>? onPrecisionModeChanged;
   final PressureCurve pressureCurve;
   final ValueChanged<PressureCurve>? onPressureCurveChanged;
+  final double writingScale;
+  final ValueChanged<double>? onWritingScaleChanged;
+  final WritingAnchor writingAnchor;
+  final ValueChanged<WritingAnchor>? onWritingAnchorChanged;
   final ValueChanged<String>? onClassAction;
 
   const _ActionButtons({
@@ -220,6 +236,10 @@ class _ActionButtons extends StatelessWidget {
     this.onPrecisionModeChanged,
     required this.pressureCurve,
     this.onPressureCurveChanged,
+    required this.writingScale,
+    this.onWritingScaleChanged,
+    required this.writingAnchor,
+    this.onWritingAnchorChanged,
     this.onClassAction,
   });
 
@@ -238,6 +258,14 @@ class _ActionButtons extends StatelessWidget {
         const SizedBox(width: 6),
         _buildColorButton(context, Colors.yellow),
         const Spacer(),
+        // PC Handwriting Size / Scale Button
+        _buildIconButton(
+          icon: Icons.format_size_rounded,
+          tooltip: 'পিসিতে লেখার সাইজ: ${(writingScale * 100).round()}% (ছোট/বড় করতে ট্যাপ করুন)',
+          onTap: () => _showWritingScaleMenu(context),
+          color: const Color(0xFF4ADE80),
+        ),
+        const SizedBox(width: 6),
         // Tablet Surface Mode toggle (Aspect match 1:1 vs Full screen stretched)
         _buildIconButton(
           icon: !fullScreenMode ? Icons.aspect_ratio : Icons.fit_screen,
@@ -318,6 +346,165 @@ class _ActionButtons extends StatelessWidget {
           color: Colors.red.shade400,
         ),
       ],
+    );
+  }
+
+  void _showWritingScaleMenu(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF161B26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        side: BorderSide(color: Color(0xFF2A374A)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4ADE80).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.format_size_rounded, color: Color(0xFF4ADE80), size: 20),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'পিসিতে লেখার সাইজ (Handwriting Size)',
+                          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.grey, size: 20),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'পিসির পর্দায় লেখা যাতে অনেক বড় না হয়ে স্বাভাবিক খাতার মতো সুন্দর ও নিখুঁত দেখায়, সাইজ নির্বাচন করুন:',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                  ),
+                  const SizedBox(height: 14),
+                  _buildEngineOption(
+                    title: 'ছোট সাইজ (৫০% - Compact Note) ★প্রস্তাবিত',
+                    subtitle: 'খাতার স্বাভাবিক লেখা। এক লাইনে অনেক শব্দ ও সমীকরণ সুন্দরভাবে আঁটবে।',
+                    icon: Icons.notes_rounded,
+                    accentColor: const Color(0xFF4ADE80),
+                    isSelected: (writingScale - 0.50).abs() < 0.08,
+                    onTap: () {
+                      onWritingScaleChanged?.call(0.50);
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  _buildEngineOption(
+                    title: 'মাঝারি সাইজ (৭৫% - Balanced)',
+                    subtitle: 'অনলাইন ক্লাস ও হোয়াইটবোর্ডে ড্রয়িংয়ের জন্য আদর্শ ব্যালেন্সড সাইজ।',
+                    icon: Icons.draw_rounded,
+                    accentColor: const Color(0xFF38BDF8),
+                    isSelected: (writingScale - 0.75).abs() < 0.08,
+                    onTap: () {
+                      onWritingScaleChanged?.call(0.75);
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  _buildEngineOption(
+                    title: 'পুরো মনিটর (১০০% - Full Screen)',
+                    subtitle: 'পুরো ডিসপ্লে জুড়ে বড় করে আঁকা ও ফুল স্ক্রিন নেভিগেশন।',
+                    icon: Icons.fullscreen_rounded,
+                    accentColor: const Color(0xFFFFD700),
+                    isSelected: (writingScale - 1.0).abs() < 0.08,
+                    onTap: () {
+                      onWritingScaleChanged?.call(1.0);
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'কাস্টম সাইজ স্লাইডার',
+                        style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '${(writingScale * 100).round()}%',
+                        style: const TextStyle(color: Color(0xFF4ADE80), fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: writingScale.clamp(0.25, 1.0),
+                    min: 0.25,
+                    max: 1.0,
+                    divisions: 15,
+                    activeColor: const Color(0xFF4ADE80),
+                    inactiveColor: Colors.grey.shade800,
+                    onChanged: (v) {
+                      setSheetState(() {});
+                      onWritingScaleChanged?.call(v);
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'পিসির পর্দায় লেখার অবস্থান (Placement):',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.north_west, size: 16),
+                          label: const Text('Top-Left (শুরুতে)'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: writingAnchor == WritingAnchor.topLeft ? const Color(0xFF4ADE80) : Colors.grey,
+                            side: BorderSide(
+                              color: writingAnchor == WritingAnchor.topLeft ? const Color(0xFF4ADE80) : Colors.grey.shade800,
+                            ),
+                          ),
+                          onPressed: () {
+                            onWritingAnchorChanged?.call(WritingAnchor.topLeft);
+                            Navigator.pop(ctx);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.filter_center_focus, size: 16),
+                          label: const Text('Center (মাঝে)'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: writingAnchor == WritingAnchor.center ? const Color(0xFF4ADE80) : Colors.grey,
+                            side: BorderSide(
+                              color: writingAnchor == WritingAnchor.center ? const Color(0xFF4ADE80) : Colors.grey.shade800,
+                            ),
+                          ),
+                          onPressed: () {
+                            onWritingAnchorChanged?.call(WritingAnchor.center);
+                            Navigator.pop(ctx);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 

@@ -41,8 +41,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
   // Hint text localized helper (Bug 94)
   String get _tapToShowToolbarHint => 'Tap to show toolbar';
 
-  // Graphics Tablet Mode: false = match exact PC monitor ratio (1:1 perfect shapes, no distortion), true = 100% full screen stretched
-  bool _fullScreenTabletMode = false;
+  // Graphics Tablet Mode: true = 100% full screen edge-to-edge (Software aspect ratio compensation guarantees perfect shapes)
+  bool _fullScreenTabletMode = true;
 
   @override
   void initState() {
@@ -146,7 +146,11 @@ class _DrawingScreenState extends State<DrawingScreen> {
                       _lastHeight = canvasH;
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) {
-                          context.read<DrawingProvider>().updateCanvasSize(canvasW, canvasH);
+                          final drawing = context.read<DrawingProvider>();
+                          drawing.updateCanvasSize(canvasW, canvasH);
+                          if (serverCfg.screenWidth > 0 && serverCfg.screenHeight > 0) {
+                            drawing.updateServerAspectRatio(serverCfg.screenWidth.toDouble() / serverCfg.screenHeight.toDouble());
+                          }
                         }
                       });
                     }
@@ -271,6 +275,12 @@ class _DrawingScreenState extends State<DrawingScreen> {
                     pressureCurve: drawing.pressureCurve,
                     onPressureCurveChanged: (curve) =>
                         drawing.pressureCurve = curve,
+                    writingScale: drawing.writingScale,
+                    onWritingScaleChanged: (scale) =>
+                        drawing.writingScale = scale,
+                    writingAnchor: drawing.writingAnchor,
+                    onWritingAnchorChanged: (anchor) =>
+                        drawing.writingAnchor = anchor,
                     onClassAction: (action) {
                       connection.sendAction(action);
                       ScaffoldMessenger.of(context).clearSnackBars();

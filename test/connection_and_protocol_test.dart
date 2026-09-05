@@ -288,5 +288,58 @@ void main() {
         expect(curve.transform(1.0), closeTo(1.0, 0.001));
       }
     });
+
+    test('WritingScale compact mode (0.50x) reduces PC output span by 50%', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(800.0, 400.0);
+      provider.setWritingScalePreset(WritingScalePreset.compact);
+      provider.writingAnchor = WritingAnchor.center;
+
+      InputEvent? emitted;
+      provider.onInputGenerated = (ev) => emitted = ev;
+
+      // Start stroke at mobile center (400, 200) -> normalized is (0.5, 0.5)
+      provider.onPointerDown(const Offset(400.0, 200.0));
+      expect(emitted, isNotNull);
+      // At center anchor with 0.5 scale, center should map to center (0.5, 0.5)
+      expect(emitted!.x, closeTo(0.5, 0.05));
+      expect(emitted!.y, closeTo(0.5, 0.05));
+
+      // Move by 200px horizontally on mobile (which is 25% of mobile canvas)
+      provider.onPointerMove(const Offset(600.0, 200.0));
+      // In 0.50x scale mode, the emitted span should be 25% * 0.50 = 12.5%
+      expect(emitted!.x - 0.5, closeTo(0.125, 0.02));
+    });
+
+    test('Full-screen mobile edge-to-edge drawing preserves 1:1 circle geometry on 16:9 PC', () {
+      final provider = DrawingProvider();
+      // Mobile screen: 800 x 360 (aspect ratio ~2.222, ultra-wide 20:9)
+      provider.updateCanvasSize(800.0, 360.0);
+      // PC monitor: 1920 x 1080 (aspect ratio ~1.778, 16:9)
+      provider.updateServerAspectRatio(1920.0 / 1080.0);
+      provider.writingScale = 0.50;
+
+      InputEvent? p1;
+      InputEvent? p2;
+      provider.onInputGenerated = (ev) {
+        if (ev.type == InputEventType.pointerDown) p1 = ev;
+        if (ev.type == InputEventType.pointerMove) p2 = ev;
+      };
+
+      // Draw horizontal diameter of 50px circle on mobile
+      provider.onPointerDown(const Offset(200.0, 150.0));
+      provider.onPointerMove(const Offset(250.0, 150.0));
+      final deltaNormX = (p2!.x - p1!.x).abs();
+      final pcPixelSpanX = deltaNormX * 1920.0;
+
+      // Draw vertical diameter of 50px circle on mobile
+      provider.onPointerDown(const Offset(200.0, 150.0));
+      provider.onPointerMove(const Offset(200.0, 200.0));
+      final deltaNormY = (p2!.y - p1!.y).abs();
+      final pcPixelSpanY = deltaNormY * 1080.0;
+
+      // Horizontal and vertical pixel spans on PC must be equal (true circle)
+      expect(pcPixelSpanX, closeTo(pcPixelSpanY, 1.5));
+    });
   });
 }

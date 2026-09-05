@@ -48,6 +48,24 @@ enum PressureCurve {
   }
 }
 
+/// পিসিতে লেখার সাইজ ও স্কেল প্রিসেট
+enum WritingScalePreset {
+  /// ছোট সাইজ (খাতা ও নোটের স্বাভাবিক সাইজ - ৫০%)
+  compact,
+
+  /// মাঝারি সাইজ (হোয়াইটবোর্ড ও প্রেজেন্টেশন - ৭৫%)
+  medium,
+
+  /// পুরো স্ক্রিন (১০০% মনিটর জুড়ে)
+  full,
+}
+
+/// পিসিতে লেখার অবস্থান / অ্যাঙ্কর
+enum WritingAnchor {
+  topLeft,
+  center,
+}
+
 enum BrushMode {
   pen,      // সাধারণ পেন
   pencil,   // পেন্সিল (rougher)
@@ -251,6 +269,11 @@ class DrawingProvider extends ChangeNotifier {
   PrecisionMode _precisionMode = PrecisionMode.proAdaptive;
   PressureCurve _pressureCurve = PressureCurve.standard;
   final OneEuroFilter2D _oneEuroFilter = OneEuroFilter2D(minCutoff: 1.2, beta: 0.008);
+
+  // PC Output Writing Scale & Aspect Ratio Compensation
+  double _writingScale = 0.55; // Default compact natural writing size (55% of monitor)
+  WritingAnchor _writingAnchor = WritingAnchor.center;
+  double _serverAspectRatio = 16.0 / 9.0;
 
   // Smoothing buffer
   final List<Offset> _positionBuffer = [];
@@ -493,6 +516,57 @@ class DrawingProvider extends ChangeNotifier {
 
   set directTabletMode(bool val) {
     precisionMode = val ? PrecisionMode.proAdaptive : PrecisionMode.studioSmooth;
+  }
+
+  /// পিসিতে লেখার সাইজ / আউটপুট স্কেল (০.২৫ - ১.০)
+  double get writingScale => _writingScale;
+
+  set writingScale(double val) {
+    final clamped = val.clamp(0.25, 1.0);
+    if ((_writingScale - clamped).abs() > 0.001) {
+      _writingScale = clamped;
+      notifyListeners();
+    }
+  }
+
+  /// পিসিতে লেখার অবস্থান (Top-Left নাকি Center)
+  WritingAnchor get writingAnchor => _writingAnchor;
+
+  set writingAnchor(WritingAnchor anchor) {
+    if (_writingAnchor != anchor) {
+      _writingAnchor = anchor;
+      notifyListeners();
+    }
+  }
+
+  /// পিসির আসল স্ক্রিন রেশিও আপডেট করা
+  void updateServerAspectRatio(double ratio) {
+    if (ratio > 0.1 && (_serverAspectRatio - ratio).abs() > 0.01) {
+      _serverAspectRatio = ratio;
+      notifyListeners();
+    }
+  }
+
+  /// প্রিসেট নির্বাচন (Compact, Medium, Full)
+  void setWritingScalePreset(WritingScalePreset preset) {
+    switch (preset) {
+      case WritingScalePreset.compact:
+        writingScale = 0.50;
+        break;
+      case WritingScalePreset.medium:
+        writingScale = 0.75;
+        break;
+      case WritingScalePreset.full:
+        writingScale = 1.0;
+        break;
+    }
+  }
+
+  WritingScalePreset get currentScalePreset {
+    if ((_writingScale - 0.50).abs() < 0.08) return WritingScalePreset.compact;
+    if ((_writingScale - 0.75).abs() < 0.08) return WritingScalePreset.medium;
+    if ((_writingScale - 1.0).abs() < 0.08) return WritingScalePreset.full;
+    return WritingScalePreset.compact;
   }
 
   void updateCanvasSize(double width, double height) {
@@ -798,8 +872,37 @@ class DrawingProvider extends ChangeNotifier {
   }) {
     final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
     final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
-    final normalizedX = (position.dx / w).clamp(0.0, 1.0);
-    final normalizedY = (position.dy / h).clamp(0.0, 1.0);
+    final rawNormX = (position.dx / w).clamp(0.0, 1.0);
+    final rawNormY = (position.dy / h).clamp(0.0, 1.0);
+
+    // আউটপুট স্কেলিং ও রেশিও ক্ষতিপূরণ:
+    // ১. মোবাইল স্ক্রিন ১০০% এজ-টু-এজ ব্যবহার হবে (কোনো কালো দাগ/বর্ডার ছাড়া)।
+    // ২. পিসিতে লেখার সাইজ স্বাভাবিক ও স্পষ্ট হবে (অপ্রয়োজনীয় বিশাল বা স্ক্রিন পার হবে না)।
+    // ৩. মোবাইলে আঁকা বৃত্ত পিসিতে নিখুঁত বৃত্ত থাকবে।
+    double scaleX = _writingScale;
+    double scaleY = _writingScale;
+    if (_serverAspectRatio > 0.1 && _canvasWidth > 0 && _canvasHeight > 0) {
+      final mobileRatio = _canvasWidth / _canvasHeight;
+      scaleY = scaleX * (_serverAspectRatio / mobileRatio);
+      if (scaleY > 1.0) {
+        final factor = 1.0 / scaleY;
+        scaleX *= factor;
+        scaleY = 1.0;
+      }
+    }
+
+    double offsetX = 0.0;
+    double offsetY = 0.0;
+    if (_writingAnchor == WritingAnchor.center) {
+      offsetX = ((1.0 - scaleX) / 2.0).clamp(0.0, 1.0);
+      offsetY = ((1.0 - scaleY) / 2.0).clamp(0.0, 1.0);
+    } else {
+      offsetX = (0.04).clamp(0.0, (1.0 - scaleX).clamp(0.0, 1.0));
+      offsetY = (0.06).clamp(0.0, (1.0 - scaleY).clamp(0.0, 1.0));
+    }
+
+    final normalizedX = (offsetX + rawNormX * scaleX).clamp(0.0, 1.0);
+    final normalizedY = (offsetY + rawNormY * scaleY).clamp(0.0, 1.0);
 
     final event = InputEvent(
       type: type,
