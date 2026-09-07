@@ -34,12 +34,16 @@ class DeviceListTile extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
+                    color: device.transportType == TransportType.usb
+                        ? const Color(0xFF00E5FF).withValues(alpha: 0.15)
+                        : const Color(0xFF6C63FF).withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(
-                    Icons.computer,
-                    color: Color(0xFF6C63FF),
+                  child: Icon(
+                    device.transportType == TransportType.usb ? Icons.usb : Icons.computer,
+                    color: device.transportType == TransportType.usb
+                        ? const Color(0xFF00E5FF)
+                        : const Color(0xFF6C63FF),
                     size: 24,
                   ),
                 ),

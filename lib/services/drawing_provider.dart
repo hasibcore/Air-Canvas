@@ -54,6 +54,13 @@ enum PressureCurve {
   }
 }
 
+/// Explicit pointer/pen lifecycle state machine: IDLE -> DOWN -> MOVING -> UP -> IDLE
+enum PenState {
+  idle,
+  down,
+  moving,
+}
+
 /// PC handwriting size & scale presets
 enum WritingScalePreset {
   /// Compact note size (natural notebook size - 50%)
@@ -334,7 +341,8 @@ class DrawingProvider extends ChangeNotifier {
   double _canvasHeight = 1.0;
   bool _pressureSmoothing = true;
   double _lastPressure = 0.0;
-  bool _directTabletMode = true;
+  PenState _penState = PenState.idle;
+  PenState get penState => _penState;
 
   // Pro Precision & Jitter Filter Engine (1-Euro Filter)
   PrecisionMode _precisionMode = PrecisionMode.proAdaptive;
@@ -350,7 +358,7 @@ class DrawingProvider extends ChangeNotifier {
 
   // --- Custom Drawing Box (Active Work Area / ROI) ---
   bool _customBoxEnabled = false;
-  Rect _customBoxNormalized = Rect.fromLTRB(0.12, 0.12, 0.88, 0.88);
+  Rect _customBoxNormalized = const Rect.fromLTRB(0.12, 0.12, 0.88, 0.88);
   bool _isEditingCustomBox = false;
   bool _isSnippingBox = false;
   bool _boxMapsToFullScreen = false;
@@ -409,25 +417,25 @@ class DrawingProvider extends ChangeNotifier {
   void setCustomBoxPreset(String preset) {
     switch (preset) {
       case 'center_75':
-        setCustomBoxNormalized(Rect.fromLTRB(0.125, 0.125, 0.875, 0.875));
+        setCustomBoxNormalized(const Rect.fromLTRB(0.125, 0.125, 0.875, 0.875));
         break;
       case 'center_50':
-        setCustomBoxNormalized(Rect.fromLTRB(0.25, 0.25, 0.75, 0.75));
+        setCustomBoxNormalized(const Rect.fromLTRB(0.25, 0.25, 0.75, 0.75));
         break;
       case 'top_half':
-        setCustomBoxNormalized(Rect.fromLTRB(0.05, 0.05, 0.95, 0.50));
+        setCustomBoxNormalized(const Rect.fromLTRB(0.05, 0.05, 0.95, 0.50));
         break;
       case 'bottom_half':
-        setCustomBoxNormalized(Rect.fromLTRB(0.05, 0.50, 0.95, 0.95));
+        setCustomBoxNormalized(const Rect.fromLTRB(0.05, 0.50, 0.95, 0.95));
         break;
       case 'left_half':
-        setCustomBoxNormalized(Rect.fromLTRB(0.05, 0.05, 0.50, 0.95));
+        setCustomBoxNormalized(const Rect.fromLTRB(0.05, 0.05, 0.50, 0.95));
         break;
       case 'right_half':
-        setCustomBoxNormalized(Rect.fromLTRB(0.50, 0.05, 0.95, 0.95));
+        setCustomBoxNormalized(const Rect.fromLTRB(0.50, 0.05, 0.95, 0.95));
         break;
       case 'full':
-        setCustomBoxNormalized(Rect.fromLTRB(0.0, 0.0, 1.0, 1.0));
+        setCustomBoxNormalized(const Rect.fromLTRB(0.0, 0.0, 1.0, 1.0));
         break;
     }
   }
@@ -690,6 +698,7 @@ class DrawingProvider extends ChangeNotifier {
     _slotLastPosition.clear();
     _pointerKinds.clear();
     _drawingPointer = null;
+    _penState = PenState.idle;
   }
 
   /// Active pointer count for UI diagnostics and debugging.
@@ -723,7 +732,6 @@ class DrawingProvider extends ChangeNotifier {
   set precisionMode(PrecisionMode mode) {
     if (_precisionMode != mode) {
       _precisionMode = mode;
-      _directTabletMode = (mode != PrecisionMode.studioSmooth);
       _resetSmoothingBuffers();
       notifyListeners();
     }
@@ -819,6 +827,90 @@ class DrawingProvider extends ChangeNotifier {
     _oneEuroFilter.reset();
   }
 
+  /// Generates and sends input event via callback using ONE Authoritative Coordinate Contract:
+  /// Phone Raw Space -> Normalized Space [0.0, 1.0] -> Desktop Canvas/Monitor Space -> Native OS Input Space.
+  /// Preserves 1:1 circular aspect ratio uniformly without dual conflicting corrections.
+  void _emitInputEvent(
+    InputEventType type,
+    Offset position,
+    double pressure,
+    PointerType pointerType,
+    int pointerId,
+    DateTime timestamp, {
+    double tiltX = 0.0,
+    double tiltY = 0.0,
+    int buttons = 0,
+  }) {
+    final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
+    final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
+    double rawNormX = (position.dx / w).clamp(0.0, 1.0);
+    double rawNormY = (position.dy / h).clamp(0.0, 1.0);
+
+    // If Custom Drawing Box is active and maps to full PC screen, re-normalize
+    if (_customBoxEnabled && _boxMapsToFullScreen) {
+      final boxW = _customBoxNormalized.width <= 0 ? 1.0 : _customBoxNormalized.width;
+      final boxH = _customBoxNormalized.height <= 0 ? 1.0 : _customBoxNormalized.height;
+      final boxNormX = ((rawNormX - _customBoxNormalized.left) / boxW).clamp(0.0, 1.0);
+      final boxNormY = ((rawNormY - _customBoxNormalized.top) / boxH).clamp(0.0, 1.0);
+
+      final event = InputEvent(
+        type: type,
+        x: boxNormX,
+        y: boxNormY,
+        pressure: pressure,
+        pointerType: pointerType,
+        pointerId: pointerId,
+        tiltX: tiltX,
+        tiltY: tiltY,
+        buttons: buttons,
+        timestamp: timestamp,
+      );
+      onInputGenerated?.call(event);
+      return;
+    }
+
+    // Authoritative Single Transform Contract:
+    // 1. Mobile screen is 100% edge-to-edge usable.
+    // 2. Writing scale (e.g. 0.50x) renders compact, neat handwriting on PC.
+    // 3. Aspect-ratio compensation guarantees circles drawn on mobile remain perfect 1:1 circles on PC.
+    double scaleX = _writingScale.clamp(0.25, 1.0);
+    double scaleY = _writingScale.clamp(0.25, 1.0);
+    if (_serverAspectRatio > 0.1 && _canvasWidth > 0 && _canvasHeight > 0) {
+      final mobileRatio = _canvasWidth / _canvasHeight;
+      if (mobileRatio > 0.05) {
+        scaleY = scaleX * (_serverAspectRatio / mobileRatio);
+        if (scaleY > 1.0) {
+          final factor = 1.0 / scaleY;
+          scaleX *= factor;
+          scaleY = 1.0;
+        }
+      }
+    }
+
+    double offsetX = 0.0;
+    double offsetY = 0.0;
+    if (_writingAnchor == WritingAnchor.center) {
+      offsetX = ((1.0 - scaleX) / 2.0).clamp(0.0, 1.0);
+      offsetY = ((1.0 - scaleY) / 2.0).clamp(0.0, 1.0);
+    }
+
+    final normalizedX = (offsetX + rawNormX * scaleX).clamp(0.0, 1.0);
+    final normalizedY = (offsetY + rawNormY * scaleY).clamp(0.0, 1.0);
+    final event = InputEvent(
+      type: type,
+      x: normalizedX,
+      y: normalizedY,
+      pressure: pressure,
+      pointerType: pointerType,
+      pointerId: pointerId,
+      tiltX: tiltX,
+      tiltY: tiltY,
+      buttons: buttons,
+      timestamp: timestamp,
+    );
+    onInputGenerated?.call(event);
+  }
+
   /// Touch/Pen down - starts new stroke
   void onPointerDown(Offset position, {
     double pressure = 0.5,
@@ -860,6 +952,12 @@ class DrawingProvider extends ChangeNotifier {
       _slotLastPosition[slot] = position;
       return;
     }
+
+    // Pen State Machine: ensure clean transition from idle
+    if (_penState != PenState.idle) {
+      _releaseAllSlots(flushPendingUps: true);
+    }
+    _penState = PenState.down;
 
     _isDrawing = true;
     _currentVelocity = Offset.zero;
@@ -910,7 +1008,7 @@ class DrawingProvider extends ChangeNotifier {
     double tiltY = 0.0,
     int buttons = 0,
   }) {
-    if (!_isDrawing || _currentStroke == null) return;
+    if (!_isDrawing || _currentStroke == null || _penState == PenState.idle) return;
     if (pointerId < 0) return; // Defensive pointerId check
     if (_isSnippingBox || _isEditingCustomBox) return; // Ignore drawing while snipping or editing box
 
@@ -927,6 +1025,9 @@ class DrawingProvider extends ChangeNotifier {
     _drawingPointer ??= pointerId;
     _pointerKinds[pointerId] = pointerType;
     if (_isPen(pointerType)) _lastStylusActivity = DateTime.now();
+
+    // Pen State Machine: transition down -> moving
+    _penState = PenState.moving;
 
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
     final now = DateTime.now();
@@ -947,15 +1048,8 @@ class DrawingProvider extends ChangeNotifier {
       );
     }
 
-    // Sub-pixel anti-jitter: suppress micro-tremor when holding steady
-    if (_lastPosition != null) {
-      final dist = (boundedPosition - _lastPosition!).distance;
-      if (dist < 0.18) {
-        return; // Suppress sub-pixel sensor jitter
-      }
-    }
-
     // 1. Pro Precision filtering (1-Euro Adaptive vs Studio Smooth vs Raw Direct)
+    // Preserves 100% of raw digitizer points without artificial threshold dropping
     Offset precisionPosition = boundedPosition;
     if (_precisionMode == PrecisionMode.proAdaptive) {
       precisionPosition = _oneEuroFilter.filter(boundedPosition, now);
@@ -1036,13 +1130,22 @@ class DrawingProvider extends ChangeNotifier {
       _lastStylusActivity = DateTime.now();
     }
     final ownedStroke = _drawingPointer == null || _drawingPointer == pointerId;
+    if (ownedStroke) {
+      _penState = PenState.idle;
+    }
     _releaseSlot(pointerId);
 
     // Clear prediction & velocity
     _predictedPosition = null;
     _currentVelocity = Offset.zero;
 
-    if (downSlot == null) return;
+    if (downSlot == null) {
+      if (ownedStroke) {
+        _isDrawing = false;
+        _currentStroke = null;
+      }
+      return;
+    }
 
     final now = DateTime.now();
     final upPosition = _lastPosition ??
@@ -1068,7 +1171,7 @@ class DrawingProvider extends ChangeNotifier {
         _currentStroke!.addPoint(lastPoint);
       }
 
-    // Save stroke if at least 1 point exists
+      // Save stroke if at least 1 point exists
       if (_currentStroke!.points.isNotEmpty) {
         _strokes.add(_currentStroke!);
         // Limit strokes history length to prevent memory leak
@@ -1087,6 +1190,25 @@ class DrawingProvider extends ChangeNotifier {
 
     canvasNotifier.notify();
     notifyListeners();
+  }
+
+  /// Cancels active stroke safely upon pointer cancellation or loss of window focus
+  void onPointerCancel({
+    PointerType pointerType = PointerType.finger,
+    int pointerId = 0,
+    int buttons = 0,
+  }) {
+    if (_pendingUpSlots.containsKey(pointerId)) {
+      onPointerUp(pointerType: pointerType, pointerId: pointerId, buttons: buttons);
+    } else if (_pendingUpSlots.isNotEmpty) {
+      _releaseAllSlots(flushPendingUps: true);
+      _currentStroke = null;
+      _isDrawing = false;
+      _penState = PenState.idle;
+      _resetSmoothingBuffers();
+      canvasNotifier.notify();
+      notifyListeners();
+    }
   }
 
   /// Handle incoming remote input event (e.g. tablet strokes received on PC server)
@@ -1151,94 +1273,6 @@ class DrawingProvider extends ChangeNotifier {
       _resetSmoothingBuffers();
       canvasNotifier.notify();
       notifyListeners();
-    }
-  }
-
-  /// Generates and sends input event via callback
-  void _emitInputEvent(
-    InputEventType type,
-    Offset position,
-    double pressure,
-    PointerType pointerType,
-    int pointerId,
-    DateTime timestamp, {
-    double tiltX = 0.0,
-    double tiltY = 0.0,
-    int buttons = 0,
-  }) {
-    final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
-    final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
-    double rawNormX = (position.dx / w).clamp(0.0, 1.0);
-    double rawNormY = (position.dy / h).clamp(0.0, 1.0);
-
-    // If Custom Drawing Box is active and maps to full PC screen, re-normalize
-    if (_customBoxEnabled && _boxMapsToFullScreen) {
-      final boxW = _customBoxNormalized.width <= 0 ? 1.0 : _customBoxNormalized.width;
-      final boxH = _customBoxNormalized.height <= 0 ? 1.0 : _customBoxNormalized.height;
-      final boxNormX = ((rawNormX - _customBoxNormalized.left) / boxW).clamp(0.0, 1.0);
-      final boxNormY = ((rawNormY - _customBoxNormalized.top) / boxH).clamp(0.0, 1.0);
-
-      final event = InputEvent(
-        type: type,
-        x: boxNormX,
-        y: boxNormY,
-        pressure: pressure,
-        pointerType: pointerType,
-        pointerId: pointerId,
-        tiltX: tiltX,
-        tiltY: tiltY,
-        buttons: buttons,
-      );
-      onInputGenerated?.call(event);
-      return;
-    }
-
-      // Output scaling and aspect ratio compensation:
-      // 1. Mobile screen is 100% edge-to-edge (no black borders).
-      // 2. Handwriting scale on PC remains natural and crisp.
-      // 3. Circles drawn on mobile remain true circles on PC.
-    double scaleX = _writingScale;
-    double scaleY = _writingScale;
-    if (_serverAspectRatio > 0.1 && _canvasWidth > 0 && _canvasHeight > 0) {
-      final mobileRatio = _canvasWidth / _canvasHeight;
-      scaleY = scaleX * (_serverAspectRatio / mobileRatio);
-      if (scaleY > 1.0) {
-        final factor = 1.0 / scaleY;
-        scaleX *= factor;
-        scaleY = 1.0;
-      }
-    }
-
-    double offsetX = 0.0;
-    double offsetY = 0.0;
-    if (_writingAnchor == WritingAnchor.center) {
-      offsetX = ((1.0 - scaleX) / 2.0).clamp(0.0, 1.0);
-      offsetY = ((1.0 - scaleY) / 2.0).clamp(0.0, 1.0);
-    } else {
-      offsetX = 0.0;
-      offsetY = 0.0;
-    }
-
-    final normalizedX = (offsetX + rawNormX * scaleX).clamp(0.0, 1.0);
-    final normalizedY = (offsetY + rawNormY * scaleY).clamp(0.0, 1.0);
-
-    final event = InputEvent(
-      type: type,
-      x: normalizedX,
-      y: normalizedY,
-      pressure: pressure,
-      pointerType: pointerType,
-      pointerId: pointerId,
-      tiltX: tiltX,
-      tiltY: tiltY,
-      buttons: buttons,
-      timestamp: timestamp,
-    );
-
-    try {
-      onInputGenerated?.call(event);
-    } catch (e, stackTrace) {
-      debugPrint('Error in onInputGenerated callback: $e\n$stackTrace');
     }
   }
 

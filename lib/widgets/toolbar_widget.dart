@@ -627,7 +627,7 @@ class _ActionButtons extends StatelessWidget {
                         ),
                         Switch(
                           value: customBoxEnabled,
-                          activeColor: const Color(0xFF00E5FF),
+                          activeThumbColor: const Color(0xFF00E5FF),
                           onChanged: (val) {
                             setSheetState(() {});
                             onCustomBoxEnabledChanged?.call(val);
@@ -703,7 +703,7 @@ class _ActionButtons extends StatelessWidget {
                           ),
                           Switch(
                             value: boxMapsToFullScreen,
-                            activeColor: const Color(0xFF00E5FF),
+                            activeThumbColor: const Color(0xFF00E5FF),
                             onChanged: (val) {
                               setSheetState(() {});
                               onBoxMapsToFullScreenChanged?.call(val);

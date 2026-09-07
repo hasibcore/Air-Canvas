@@ -135,10 +135,25 @@ namespace AirCanvas
         private class ClientSession
         {
             public bool IsAuthenticated;
+            public bool IsUsb;
+            public string Transport = "Wi-Fi";
+            public PenState CurrentPenState = PenState.Idle;
+
+            public string Tool = "pen";
+            public string ColorHex = "#38bdf8";
+            public double StrokeWidth = 3.0;
+            public double ClientAspect = 0.0;
 
             // Secure channel through which all frames flow after authentication.
             // Session key derived inside channel.
             public SecureChannel Channel;
+        }
+
+        private enum PenState
+        {
+            Idle,
+            Down,
+            Moving
         }
 
         /// <summary>
@@ -396,8 +411,75 @@ namespace AirCanvas
         [DllImport("user32.dll")]
         private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+            public int Width { get { return Right - Left; } }
+            public int Height { get { return Bottom - Top; } }
+        }
+
+        private const int SM_XVIRTUALSCREEN = 76;
+        private const int SM_YVIRTUALSCREEN = 77;
+        private const int SM_CXVIRTUALSCREEN = 78;
+        private const int SM_CYVIRTUALSCREEN = 79;
+
         private const int DESKTOPHORZRES = 118;
         private const int DESKTOPVERTRES = 117;
+
+        public static Rectangle GetTargetDrawingArea()
+        {
+            try
+            {
+                IntPtr fgHwnd = GetForegroundWindow();
+                Screen targetScreen = null;
+                if (fgHwnd != IntPtr.Zero)
+                {
+                    targetScreen = Screen.FromHandle(fgHwnd);
+                }
+                if (targetScreen == null)
+                {
+                    targetScreen = Screen.PrimaryScreen;
+                }
+
+                // If foreground window is fullscreen (e.g. PowerPoint slide show, presentation, full-screen canvas),
+                // use entire Bounds. Otherwise, use WorkingArea to protect the Windows Taskbar & Start Menu!
+                if (fgHwnd != IntPtr.Zero && targetScreen != null)
+                {
+                    RECT fgRect;
+                    if (GetWindowRect(fgHwnd, out fgRect))
+                    {
+                        bool isFullScreen = (fgRect.Left <= targetScreen.Bounds.Left &&
+                                             fgRect.Top <= targetScreen.Bounds.Top &&
+                                             fgRect.Right >= targetScreen.Bounds.Right &&
+                                             fgRect.Bottom >= targetScreen.Bounds.Bottom);
+                        if (isFullScreen)
+                        {
+                            return targetScreen.Bounds;
+                        }
+                    }
+                }
+
+                return targetScreen != null ? targetScreen.WorkingArea : Screen.PrimaryScreen.WorkingArea;
+            }
+            catch
+            {
+                return Screen.PrimaryScreen != null ? Screen.PrimaryScreen.WorkingArea : new Rectangle(0, 0, 1920, 1080);
+            }
+        }
 
         public static Size GetPhysicalScreenSize()
         {
@@ -420,6 +502,7 @@ namespace AirCanvas
         }
 
         private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
+        private const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
         private const uint MOUSEEVENTF_MOVE = 0x0001;
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
@@ -446,6 +529,7 @@ namespace AirCanvas
         //
         //
         private uint activeButtonDownFlag = 0;
+        private int lastPacketTick = Environment.TickCount;
 
         public MainForm()
         {
@@ -820,6 +904,12 @@ namespace AirCanvas
                         canvasDirty = false;
                         pbCanvas.Invalidate();
                     }
+
+                    // Inactivity Watchdog: Auto-release held button if client disconnected mid-stroke without FIN
+                    if (activeButtonDownFlag != 0 && unchecked(Environment.TickCount - lastPacketTick) > 2500)
+                    {
+                        ReleaseHeldButtonAtCursor();
+                    }
                 };
                 canvasRepaintTimer.Start();
             }
@@ -907,24 +997,30 @@ namespace AirCanvas
             {
                 try
                 {
-                    Size phys = GetPhysicalScreenSize();
-                    int screenWidth = Math.Max(1, phys.Width);
-                    int screenHeight = Math.Max(1, phys.Height);
+                    Rectangle drawArea = GetTargetDrawingArea();
+                    int targetX = drawArea.Left + (int)Math.Round(x * Math.Max(1, drawArea.Width - 1));
+                    int targetY = drawArea.Top + (int)Math.Round(y * Math.Max(1, drawArea.Height - 1));
 
-                    int targetX = (int)Math.Round(x * (screenWidth - 1));
-                    int targetY = (int)Math.Round(y * (screenHeight - 1));
+                    // Safe Edge Margin Inset (3px):
+                    // Prevents edge gestures from triggering outer resize borders or accidental desktop clicks
+                    // while retaining full reach across the application canvas.
+                    const int safeEdgeInset = 3;
+                    targetX = Math.Max(drawArea.Left + safeEdgeInset, Math.Min(drawArea.Right - 1 - safeEdgeInset, targetX));
+                    targetY = Math.Max(drawArea.Top + safeEdgeInset, Math.Min(drawArea.Bottom - 1 - safeEdgeInset, targetY));
 
-                    // Safe Edge Margin Inset (4px):
-                    // Prevents accidental clicks on Windows Start Menu (bottom-left),
-                    // Taskbar, and Window Close button (top-right) when drawing near mobile screen corners!
-                    const int safeEdgeInset = 4;
-                    targetX = Math.Max(safeEdgeInset, Math.Min(screenWidth - 1 - safeEdgeInset, targetX));
-                    targetY = Math.Max(safeEdgeInset, Math.Min(screenHeight - 1 - safeEdgeInset, targetY));
+                    // Multi-Monitor Virtual Desktop Normalization
+                    int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                    int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                    int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                    int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                    if (vw <= 0) vw = Screen.PrimaryScreen.Bounds.Width;
+                    if (vh <= 0) vh = Screen.PrimaryScreen.Bounds.Height;
 
-                    uint absX = (uint)Math.Round(((double)targetX / Math.Max(1, screenWidth - 1)) * 65535.0);
-                    uint absY = (uint)Math.Round(((double)targetY / Math.Max(1, screenHeight - 1)) * 65535.0);
+                    uint absX = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetX - vx) / Math.Max(1, vw - 1)) * 65535.0)));
+                    uint absY = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetY - vy) / Math.Max(1, vh - 1)) * 65535.0)));
 
                     bool isRightClick = (buttons & 2) != 0;
+                    uint baseFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE;
 
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
@@ -932,12 +1028,12 @@ namespace AirCanvas
                         uint downFlag = isRightClick ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
                         activeButtonDownFlag = downFlag;
                         SetCursorPos(targetX, targetY);
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | downFlag, absX, absY, 0, UIntPtr.Zero);
+                        mouse_event(baseFlags | downFlag, absX, absY, 0, UIntPtr.Zero);
                         lastInjectedPoint = new PointF((float)x, (float)y);
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
                     {
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, absX, absY, 0, UIntPtr.Zero);
+                        mouse_event(baseFlags, absX, absY, 0, UIntPtr.Zero);
                         lastInjectedPoint = new PointF((float)x, (float)y);
                     }
                     else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
@@ -952,7 +1048,7 @@ namespace AirCanvas
 
         /// <summary>
         /// Releases currently pressed mouse buttons (if any). Idempotent.
-        ///
+        /// Uses MOUSEEVENTF_VIRTUALDESK for complete multi-monitor compatibility.
         /// </summary>
         private void ReleaseHeldButton(uint absX, uint absY)
         {
@@ -964,23 +1060,28 @@ namespace AirCanvas
             activeButtonDownFlag = 0;
             try
             {
-                mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, UIntPtr.Zero);
+                mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, UIntPtr.Zero);
             }
             catch { }
         }
 
         /// <summary>
-        /// Invoked upon client disconnection.
+        /// Invoked upon client disconnection or server stop to prevent stuck mouse state.
         /// </summary>
         private void ReleaseHeldButtonAtCursor()
         {
             if (activeButtonDownFlag == 0) return;
             try
             {
-                Size phys = GetPhysicalScreenSize();
                 Point p = Cursor.Position;
-                uint absX = (uint)(((double)p.X / Math.Max(1, phys.Width - 1)) * 65535.0);
-                uint absY = (uint)(((double)p.Y / Math.Max(1, phys.Height - 1)) * 65535.0);
+                int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                if (vw <= 0) vw = Screen.PrimaryScreen.Bounds.Width;
+                if (vh <= 0) vh = Screen.PrimaryScreen.Bounds.Height;
+                uint absX = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(p.X - vx) / Math.Max(1, vw - 1)) * 65535.0)));
+                uint absY = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(p.Y - vy) / Math.Max(1, vh - 1)) * 65535.0)));
                 ReleaseHeldButton(absX, absY);
             }
             catch
@@ -1596,6 +1697,7 @@ namespace AirCanvas
 
         private void StopServer()
         {
+            ReleaseHeldButtonAtCursor();
             if (!isRunning) return;
             try
             {
@@ -1645,56 +1747,153 @@ namespace AirCanvas
                 client.NoDelay = true; // Sub-5ms low latency
                 stream = client.GetStream();
 
-                // 1. WebSocket Handshake
-                byte[] handshakeBuffer = new byte[4096];
-                int bytesRead = await stream.ReadAsync(handshakeBuffer, 0, handshakeBuffer.Length, token);
-                if (bytesRead == 0) return;
-
-                string headerText = Encoding.UTF8.GetString(handshakeBuffer, 0, bytesRead);
-                if (!PerformWebSocketHandshake(headerText, stream))
+                IPEndPoint remoteEp = client.Client.RemoteEndPoint as IPEndPoint;
+                if (remoteEp != null && IPAddress.IsLoopback(remoteEp.Address))
                 {
-                    return;
+                    session.IsUsb = true;
+                    session.Transport = "USB Cable";
                 }
 
-                // 2. Send Auth Challenge frame immediately
-                SendWebSocketText(stream, "{\"type\":\"auth_challenge\"}");
+                // 1. Initial read to detect protocol (WebSocket HTTP Handshake vs Raw TCP Stream)
+                byte[] initialBuffer = new byte[4096];
+                int bytesRead = await stream.ReadAsync(initialBuffer, 0, initialBuffer.Length, token);
+                if (bytesRead == 0) return;
 
-                // 3. Read incoming WebSocket frames
-                while (client.Connected && !token.IsCancellationRequested)
+                bool isHttp = bytesRead >= 4 && (
+                    (initialBuffer[0] == (byte)'G' && initialBuffer[1] == (byte)'E' && initialBuffer[2] == (byte)'T' && initialBuffer[3] == (byte)' ') ||
+                    (initialBuffer[0] == (byte)'P' && initialBuffer[1] == (byte)'O' && initialBuffer[2] == (byte)'S' && initialBuffer[3] == (byte)'T') ||
+                    (initialBuffer[0] == (byte)'H' && initialBuffer[1] == (byte)'E' && initialBuffer[2] == (byte)'A' && initialBuffer[3] == (byte)'D')
+                );
+
+                if (isHttp)
                 {
-                    var frame = ReadWebSocketFrame(stream);
-                    if (frame == null) break;
-
-                    if (frame.Opcode == 8) // Close
+                    string headerText = Encoding.UTF8.GetString(initialBuffer, 0, bytesRead);
+                    if (!PerformWebSocketHandshake(headerText, stream))
                     {
-                        break;
-                    }
-                    else if (frame.Opcode == 9) // Ping
-                    {
-                        SendWebSocketFrame(stream, 10, frame.Payload);
-                    }
-                    else if (frame.Opcode == 1) // Text JSON
-                    {
-                        string json = Encoding.UTF8.GetString(frame.Payload);
-                        if (!ProcessJsonMessage(json, stream, session)) break;
-                    }
-                    else if (frame.Opcode == 2) // Binary Input Event or Encrypted Payload
-                    {
-                        if (!ProcessBinaryPacket(frame.Payload, frame.Payload.Length, stream, session)) break;
+                        return;
                     }
 
-                    Interlocked.Increment(ref packetsReceived);
-                    if (packetsReceived % 10 == 0)
+                    // Send Auth Challenge frame immediately
+                    SendWebSocketText(stream, "{\"type\":\"auth_challenge\"}");
+
+                    // Read incoming WebSocket frames
+                    while (client.Connected && !token.IsCancellationRequested)
                     {
-                        UpdatePacketsUI();
+                        var frame = ReadWebSocketFrame(stream);
+                        if (frame == null) break;
+
+                        if (frame.Opcode == 8) // Close
+                        {
+                            break;
+                        }
+                        else if (frame.Opcode == 9) // Ping
+                        {
+                            SendWebSocketFrame(stream, 10, frame.Payload);
+                        }
+                        else if (frame.Opcode == 1) // Text JSON
+                        {
+                            string json = Encoding.UTF8.GetString(frame.Payload);
+                            if (!ProcessJsonMessage(json, stream, session)) break;
+                        }
+                        else if (frame.Opcode == 2) // Binary Input Event or Encrypted Payload
+                        {
+                            if (frame.Payload != null && frame.Payload.Length >= 13 && frame.Payload.Length % 13 == 0 && frame.Payload[0] <= 5)
+                            {
+                                // Handle coalesced batch frames without dropping intermediate points
+                                for (int offset = 0; offset < frame.Payload.Length; offset += 13)
+                                {
+                                    byte[] subFrame = new byte[13];
+                                    Buffer.BlockCopy(frame.Payload, offset, subFrame, 0, 13);
+                                    if (!ProcessBinaryPacket(subFrame, 13, stream, session)) break;
+                                }
+                            }
+                            else
+                            {
+                                if (!ProcessBinaryPacket(frame.Payload, frame.Payload.Length, stream, session)) break;
+                            }
+                        }
+
+                        Interlocked.Increment(ref packetsReceived);
+                        if (packetsReceived % 10 == 0)
+                        {
+                            UpdatePacketsUI();
+                        }
+                    }
+                }
+                else
+                {
+                    // Direct raw TCP stream (USB Transport / Raw TCP socket with stream framing)
+                    session.IsAuthenticated = true;
+
+                    // Send initial server configuration with physical screen size so USB clients know aspect ratio immediately
+                    Size phys = GetPhysicalScreenSize();
+                    byte[] cfgBytes = Encoding.UTF8.GetBytes(
+                        "{\"type\":\"server_config\",\"data\":{\"port\":" + ServerPort + ",\"binary\":true,\"width\":" + phys.Width + ",\"height\":" + phys.Height + "}}\n");
+                    try { stream.Write(cfgBytes, 0, cfgBytes.Length); stream.Flush(); } catch { }
+
+                    List<byte> streamBuffer = new List<byte>();
+                    for (int i = 0; i < bytesRead; i++) streamBuffer.Add(initialBuffer[i]);
+
+                    byte[] readBuffer = new byte[4096];
+                    while (client.Connected && !token.IsCancellationRequested)
+                    {
+                        // Extract all complete 13-byte frames with framing recovery
+                        while (streamBuffer.Count >= 13)
+                        {
+                            int startIdx = -1;
+                            for (int i = 0; i <= streamBuffer.Count - 13; i++)
+                            {
+                                if (streamBuffer[i] <= 5) // Valid type index
+                                {
+                                    int sum = 0;
+                                    for (int j = 0; j < 12; j++) sum += streamBuffer[i + j];
+                                    if ((sum & 0xFF) == streamBuffer[i + 12])
+                                    {
+                                        startIdx = i;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (startIdx == -1)
+                            {
+                                if (streamBuffer.Count > 12)
+                                {
+                                    streamBuffer.RemoveRange(0, streamBuffer.Count - 12);
+                                }
+                                break;
+                            }
+
+                            if (startIdx > 0)
+                            {
+                                streamBuffer.RemoveRange(0, startIdx);
+                            }
+
+                            byte[] frameData = new byte[13];
+                            streamBuffer.CopyTo(0, frameData, 0, 13);
+                            streamBuffer.RemoveRange(0, 13);
+
+                            ProcessBinaryPacket(frameData, 13, stream, session);
+                            Interlocked.Increment(ref packetsReceived);
+                            if (packetsReceived % 10 == 0)
+                            {
+                                UpdatePacketsUI();
+                            }
+                        }
+
+                        int readCount = await stream.ReadAsync(readBuffer, 0, readBuffer.Length, token);
+                        if (readCount == 0) break;
+                        for (int i = 0; i < readCount; i++)
+                        {
+                            streamBuffer.Add(readBuffer[i]);
+                        }
                     }
                 }
             }
             catch { }
             finally
             {
-            // Release held buttons if client drops connection mid-stroke
-            // to prevent stuck mouse buttons on Windows desktop.
+                session.CurrentPenState = PenState.Idle;
                 ReleaseHeldButtonAtCursor();
                 try { if (stream != null) stream.Close(); } catch { }
                 try { client.Close(); } catch { }
@@ -1964,7 +2163,7 @@ namespace AirCanvas
             }
             else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
             {
-                ParseJsonInputEvent(json);
+                ParseJsonInputEvent(json, session);
             }
             else if (json.Contains("\"type\":\"ping\""))
             {
@@ -2028,18 +2227,21 @@ namespace AirCanvas
         }
 
 
-        private void ParseJsonInputEvent(string json)
+        private void ParseJsonInputEvent(string json, ClientSession session = null)
         {
+            lastPacketTick = Environment.TickCount;
             try
             {
                 // 1. Quick classroom & presentation action commands
                 if (json.Contains("\"clear\""))
                 {
+                    ReleaseHeldButtonAtCursor();
                     InjectAndDrawInput(0, 0, 0, "clear", 1, 0);
                     return;
                 }
                 if (json.Contains("\"undo\""))
                 {
+                    ReleaseHeldButtonAtCursor();
                     TriggerUndo();
                     return;
                 }
@@ -2259,6 +2461,14 @@ namespace AirCanvas
                     }
                 }
 
+                if (session != null)
+                {
+                    if (!string.IsNullOrEmpty(tool)) session.Tool = tool;
+                    if (!string.IsNullOrEmpty(color)) session.ColorHex = color;
+                    if (strokeWidth > 0.1) session.StrokeWidth = strokeWidth;
+                    if (clientAspect > 0.05) session.ClientAspect = clientAspect;
+                }
+
                 InjectAndDrawInput(x, y, pressure, eventType, buttons, 0, tool, color, strokeWidth, clientAspect);
             }
             catch { }
@@ -2327,6 +2537,7 @@ namespace AirCanvas
 
                 if (eventType == "clear")
                 {
+                    ReleaseHeldButtonAtCursor();
                     InjectAndDrawInput(0, 0, 0, "clear", 1, 0);
                     return true;
                 }
@@ -2342,7 +2553,8 @@ namespace AirCanvas
                 int pointerType = packet.Length > 6 ? packet[6] : 0;
                 int buttons = packet.Length > 10 ? packet[10] : 1;
 
-                InjectAndDrawInput(x, y, pressure, eventType, buttons, pointerType);
+                lastPacketTick = Environment.TickCount;
+                InjectAndDrawInput(x, y, pressure, eventType, buttons, pointerType, session.Tool, session.ColorHex, session.StrokeWidth, session.ClientAspect);
             }
             catch { }
             return true;
@@ -2974,6 +3186,7 @@ namespace AirCanvas
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            ReleaseHeldButtonAtCursor();
             StopServer();
             if (penMenuForm != null && !penMenuForm.IsDisposed)
             {

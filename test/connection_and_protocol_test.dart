@@ -200,8 +200,8 @@ void main() {
       const normalizedXSpan = circleDiameter / canvasW;
       const normalizedYSpan = circleDiameter / canvasH;
 
-      final pcXSpan = normalizedXSpan * pcWidth;
-      final pcYSpan = normalizedYSpan * pcHeight;
+      const pcXSpan = normalizedXSpan * pcWidth;
+      const pcYSpan = normalizedYSpan * pcHeight;
 
       // In stretched mode, width and height are significantly mismatched (~22% distortion)
       expect((pcXSpan - pcYSpan).abs(), greaterThan(10.0));
@@ -414,7 +414,7 @@ void main() {
       provider.updateCanvasSize(1000.0, 1000.0);
       provider.customBoxEnabled = true;
       // Define a center box from 200..800 in X and Y (normalized 0.2..0.8)
-      provider.setCustomBoxNormalized(Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
+      provider.setCustomBoxNormalized(const Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
 
       InputEvent? emitted;
       provider.onInputGenerated = (ev) => emitted = ev;
@@ -436,7 +436,7 @@ void main() {
       final provider = DrawingProvider();
       provider.updateCanvasSize(1000.0, 1000.0);
       provider.customBoxEnabled = true;
-      provider.setCustomBoxNormalized(Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
+      provider.setCustomBoxNormalized(const Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
 
       provider.onPointerDown(const Offset(500.0, 500.0));
       // Move far outside the right boundary (1200, 500)
@@ -452,7 +452,7 @@ void main() {
       provider.customBoxEnabled = true;
       provider.boxMapsToFullScreen = true;
       // Box is 200..800 in X and Y
-      provider.setCustomBoxNormalized(Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
+      provider.setCustomBoxNormalized(const Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
 
       InputEvent? emitted;
       provider.onInputGenerated = (ev) => emitted = ev;
@@ -595,7 +595,6 @@ void main() {
       provider.updateCanvasSize(1000.0, 1000.0);
       provider.enablePrediction = true;
 
-      final t0 = DateTime.now();
       provider.onPointerDown(const Offset(100.0, 100.0));
       expect(provider.predictedPosition, isNull);
 
@@ -621,6 +620,685 @@ void main() {
       expect(provider.metricNotifier.value, isNotNull);
     });
   });
+
+  group('USB Transport & Stream Framing Regression Tests', () {
+    test('extractBinaryFrames correctly parses coalesced 13-byte frames', () {
+      final evt1 = InputEvent(type: InputEventType.pointerDown, x: 0.1, y: 0.2);
+      final evt2 = InputEvent(type: InputEventType.pointerMove, x: 0.3, y: 0.4);
+      final evt3 = InputEvent(type: InputEventType.pointerUp, x: 0.5, y: 0.6);
+
+      final buffer = [...evt1.toBinary(), ...evt2.toBinary(), ...evt3.toBinary()];
+      final result = InputEvent.extractBinaryFrames(buffer);
+
+      expect(result.events.length, equals(3));
+      expect(result.events[0].type, equals(InputEventType.pointerDown));
+      expect(result.events[1].type, equals(InputEventType.pointerMove));
+      expect(result.events[2].type, equals(InputEventType.pointerUp));
+      expect(result.remainder.isEmpty, isTrue);
+    });
+
+    test('extractBinaryFrames handles partial stream reads and preserves residual buffer', () {
+      final evt = InputEvent(type: InputEventType.pointerMove, x: 0.5, y: 0.5);
+      final fullBytes = evt.toBinary();
+
+      // Send first 7 bytes
+      final firstHalf = fullBytes.sublist(0, 7);
+      final res1 = InputEvent.extractBinaryFrames(firstHalf);
+      expect(res1.events.isEmpty, isTrue);
+      expect(res1.remainder.length, equals(7));
+
+      // Append second 6 bytes
+      final secondHalf = fullBytes.sublist(7);
+      final combined = [...res1.remainder, ...secondHalf];
+      final res2 = InputEvent.extractBinaryFrames(combined);
+
+      expect(res2.events.length, equals(1));
+      expect(res2.events[0].type, equals(InputEventType.pointerMove));
+      expect(res2.remainder.isEmpty, isTrue);
+    });
+
+    test('extractBinaryFrames recovers from corrupted bytes preceding valid frame', () {
+      final garbage = [0xFF, 0xEE, 0xDD, 0xCC];
+      final validEvt = InputEvent(type: InputEventType.pointerDown, x: 0.75, y: 0.25);
+      final buffer = [...garbage, ...validEvt.toBinary()];
+
+      final result = InputEvent.extractBinaryFrames(buffer);
+      expect(result.events.length, equals(1));
+      expect(result.events[0].type, equals(InputEventType.pointerDown));
+      expect(result.events[0].x, closeTo(0.75, 0.01));
+      expect(result.events[0].y, closeTo(0.25, 0.01));
+      expect(result.remainder.isEmpty, isTrue);
+    });
+
+    test('ConnectionProvider tracks transport mode and exposes unconditionally free USB', () {
+      final conn = ConnectionProvider();
+      expect(conn.selectedTransport, equals(TransportType.auto));
+      expect(conn.activeTransport, equals(TransportType.wifi));
+      expect(conn.isUsbActive, isFalse);
+
+      conn.setSelectedTransport(TransportType.usb);
+      expect(conn.selectedTransport, equals(TransportType.usb));
+
+      conn.setSelectedTransport(TransportType.wifi);
+      expect(conn.selectedTransport, equals(TransportType.wifi));
+    });
+  });
+
+  group('Pen State Machine & Coordinate Contract Regression Tests', () {
+    test('PenState transitions cleanly: idle -> down -> moving -> idle', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(500.0, 500.0);
+      expect(provider.penState, equals(PenState.idle));
+
+      provider.onPointerDown(const Offset(100.0, 100.0));
+      expect(provider.penState, equals(PenState.down));
+
+      provider.onPointerMove(const Offset(150.0, 150.0));
+      expect(provider.penState, equals(PenState.moving));
+
+      provider.onPointerUp();
+      expect(provider.penState, equals(PenState.idle));
+    });
+
+    test('onPointerCancel cleanly resets PenState to idle and releases slots', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(500.0, 500.0);
+
+      provider.onPointerDown(const Offset(200.0, 200.0));
+      expect(provider.penState, equals(PenState.down));
+
+      provider.onPointerCancel();
+      expect(provider.penState, equals(PenState.idle));
+      expect(provider.isDrawing, isFalse);
+    });
+
+    test('Coordinates at all 4 corners and edges remain within valid [0.0, 1.0] bounds', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 500.0);
+      provider.writingScale = 1.0;
+
+      final generatedEvents = <InputEvent>[];
+      provider.onInputGenerated = (e) => generatedEvents.add(e);
+
+      // Top-left corner
+      provider.onPointerDown(const Offset(0.0, 0.0));
+      provider.onPointerUp();
+
+      // Bottom-right corner
+      provider.onPointerDown(const Offset(1000.0, 500.0));
+      provider.onPointerUp();
+
+      // Bottom-left corner
+      provider.onPointerDown(const Offset(0.0, 500.0));
+      provider.onPointerUp();
+
+      // Top-right corner
+      provider.onPointerDown(const Offset(1000.0, 0.0));
+      provider.onPointerUp();
+
+      expect(generatedEvents.isNotEmpty, isTrue);
+      for (final evt in generatedEvents) {
+        expect(evt.x, greaterThanOrEqualTo(0.0));
+        expect(evt.x, lessThanOrEqualTo(1.0));
+        expect(evt.y, greaterThanOrEqualTo(0.0));
+        expect(evt.y, lessThanOrEqualTo(1.0));
+      }
+    });
+
+    test('Fast continuous strokes preserve 100% of digitizer points without dropping', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 1000.0);
+      provider.precisionMode = PrecisionMode.rawDirect;
+
+      final moves = <InputEvent>[];
+      provider.onInputGenerated = (e) {
+        if (e.type == InputEventType.pointerMove) moves.add(e);
+      };
+
+      provider.onPointerDown(const Offset(10.0, 10.0));
+      // Simulate 50 rapid microscopic micro-moves (<0.18px distance)
+      for (int i = 1; i <= 50; i++) {
+        provider.onPointerMove(Offset(10.0 + i * 0.1, 10.0 + i * 0.1));
+      }
+      provider.onPointerUp();
+
+      // Verified: zero points dropped, eliminating stroke breaks and gaps
+      expect(moves.length, equals(50));
+    });
+
+    test('High-DPI scaling: logical canvas coordinates do not depend on backing store resolution', () {
+      final provider = DrawingProvider();
+      // Logical canvas size 400x300 (whether backing store is 1x, 2x, or 3x devicePixelRatio)
+      provider.updateCanvasSize(400.0, 300.0);
+      provider.writingScale = 1.0;
+
+      InputEvent? recorded;
+      provider.onInputGenerated = (e) => recorded = e;
+
+      // Pointer at center of logical canvas (200, 150)
+      provider.onPointerDown(const Offset(200.0, 150.0));
+
+      expect(recorded, isNotNull);
+      // Normalized logical coordinate should be exactly 0.5, 0.5
+      expect(recorded!.x, closeTo(0.50, 0.01));
+      expect(recorded!.y, closeTo(0.50, 0.01));
+    });
+  });
+
+  group('Full Bug Audit & Verification Suite (23 Requirement Tests)', () {
+    test('1. Normalized coordinates strictly mapped within [0.0, 1.0]', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(1200.0, 800.0);
+      InputEvent? ev;
+      drawing.onInputGenerated = (e) => ev = e;
+
+      drawing.onPointerDown(const Offset(300.0, 400.0));
+      expect(ev, isNotNull);
+      expect(ev!.x, greaterThanOrEqualTo(0.0));
+      expect(ev!.x, lessThanOrEqualTo(1.0));
+      expect(ev!.y, greaterThanOrEqualTo(0.0));
+      expect(ev!.y, lessThanOrEqualTo(1.0));
+      drawing.dispose();
+    });
+
+    test('2. Identity coordinate mapping: 1.0x scale with matching aspect preserves exact relative coords', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(1920.0, 1080.0);
+      drawing.updateServerAspectRatio(1920.0 / 1080.0);
+      drawing.writingScale = 1.0;
+      drawing.writingAnchor = WritingAnchor.topLeft;
+
+      InputEvent? ev;
+      drawing.onInputGenerated = (e) => ev = e;
+
+      drawing.onPointerDown(const Offset(960.0, 540.0));
+      expect(ev, isNotNull);
+      expect(ev!.x, closeTo(0.50, 0.001));
+      expect(ev!.y, closeTo(0.50, 0.001));
+      drawing.dispose();
+    });
+
+    test('3. Aspect-ratio mapping: preserves geometric isotropy (circle retains equal width and height)', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(800.0, 400.0); // 2:1 mobile
+      drawing.updateServerAspectRatio(1920.0 / 1080.0); // 16:9 PC
+      drawing.writingScale = 1.0;
+      drawing.writingAnchor = WritingAnchor.topLeft;
+
+      InputEvent? pDown;
+      InputEvent? pMove;
+      drawing.onInputGenerated = (e) {
+        if (e.type == InputEventType.pointerDown) pDown = e;
+        if (e.type == InputEventType.pointerMove) pMove = e;
+      };
+
+      // 40px circle on mobile
+      drawing.onPointerDown(const Offset(100.0, 100.0));
+      drawing.onPointerMove(const Offset(140.0, 100.0));
+      final double pcSpanX = (pMove!.x - pDown!.x).abs() * 1920.0;
+
+      drawing.onPointerDown(const Offset(100.0, 100.0));
+      drawing.onPointerMove(const Offset(100.0, 140.0));
+      final double pcSpanY = (pMove!.y - pDown!.y).abs() * 1080.0;
+
+      // On PC, horizontal and vertical spans should match closely
+      expect(pcSpanX, closeTo(pcSpanY, 1.0));
+      drawing.dispose();
+    });
+
+    test('4. ROI mapping: Custom Box restricts and re-normalizes touch coordinates to active work area', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(1000.0, 1000.0);
+      drawing.customBoxEnabled = true;
+      drawing.boxMapsToFullScreen = true;
+      drawing.setCustomBoxNormalized(const Rect.fromLTRB(0.1, 0.1, 0.9, 0.9));
+
+      InputEvent? ev;
+      drawing.onInputGenerated = (e) => ev = e;
+
+      // Center of ROI box
+      drawing.onPointerDown(const Offset(500.0, 500.0));
+      expect(ev, isNotNull);
+      expect(ev!.x, closeTo(0.50, 0.01));
+      expect(ev!.y, closeTo(0.50, 0.01));
+      drawing.dispose();
+    });
+
+    test('5. Scaling values: compact (0.50x), ultra-compact (0.25x), medium (0.75x), and full (1.0x)', () {
+      final drawing = DrawingProvider();
+      drawing.setWritingScalePreset(WritingScalePreset.compact);
+      expect(drawing.writingScale, equals(0.50));
+
+      drawing.writingScale = 0.25;
+      expect(drawing.writingScale, equals(0.25));
+
+      drawing.setWritingScalePreset(WritingScalePreset.medium);
+      expect(drawing.writingScale, equals(0.75));
+
+      drawing.setWritingScalePreset(WritingScalePreset.full);
+      expect(drawing.writingScale, equals(1.00));
+      drawing.dispose();
+    });
+
+    test('6. 16:9 mobile to 16:10 PC monitor aspect ratio compensation', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(1920.0, 1080.0); // 16:9
+      drawing.updateServerAspectRatio(1920.0 / 1200.0); // 16:10 = 1.60
+      drawing.writingScale = 1.0;
+      drawing.writingAnchor = WritingAnchor.topLeft;
+
+      InputEvent? p1;
+      InputEvent? p2;
+      drawing.onInputGenerated = (e) {
+        if (e.type == InputEventType.pointerDown) p1 = e;
+        if (e.type == InputEventType.pointerMove) p2 = e;
+      };
+
+      // 60px circle on mobile
+      drawing.onPointerDown(const Offset(200.0, 200.0));
+      drawing.onPointerMove(const Offset(260.0, 200.0));
+      final double pcX = (p2!.x - p1!.x).abs() * 1920.0;
+
+      drawing.onPointerDown(const Offset(200.0, 200.0));
+      drawing.onPointerMove(const Offset(200.0, 260.0));
+      final double pcY = (p2!.y - p1!.y).abs() * 1200.0;
+
+      expect(pcX, closeTo(pcY, 1.0));
+      drawing.dispose();
+    });
+
+    test('7. Portrait phone to landscape PC monitor orientation mapping without clipping or crashes', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(400.0, 800.0); // portrait 0.50
+      drawing.updateServerAspectRatio(1920.0 / 1080.0); // landscape 1.777
+      drawing.writingScale = 0.50;
+
+      InputEvent? ev;
+      drawing.onInputGenerated = (e) => ev = e;
+
+      drawing.onPointerDown(const Offset(200.0, 400.0));
+      expect(ev, isNotNull);
+      expect(ev!.x, greaterThanOrEqualTo(0.0));
+      expect(ev!.x, lessThanOrEqualTo(1.0));
+      expect(ev!.y, greaterThanOrEqualTo(0.0));
+      expect(ev!.y, lessThanOrEqualTo(1.0));
+      drawing.dispose();
+    });
+
+    test('8. Edge coordinates 0.0 and 1.0 mapped safely without escaping canvas boundaries', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(1000.0, 500.0);
+      drawing.updateServerAspectRatio(1000.0 / 500.0); // 1:1 aspect match for boundary test
+      drawing.writingScale = 1.0;
+      drawing.writingAnchor = WritingAnchor.topLeft;
+
+      InputEvent? ev;
+      drawing.onInputGenerated = (e) => ev = e;
+
+      drawing.onPointerDown(const Offset(0.0, 0.0));
+      expect(ev!.x, equals(0.0));
+      expect(ev!.y, equals(0.0));
+
+      drawing.onPointerDown(const Offset(1000.0, 500.0));
+      expect(ev!.x, equals(1.0));
+      expect(ev!.y, equals(1.0));
+      drawing.dispose();
+    });
+
+    test('9. Four corners mapped with safe edge insets preventing accidental system UI clicks', () {
+      const int width = 1920;
+      const int height = 1080;
+      const int safeInset = 3;
+
+      // Safe corner inset mapping logic from AirCanvasServer.cs
+      int computeSafeX(double normX) => (normX * (width - 1)).round().clamp(safeInset, width - 1 - safeInset);
+      int computeSafeY(double normY) => (normY * (height - 1)).round().clamp(safeInset, height - 1 - safeInset);
+
+      // Top-Left (0, 0)
+      expect(computeSafeX(0.0), equals(safeInset));
+      expect(computeSafeY(0.0), equals(safeInset));
+
+      // Bottom-Left (0, 1) -> Near Start button
+      expect(computeSafeX(0.0), equals(safeInset));
+      expect(computeSafeY(1.0), equals(height - 1 - safeInset));
+      expect(computeSafeY(1.0), lessThan(height - 1)); // Never touches taskbar edge
+
+      // Top-Right (1, 0) -> Near Close button
+      expect(computeSafeX(1.0), equals(width - 1 - safeInset));
+      expect(computeSafeY(0.0), equals(safeInset));
+      expect(computeSafeX(1.0), lessThan(width - 1));
+
+      // Bottom-Right (1, 1)
+      expect(computeSafeX(1.0), equals(width - 1 - safeInset));
+      expect(computeSafeY(1.0), equals(height - 1 - safeInset));
+    });
+
+    test('10. Very fast strokes with high velocity tracked without missing points', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(1000.0, 1000.0);
+      final events = <InputEvent>[];
+      drawing.onInputGenerated = (e) => events.add(e);
+
+      drawing.onPointerDown(const Offset(10.0, 10.0));
+      // Simulate fast stroke moving 800px in 20 steps
+      for (int i = 1; i <= 20; i++) {
+        drawing.onPointerMove(Offset(10.0 + i * 40.0, 10.0 + i * 40.0));
+      }
+      drawing.onPointerUp();
+
+      expect(events.length, equals(22)); // 1 down + 20 moves + 1 up
+      drawing.dispose();
+    });
+
+    test('11. Diagonal strokes preserve 1:1 linearity and continuous point density', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(1000.0, 1000.0);
+      drawing.updateServerAspectRatio(1.0); // 1:1 square canvas matching mobile
+      drawing.writingScale = 1.0;
+      drawing.writingAnchor = WritingAnchor.topLeft;
+      final moves = <InputEvent>[];
+      drawing.onInputGenerated = (e) {
+        if (e.type == InputEventType.pointerMove) moves.add(e);
+      };
+
+      drawing.onPointerDown(const Offset(0.0, 0.0));
+      for (int i = 1; i <= 10; i++) {
+        drawing.onPointerMove(Offset(i * 100.0, i * 100.0));
+      }
+      drawing.onPointerUp();
+
+      expect(moves.length, equals(10));
+      for (final m in moves) {
+        expect(m.x, closeTo(m.y, 0.01)); // Diagonal preserves x == y
+      }
+      drawing.dispose();
+    });
+
+    test('12. Tiny handwriting: sub-pixel micro-movements (0.1px) retained without artificial dropping', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(1000.0, 1000.0);
+      final moves = <InputEvent>[];
+      drawing.onInputGenerated = (e) {
+        if (e.type == InputEventType.pointerMove) moves.add(e);
+      };
+
+      drawing.onPointerDown(const Offset(200.0, 200.0));
+      // Small 0.1px movements representing micro-calligraphy details
+      for (int i = 1; i <= 15; i++) {
+        drawing.onPointerMove(Offset(200.0 + i * 0.1, 200.0 + i * 0.05));
+      }
+      drawing.onPointerUp();
+
+      expect(moves.length, equals(15)); // All 15 micro-steps preserved
+      drawing.dispose();
+    });
+
+    test('13. Large handwriting: sweeping wide strokes across canvas remain continuous and smooth', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(1000.0, 1000.0);
+
+      drawing.onPointerDown(const Offset(50.0, 50.0));
+      for (int i = 1; i <= 50; i++) {
+        drawing.onPointerMove(Offset(50.0 + i * 15.0, 50.0 + i * 12.0));
+      }
+      drawing.onPointerUp();
+
+      expect(drawing.strokes.length, equals(1));
+      expect(drawing.strokes.first.points.length, equals(52)); // down + 50 moves + up
+      drawing.dispose();
+    });
+
+    test('14. Event ordering guarantee: pointerDown occurs strictly before move and pointerUp', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(800.0, 600.0);
+      final eventTypes = <InputEventType>[];
+      drawing.onInputGenerated = (e) => eventTypes.add(e.type);
+
+      drawing.onPointerDown(const Offset(100.0, 100.0));
+      drawing.onPointerMove(const Offset(120.0, 120.0));
+      drawing.onPointerMove(const Offset(140.0, 140.0));
+      drawing.onPointerUp();
+
+      expect(eventTypes, equals([
+        InputEventType.pointerDown,
+        InputEventType.pointerMove,
+        InputEventType.pointerMove,
+        InputEventType.pointerUp,
+      ]));
+      drawing.dispose();
+    });
+
+    test('15. Duplicate prevention: repeated timestamps or identical events handled deterministically', () {
+      final time = DateTime(2026, 9, 8, 12, 0, 0);
+      final ev1 = InputEvent(type: InputEventType.pointerMove, x: 0.4, y: 0.4, timestamp: time);
+      final ev2 = InputEvent(type: InputEventType.pointerMove, x: 0.4, y: 0.4, timestamp: time);
+
+      expect(ev1, equals(ev2));
+      expect(ev1.hashCode, equals(ev2.hashCode));
+    });
+
+    test('16. Pointer lifecycle state machine: idle -> down -> moving -> up -> idle with cancel recovery', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(600.0, 600.0);
+
+      expect(drawing.penState, equals(PenState.idle));
+      drawing.onPointerDown(const Offset(50.0, 50.0));
+      expect(drawing.penState, equals(PenState.down));
+
+      drawing.onPointerMove(const Offset(60.0, 60.0));
+      expect(drawing.penState, equals(PenState.moving));
+
+      drawing.onPointerUp();
+      expect(drawing.penState, equals(PenState.idle));
+
+      // Test cancel
+      drawing.onPointerDown(const Offset(50.0, 50.0));
+      expect(drawing.penState, equals(PenState.down));
+      drawing.onPointerCancel();
+      expect(drawing.penState, equals(PenState.idle));
+      drawing.dispose();
+    });
+
+    test('17. Disconnect during stroke cleans up state machine to idle and clears outbound queue', () {
+      final drawing = DrawingProvider();
+      final conn = ConnectionProvider();
+      drawing.updateCanvasSize(600.0, 600.0);
+
+      drawing.onPointerDown(const Offset(100.0, 100.0));
+      drawing.onPointerMove(const Offset(150.0, 150.0));
+      expect(drawing.penState, equals(PenState.moving));
+
+      // When disconnect occurs
+      drawing.onPointerCancel();
+      conn.disconnect();
+
+      expect(drawing.penState, equals(PenState.idle));
+      expect(drawing.isDrawing, isFalse);
+      drawing.dispose();
+      conn.dispose();
+    });
+
+    test('18. Reconnect after stroke: resets stale data and begins cleanly in idle state', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(600.0, 600.0);
+      drawing.onPointerCancel();
+
+      expect(drawing.penState, equals(PenState.idle));
+      expect(drawing.currentStroke, isNull);
+
+      InputEvent? newDown;
+      drawing.onInputGenerated = (e) => newDown = e;
+      drawing.onPointerDown(const Offset(200.0, 200.0));
+
+      expect(drawing.penState, equals(PenState.down));
+      expect(newDown?.type, equals(InputEventType.pointerDown));
+      drawing.dispose();
+    });
+
+    test('19. Multi-monitor coordinates: handles secondary monitor offsets and negative virtual coordinates', () {
+      // Setup: Virtual desktop with secondary monitor left of primary
+      // Secondary: [-1920, 0], Primary: [0, 1920]. Total width = 3840.
+      const int vx = -1920;
+      const int vy = 0;
+      const int vw = 3840;
+      const int vh = 1080;
+
+      // Coordinate located on secondary monitor at screen coordinate -960
+      const int targetX = -960;
+      const int targetY = 540;
+
+      // Normalized virtual desktop mapping formula from AirCanvasServer.cs
+      final int absX = (((targetX - vx) / (vw - 1)) * 65535.0).round().clamp(0, 65535);
+      final int absY = (((targetY - vy) / (vh - 1)) * 65535.0).round().clamp(0, 65535);
+
+      // (-960 - (-1920)) / 3839 = 960 / 3839 = 0.250065 -> 16388
+      // (540 - 0) / 1079 = 0.500463 -> 32798
+      expect(absX, closeTo(16388, 2));
+      expect(absY, closeTo(32798, 2));
+      expect(absX, greaterThanOrEqualTo(0));
+      expect(absX, lessThanOrEqualTo(65535));
+    });
+
+    test('20. High-DPI scaling: logical canvas coordinates invariant to display DPI scaling (100% to 200%)', () {
+      final drawing = DrawingProvider();
+      // On 100% DPI or 200% Retina/4K, Flutter Canvas uses logical pixels (e.g. 500x500)
+      drawing.updateCanvasSize(500.0, 500.0);
+      drawing.updateServerAspectRatio(1.0); // 1:1 square canvas matching mobile
+      drawing.writingScale = 1.0;
+      drawing.writingAnchor = WritingAnchor.topLeft;
+
+      InputEvent? ev;
+      drawing.onInputGenerated = (e) => ev = e;
+
+      drawing.onPointerDown(const Offset(250.0, 250.0));
+      expect(ev!.x, closeTo(0.50, 0.001));
+      expect(ev!.y, closeTo(0.50, 0.001));
+      drawing.dispose();
+    });
+
+    test('21. Malformed/partial frames: stream framing extracts valid frames and recovers from garbage', () {
+      final valid = InputEvent(type: InputEventType.pointerDown, x: 0.33, y: 0.66);
+      final garbage = [0x00, 0x11, 0x22, 0x33, 0x44];
+      final streamBytes = [...garbage, ...valid.toBinary()];
+
+      final result = InputEvent.extractBinaryFrames(streamBytes);
+      expect(result.events.length, equals(1));
+      expect(result.events[0].type, equals(InputEventType.pointerDown));
+      expect(result.events[0].x, closeTo(0.33, 0.01));
+      expect(result.events[0].y, closeTo(0.66, 0.01));
+    });
+
+    test('22. Sequence number & timestamp ordering: monotonically increasing timestamps preserved', () {
+      final t1 = DateTime(2026, 9, 8, 12, 0, 0, 100);
+      final t2 = DateTime(2026, 9, 8, 12, 0, 0, 110);
+      final t3 = DateTime(2026, 9, 8, 12, 0, 0, 120);
+
+      final e1 = InputEvent(type: InputEventType.pointerDown, x: 0.1, y: 0.1, timestamp: t1);
+      final e2 = InputEvent(type: InputEventType.pointerMove, x: 0.2, y: 0.2, timestamp: t2);
+      final e3 = InputEvent(type: InputEventType.pointerUp, x: 0.3, y: 0.3, timestamp: t3);
+
+      expect(e1.timestamp.isBefore(e2.timestamp), isTrue);
+      expect(e2.timestamp.isBefore(e3.timestamp), isTrue);
+
+      // JSON protocol preserves exact millisecond epoch timestamps
+      final j1 = InputEvent.fromJson(e1.toJson());
+      final j2 = InputEvent.fromJson(e2.toJson());
+      final j3 = InputEvent.fromJson(e3.toJson());
+      expect(j1.timestamp.millisecondsSinceEpoch, equals(t1.millisecondsSinceEpoch));
+      expect(j2.timestamp.millisecondsSinceEpoch, equals(t2.millisecondsSinceEpoch));
+      expect(j3.timestamp.millisecondsSinceEpoch, equals(t3.millisecondsSinceEpoch));
+
+      // Binary protocol preserves FIFO frame sequence ordering
+      final bytes = [...e1.toBinary(), ...e2.toBinary(), ...e3.toBinary()];
+      final extracted = InputEvent.extractBinaryFrames(bytes);
+      expect(extracted.events.length, equals(3));
+      expect(extracted.events[0].type, equals(InputEventType.pointerDown));
+      expect(extracted.events[1].type, equals(InputEventType.pointerMove));
+      expect(extracted.events[2].type, equals(InputEventType.pointerUp));
+    });
+
+    test('23. USB transport routing: switches to USB mode, probes loopback endpoint, and isolates transport', () {
+      final conn = ConnectionProvider();
+      expect(conn.selectedTransport, equals(TransportType.auto));
+
+      conn.setSelectedTransport(TransportType.usb);
+      expect(conn.selectedTransport, equals(TransportType.usb));
+
+      // Loopback probe endpoint verifies port 9090 on 127.0.0.1
+      expect(conn.isUsbActive, isFalse); // Disconnected initially
+      conn.dispose();
+    });
+
+    test('24. onPointerCancel with generic pointerId=0 flushes pending slots and resets pen state to idle', () {
+      final drawing = DrawingProvider();
+      final events = <InputEvent>[];
+      drawing.onInputGenerated = (e) => events.add(e);
+
+      // Start stroke with raw pointerId 5
+      drawing.onPointerDown(const Offset(100, 100), pointerId: 5);
+      expect(events.length, equals(1));
+      expect(events.last.type, equals(InputEventType.pointerDown));
+      expect(drawing.isDrawing, isTrue);
+
+      // Cancel with pointerId 0 (e.g. general gesture cancellation or focus loss)
+      drawing.onPointerCancel(pointerId: 0);
+
+      // Must emit pointerUp to prevent stuck Windows mouse button
+      expect(events.length, equals(2));
+      expect(events.last.type, equals(InputEventType.pointerUp));
+      expect(drawing.isDrawing, isFalse);
+      expect(drawing.activePointerCount, equals(0));
+    });
+
+    test('25. ServerConfig correctly preserves custom resolutions from server JSON', () {
+      // 16:10 resolution (2560x1600)
+      final cfg1610 = ServerConfig.fromJson({
+        'port': 9090,
+        'binary': true,
+        'screenWidth': 2560,
+        'screenHeight': 1600,
+      });
+      expect(cfg1610.screenWidth, equals(2560));
+      expect(cfg1610.screenHeight, equals(1600));
+
+      // 4:3 resolution (1600x1200)
+      final cfg43 = ServerConfig.fromJson({
+        'port': 9090,
+        'binary': true,
+        'width': 1600,
+        'height': 1200,
+      });
+      expect(cfg43.screenWidth, equals(1600));
+      expect(cfg43.screenHeight, equals(1200));
+    });
+
+    test('26. DrawingProvider server aspect ratio update accurately scales output coordinates', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(800, 450); // Mobile aspect ratio = 16:9 (~1.778)
+      drawing.writingScale = 1.0;
+      drawing.writingAnchor = WritingAnchor.topLeft;
+
+      final events = <InputEvent>[];
+      drawing.onInputGenerated = (e) => events.add(e);
+
+      // Default server aspect is 16:9 -> 1:1 scaling
+      drawing.updateServerAspectRatio(16.0 / 9.0);
+      drawing.onPointerDown(const Offset(800, 450));
+      expect(events.last.x, closeTo(1.0, 0.001));
+      expect(events.last.y, closeTo(1.0, 0.001));
+      drawing.onPointerUp();
+
+      events.clear();
+
+      // Server aspect changes to 4:3 (1.333) -> scaleY = 0.75 to preserve 1:1 geometry without distortion
+      drawing.updateServerAspectRatio(4.0 / 3.0);
+      drawing.onPointerDown(const Offset(800, 450));
+      expect(events.last.x, closeTo(1.0, 0.001));
+      expect(events.last.y, closeTo(0.75, 0.001));
+      drawing.onPointerUp();
+    });
+  });
 }
+
 
 

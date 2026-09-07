@@ -27,8 +27,10 @@ class ConnectionStatusBar extends StatelessWidget {
         ),
       ConnectionState.connected => (
           Colors.green.shade400,
-          Icons.wifi,
-          'Connected${connection.latencyMs > 0 ? ' (${connection.latencyMs}ms)' : ''}'
+          connection.isUsbActive ? Icons.usb : Icons.wifi,
+          connection.isUsbActive
+              ? 'Connected via USB${connection.latencyMs > 0 ? ' (${connection.latencyMs}ms)' : ''}'
+              : 'Connected via Wi-Fi${connection.latencyMs > 0 ? ' (${connection.latencyMs}ms)' : ''}'
         ),
       ConnectionState.reconnecting => (
           Colors.orange.shade400,

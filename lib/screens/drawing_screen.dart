@@ -32,6 +32,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
   // Track last canvas dimensions to detect updates (Bug 81)
   double? _lastWidth;
   double? _lastHeight;
+  double? _lastServerAspect;
 
   // Track if stylus support has already been registered (Bug 92)
   bool _stylusSupportDetected = false;
@@ -39,8 +40,6 @@ class _DrawingScreenState extends State<DrawingScreen> {
   // Default fallback pressure constant (Bug 93)
   static const double _defaultPressure = 0.5;
 
-  // Hint text localized helper (Bug 94)
-  String get _tapToShowToolbarHint => 'Tap to show toolbar';
 
   // Graphics Tablet Mode: true = 100% full screen edge-to-edge (Software aspect ratio compensation guarantees perfect shapes)
   bool _fullScreenTabletMode = true;
@@ -142,16 +141,19 @@ class _DrawingScreenState extends State<DrawingScreen> {
                       }
                     }
 
-                    if (_lastWidth != canvasW || _lastHeight != canvasH) {
+                    final double currentServerAspect = (serverCfg.screenWidth > 0 && serverCfg.screenHeight > 0)
+                        ? (serverCfg.screenWidth.toDouble() / serverCfg.screenHeight.toDouble())
+                        : (16.0 / 9.0);
+
+                    if (_lastWidth != canvasW || _lastHeight != canvasH || _lastServerAspect != currentServerAspect) {
                       _lastWidth = canvasW;
                       _lastHeight = canvasH;
+                      _lastServerAspect = currentServerAspect;
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) {
                           final drawing = context.read<DrawingProvider>();
                           drawing.updateCanvasSize(canvasW, canvasH);
-                          if (serverCfg.screenWidth > 0 && serverCfg.screenHeight > 0) {
-                            drawing.updateServerAspectRatio(serverCfg.screenWidth.toDouble() / serverCfg.screenHeight.toDouble());
-                          }
+                          drawing.updateServerAspectRatio(currentServerAspect);
                         }
                       });
                     }
@@ -217,9 +219,12 @@ class _DrawingScreenState extends State<DrawingScreen> {
               left: 0,
               right: 0,
               bottom: 0,
-              child: Consumer2<DrawingProvider, ConnectionProvider>(
-                builder: (context, drawing, connection, child) {
-                  return ToolbarWidget(
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: (_) {}, // Prevents UI interactions from triggering canvas strokes
+                child: Consumer2<DrawingProvider, ConnectionProvider>(
+                  builder: (context, drawing, connection, child) {
+                    return ToolbarWidget(
                     brushSettings: drawing.brushSettings,
                     onBrushChanged: (settings) => drawing.updateBrush(settings),
                     onUndo: () => drawing.undo(),
@@ -321,6 +326,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
                 },
               ),
             ),
+          ),
 
           // Pro Real-time Performance & Telemetry HUD (Top Left)
           const Positioned(
@@ -344,22 +350,26 @@ class _DrawingScreenState extends State<DrawingScreen> {
           Positioned(
             top: 16,
             right: 16,
-            child: Consumer<ConnectionProvider>(
-              builder: (context, connection, child) {
-                return ConnectionFloatingButton(
-                  isConnected: connection.isConnected,
-                  latency: connection.latencyMs,
-                  deviceName: connection.connectedDeviceName,
-                  onTap: () {
-                    if (!_showToolbar) {
-                      setState(() => _showToolbar = true);
-                    } else {
-                      setState(() => _showToolbar = false);
-                    }
-                    _resetToolbarTimer();
-                  },
-                );
-              },
+            child: Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: (_) {}, // Prevents tap on connection button from leaking down to canvas
+              child: Consumer<ConnectionProvider>(
+                builder: (context, connection, child) {
+                  return ConnectionFloatingButton(
+                    isConnected: connection.isConnected,
+                    latency: connection.latencyMs,
+                    deviceName: connection.connectedDeviceName,
+                    onTap: () {
+                      if (!_showToolbar) {
+                        setState(() => _showToolbar = true);
+                      } else {
+                        setState(() => _showToolbar = false);
+                      }
+                      _resetToolbarTimer();
+                    },
+                  );
+                },
+              ),
             ),
           ),
 
@@ -516,11 +526,12 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
   void _onPointerCancel(PointerCancelEvent event) {
     final drawing = context.read<DrawingProvider>();
-    final pointerType = _getPointerType(event.kind); // Fixed: stylus cancel now retains type stylus (Bug 82)
+    final pointerType = _getPointerType(event.kind);
 
-    drawing.onPointerUp(
+    drawing.onPointerCancel(
       pointerType: pointerType,
       pointerId: event.pointer,
+      buttons: event.buttons,
     );
   }
 }

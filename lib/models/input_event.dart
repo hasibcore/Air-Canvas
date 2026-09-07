@@ -188,6 +188,27 @@ class InputEvent {
     );
   }
 
+  /// Reconstructs complete 13-byte protocol frames from a partial or coalesced byte stream.
+  /// Handles stream boundaries, partial packets, and stream resynchronization.
+  static ({List<InputEvent> events, List<int> remainder}) extractBinaryFrames(List<int> buffer) {
+    final List<InputEvent> events = [];
+    int offset = 0;
+    while (offset + binaryPacketLength <= buffer.length) {
+      final chunk = buffer.sublist(offset, offset + binaryPacketLength);
+      final expectedSum = chunk.take(binaryPacketLength - 1).reduce((a, b) => a + b) & 0xFF;
+      if (expectedSum == chunk[binaryPacketLength - 1] && chunk[0] < InputEventType.values.length) {
+        try {
+          events.add(fromBinary(chunk));
+          offset += binaryPacketLength;
+          continue;
+        } catch (_) {}
+      }
+      offset++; // Slide forward to re-synchronize stream framing
+    }
+    final remainder = offset < buffer.length ? buffer.sublist(offset) : <int>[];
+    return (events: events, remainder: remainder);
+  }
+
   // --- Helper Methods ---
 
   /// Network Byte Order (Big-Endian) float to Uint16 conversion (Endianness-independent)
@@ -453,8 +474,8 @@ class ServerConfig {
     targetFPS: json['fps'] as int? ?? 120,
     enablePressureSmoothing: json['pressureSmooth'] as bool? ?? true,
     enablePrediction: json['prediction'] as bool? ?? true,
-    screenWidth: json['width'] as int? ?? 1920,
-    screenHeight: json['height'] as int? ?? 1080,
+    screenWidth: (json['width'] as num?)?.toInt() ?? (json['screenWidth'] as num?)?.toInt() ?? 1920,
+    screenHeight: (json['height'] as num?)?.toInt() ?? (json['screenHeight'] as num?)?.toInt() ?? 1080,
   );
 
   // Bug 50: copyWith

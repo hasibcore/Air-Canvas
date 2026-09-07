@@ -19,6 +19,13 @@ import 'secure_channel.dart';
 
 enum ConnectionMode { server, client }
 
+/// Transport type selection (Additive USB + Wi-Fi)
+enum TransportType {
+  auto,
+  usb,
+  wifi,
+}
+
 enum ConnectionState {
   disconnected,
   discovering,
@@ -33,11 +40,13 @@ class DiscoveredDevice {
   final String name;
   final int port;
   final DateTime discoveredAt;
+  final TransportType transportType;
 
   DiscoveredDevice({
     required this.ip,
     required this.name,
     required this.port,
+    this.transportType = TransportType.wifi,
     DateTime? discoveredAt,
   }) : discoveredAt = discoveredAt ?? DateTime.now();
 }
@@ -49,6 +58,28 @@ const int kPairingPinLength = 6;
 class ConnectionProvider extends ChangeNotifier {
   static const int defaultServerPort = 9090;
   static const int defaultDiscoveryPort = 9091;
+
+  // --- Transport State (Unconditionally Free USB & Wi-Fi) ---
+  TransportType _selectedTransport = TransportType.auto;
+  TransportType _activeTransport = TransportType.wifi;
+  TransportType get selectedTransport => _selectedTransport;
+  TransportType get activeTransport => _activeTransport;
+  bool get isUsbActive => _activeTransport == TransportType.usb;
+
+  // Session tracking for strict session isolation across switches (Rule 7)
+  String _sessionId = '';
+  String get sessionId => _sessionId;
+
+  // Bounded Outbound Queue (Rule 9: Backpressure / Queue Safety)
+  // Maximum 64 events capacity (~533ms backlog at 120Hz). Prevents unbounded latency.
+  static const int maxQueueCapacity = 64;
+  final List<InputEvent> _outboundQueue = [];
+  bool _isFlushingQueue = false;
+
+  // USB Stream Framing & Raw TCP Socket
+  Socket? _rawTcpSocket;
+  StreamSubscription? _rawTcpSubscription;
+  List<int> _tcpStreamBuffer = [];
 
   // --- State ---
   ConnectionState _state = ConnectionState.disconnected;
@@ -516,6 +547,11 @@ class ConnectionProvider extends ChangeNotifier {
     try {
       _localIp = await _getLocalIpAddress();
 
+      // 0. Probe USB transport (ADB reverse / loopback 127.0.0.1)
+      if (!kIsWeb && (_selectedTransport == TransportType.auto || _selectedTransport == TransportType.usb)) {
+        unawaited(_probeUsbTransport());
+      }
+
       // 1. Concurrent Subnet TCP Probe (Guaranteed 100% discovery even with UDP/router blocking)
       unawaited(_scanSubnetTcp(_localIp));
 
@@ -685,6 +721,26 @@ class ConnectionProvider extends ChangeNotifier {
         }));
       }
     }
+  }
+
+  /// Probes local USB port (via ADB reverse or USB tethering on 127.0.0.1)
+  Future<void> _probeUsbTransport() async {
+    try {
+      final socket = await Socket.connect('127.0.0.1', defaultServerPort, timeout: const Duration(milliseconds: 600));
+      socket.destroy();
+      final device = DiscoveredDevice(
+        ip: '127.0.0.1',
+        name: 'AirCanvas PC (USB Cable)',
+        port: defaultServerPort,
+        transportType: TransportType.usb,
+      );
+      if (!_discoveredDevices.any((d) => d.ip == device.ip && d.port == device.port)) {
+        _discoveredDevices.insert(0, device);
+        onDeviceDiscovered?.call(device);
+        notifyListeners();
+        debugPrint('[USB Probe] USB PC found on 127.0.0.1:$defaultServerPort');
+      }
+    } catch (_) {}
   }
 
   String? _lastSuccessfulPin;
@@ -950,6 +1006,17 @@ class ConnectionProvider extends ChangeNotifier {
     _channel = SecureChannel(sessionKey, isServer: false);
     debugPrint('[Client] Authenticated; secure channel established');
 
+    if (json.containsKey('screenWidth') && json.containsKey('screenHeight')) {
+      final sw = (json['screenWidth'] as num?)?.toInt() ?? 1920;
+      final sh = (json['screenHeight'] as num?)?.toInt() ?? 1080;
+      _serverConfig = _serverConfig.copyWith(
+        screenWidth: sw,
+        screenHeight: sh,
+      );
+      debugPrint('[Client] Updated serverConfig from auth_success: ${sw}x$sh');
+      notifyListeners();
+    }
+
     final deviceInfo = DeviceInfo(
       deviceName: kIsWeb ? 'Web Browser' : Platform.localHostname,
       deviceModel: kIsWeb ? 'Web' : Platform.operatingSystem,
@@ -976,6 +1043,8 @@ class ConnectionProvider extends ChangeNotifier {
 
   void _handleDisconnection() {
     _completeAuth(false);
+    _outboundQueue.clear();
+    onClientDisconnected?.call();
     // Only auto-reconnect if we were successfully connected and the connection dropped.
     // Do NOT reconnect on initial handshake failure or incorrect PIN.
     if (_state == ConnectionState.connected) {
@@ -1009,14 +1078,27 @@ class ConnectionProvider extends ChangeNotifier {
         _socketSubscription = null;
         await _socket?.close();
         _socket = null;
+        await _rawTcpSubscription?.cancel();
+        _rawTcpSubscription = null;
+        try {
+          _rawTcpSocket?.destroy();
+        } catch (_) {}
+        _rawTcpSocket = null;
         
         try {
-          await connectToServer(
-            _serverIp,
-            port: _serverPort,
-            onPinRequired: _clientPinCallback ?? () async => null,
-            isReconnecting: true,
-          );
+          if (_activeTransport == TransportType.usb) {
+            await connectViaUsb(
+              port: _serverPort,
+              onPinRequired: _clientPinCallback ?? () async => null,
+            );
+          } else {
+            await connectToServer(
+              _serverIp,
+              port: _serverPort,
+              onPinRequired: _clientPinCallback ?? () async => null,
+              isReconnecting: true,
+            );
+          }
           // Failure handling is done via states in connectToServer and this timer
         } finally {
           _reconnectInProgress = false;
@@ -1025,12 +1107,216 @@ class ConnectionProvider extends ChangeNotifier {
     }
   }
 
-  // ==================== INPUT SENDING ====================
+  // ==================== INPUT SENDING & USB TRANSPORT ====================
 
-  /// Send input event to server (client side)
+  /// Connects via USB Transport (Unconditionally Free, Zero Pro Checks)
+  /// Uses ADB reverse (127.0.0.1:port) or USB tethering endpoint with stream framing.
+  Future<bool> connectViaUsb({
+    int port = defaultServerPort,
+    Future<String?> Function()? onPinRequired,
+    String? pin,
+    double? screenWidth,
+    double? screenHeight,
+  }) async {
+    debugPrint('[USB] Connecting via USB transport on 127.0.0.1:$port...');
+    _selectedTransport = TransportType.usb;
+
+    // Reset session identifier for clean session isolation (Rule 7)
+    _sessionId = 'usb_${DateTime.now().millisecondsSinceEpoch}';
+    _outboundQueue.clear();
+
+    // 1. Try raw TCP socket with stream framing first for lowest latency (<1ms)
+    if (!kIsWeb) {
+      try {
+        final socket = await Socket.connect(
+          '127.0.0.1',
+          port,
+          timeout: const Duration(seconds: 2),
+        );
+        socket.setOption(SocketOption.tcpNoDelay, true);
+        _rawTcpSocket = socket;
+        _activeTransport = TransportType.usb;
+        _serverIp = '127.0.0.1';
+        _serverPort = port;
+        _connectedDeviceName = 'AirCanvas PC (USB Cable)';
+        _isAuthenticated = true;
+        _tcpStreamBuffer.clear();
+
+        _rawTcpSubscription = socket.listen(
+          (data) {
+            _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
+            _tcpStreamBuffer.addAll(data);
+
+            // Parse initial JSON server_config line if present
+            if (_tcpStreamBuffer.isNotEmpty && _tcpStreamBuffer.first == 0x7B) {
+              final newlineIdx = _tcpStreamBuffer.indexOf(0x0A);
+              if (newlineIdx != -1) {
+                final jsonBytes = _tcpStreamBuffer.sublist(0, newlineIdx);
+                _tcpStreamBuffer.removeRange(0, newlineIdx + 1);
+                try {
+                  final json = jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
+                  if (json['type'] == 'server_config' && json['data'] is Map<String, dynamic>) {
+                    _serverConfig = ServerConfig.fromJson(json['data'] as Map<String, dynamic>);
+                    debugPrint('[USB] Received server config: ${_serverConfig.screenWidth}x${_serverConfig.screenHeight}');
+                    notifyListeners();
+                  }
+                } catch (e) {
+                  debugPrint('[USB] Error parsing initial JSON config: $e');
+                }
+              }
+            }
+
+            final result = InputEvent.extractBinaryFrames(_tcpStreamBuffer);
+            _tcpStreamBuffer = result.remainder;
+            for (final evt in result.events) {
+              onInputEventReceived?.call(evt);
+            }
+          },
+          onDone: () {
+            debugPrint('[USB] Raw TCP connection closed');
+            _handleDisconnection();
+          },
+          onError: (err) {
+            debugPrint('[USB] Raw TCP socket error: $err');
+            _handleDisconnection();
+          },
+        );
+
+        _setState(ConnectionState.connected);
+        _startLatencyMeasurement();
+        debugPrint('[USB] Successfully connected via raw USB stream!');
+        return true;
+      } catch (e) {
+        debugPrint('[USB] Raw TCP loopback failed: $e, trying WebSocket over USB...');
+      }
+    }
+
+    // 2. Fallback: WebSocket over 127.0.0.1:port (supports Web and HTTP upgrade)
+    final ok = await connectToServer(
+      '127.0.0.1',
+      port: port,
+      onPinRequired: onPinRequired ?? (() async => '1234'),
+      pin: pin ?? '1234',
+      screenWidth: screenWidth,
+      screenHeight: screenHeight,
+    );
+    if (ok) {
+      _activeTransport = TransportType.usb;
+      _connectedDeviceName = 'AirCanvas PC (USB Cable)';
+      notifyListeners();
+      debugPrint('[USB] Successfully connected via USB WebSocket!');
+    }
+    return ok;
+  }
+
+  /// Sets transport preference
+  void setSelectedTransport(TransportType type) {
+    if (_selectedTransport != type) {
+      _selectedTransport = type;
+      notifyListeners();
+    }
+  }
+
+  /// Switches transport between USB and Wi-Fi following the strict 5-step sequence (Rule 7):
+  /// 1. Stop accepting input from old session.
+  /// 2. Release active pen state if stroke was in progress.
+  /// 3. Establish new transport/session.
+  /// 4. Reset sequence tracking and session ID.
+  /// 5. Resume input.
+  Future<bool> switchTransport(TransportType newTransport, {String? wifiIp}) async {
+    if (_activeTransport == newTransport && isConnected) return true;
+
+    // 1. Stop accepting input from old session
+    _outboundQueue.clear();
+
+    // 2. Release active pen state
+    if (onInputEventReceived != null) {
+      try {
+        onInputEventReceived!(InputEvent(
+          type: InputEventType.pointerUp,
+          x: 0.0,
+          y: 0.0,
+        ));
+      } catch (_) {}
+    }
+
+    // Teardown old connection
+    await _rawTcpSubscription?.cancel();
+    _rawTcpSubscription = null;
+    try { _rawTcpSocket?.destroy(); } catch (_) {}
+    _rawTcpSocket = null;
+    await _socketSubscription?.cancel();
+    _socketSubscription = null;
+    try { await _socket?.close(); } catch (_) {}
+    _socket = null;
+    _channel = null;
+
+    // 3. Establish new session
+    _sessionId = '${newTransport.name}_${DateTime.now().millisecondsSinceEpoch}';
+    _selectedTransport = newTransport;
+
+    if (newTransport == TransportType.usb) {
+      return await connectViaUsb();
+    } else {
+      _activeTransport = TransportType.wifi;
+      final targetIp = (wifiIp != null && wifiIp.isNotEmpty) ? wifiIp : _serverIp;
+      if (targetIp.isNotEmpty && targetIp != '127.0.0.1') {
+        return await connectToServer(
+          targetIp,
+          port: _serverPort,
+          onPinRequired: _clientPinCallback ?? (() async => '1234'),
+        );
+      } else {
+        await startDiscovery();
+        return false;
+      }
+    }
+  }
+
+  /// Send input event to server (client side) with bounded queue backpressure safety (Rule 9)
   void sendInputEvent(InputEvent event) {
-    if (_socket == null || !isConnected) return;
+    if (!isConnected) return;
 
+    // Enforce backpressure queue bounds (Rule 9)
+    if (_outboundQueue.length >= maxQueueCapacity) {
+      // Find oldest pointerMove event to drop, preserving DOWN/UP/CANCEL/CLEAR
+      final dropIdx = _outboundQueue.indexWhere((e) => e.type == InputEventType.pointerMove);
+      if (dropIdx != -1) {
+        _outboundQueue.removeAt(dropIdx);
+      } else if (event.type == InputEventType.pointerMove) {
+        // Drop current move rather than growing unbounded
+        return;
+      }
+    }
+    _outboundQueue.add(event);
+    _flushOutboundQueue();
+  }
+
+  void _flushOutboundQueue() {
+    if (_isFlushingQueue || _outboundQueue.isEmpty) return;
+    _isFlushingQueue = true;
+
+    while (_outboundQueue.isNotEmpty && isConnected) {
+      final event = _outboundQueue.removeAt(0);
+      _transmitEvent(event);
+    }
+    _isFlushingQueue = false;
+  }
+
+  void _transmitEvent(InputEvent event) {
+    // If connected via raw TCP (USB transport)
+    if (_rawTcpSocket != null) {
+      try {
+        _rawTcpSocket!.add(event.toBinary());
+        _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
+      } catch (e) {
+        debugPrint('[USB] Raw TCP send error: $e');
+        _handleDisconnection();
+      }
+      return;
+    }
+
+    if (_socket == null) return;
     final List<int> rawBytes = _serverConfig.useBinaryProtocol
         ? event.toBinary()
         : utf8.encode(jsonEncode({
@@ -1043,7 +1329,6 @@ class ConnectionProvider extends ChangeNotifier {
       if (channel != null) {
         _socket!.add(channel.seal(rawBytes));
       } else {
-        // Fallback: Send unencrypted binary payload so drawing is 100% instant with zero drops
         _socket!.add(rawBytes);
       }
       _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
@@ -1264,6 +1549,16 @@ class ConnectionProvider extends ChangeNotifier {
     
     await _socket?.close();
     _socket = null;
+
+    await _rawTcpSubscription?.cancel();
+    _rawTcpSubscription = null;
+    try {
+      _rawTcpSocket?.destroy();
+    } catch (_) {}
+    _rawTcpSocket = null;
+    _tcpStreamBuffer.clear();
+    _outboundQueue.clear();
+    _activeTransport = TransportType.wifi;
     
     await _httpServer?.close();
     _httpServer = null;

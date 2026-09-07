@@ -638,14 +638,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         return DeviceListTile(
           device: device,
           onTap: () async {
-            final success = await connection.connectToServer(
-              device.ip,
-              port: device.port,
-              pin: '1234',
-              onPinRequired: () => _promptForPin(context),
-              screenWidth: size.width,
-              screenHeight: size.height,
-            );
+            final success = (device.transportType == TransportType.usb)
+                ? await connection.connectViaUsb(
+                    port: device.port,
+                    pin: '1234',
+                    onPinRequired: () => _promptForPin(context),
+                    screenWidth: size.width,
+                    screenHeight: size.height,
+                  )
+                : await connection.connectToServer(
+                    device.ip,
+                    port: device.port,
+                    pin: '1234',
+                    onPinRequired: () => _promptForPin(context),
+                    screenWidth: size.width,
+                    screenHeight: size.height,
+                  );
             if (success && context.mounted) {
               await Navigator.of(context).pushNamed('/drawing');
             }
