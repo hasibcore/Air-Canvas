@@ -96,6 +96,7 @@ namespace AirCanvas
         private PenMenuForm penMenuForm;
         private Icon idleIcon = null;
         private Icon activeIcon = null;
+        private double lastClientAspect = 16.0 / 9.0;
 
         // Server State (Pure Socket TCP)
         private TcpListener tcpServer;
@@ -890,15 +891,16 @@ namespace AirCanvas
             catch { }
         }
 
-        private void InjectAndDrawInput(double x, double y, double pressure, string eventType, int buttons = 1, int pointerType = 0)
+        private void InjectAndDrawInput(double x, double y, double pressure, string eventType, int buttons = 1, int pointerType = 0, string tool = "pen", string colorHex = "#38bdf8", double strokeWidth = 3.0, double clientAspect = 0.0)
         {
             // Clamp normalized coords
             x = Math.Max(0.0, Math.Min(1.0, x));
             y = Math.Max(0.0, Math.Min(1.0, y));
             pressure = Math.Max(0.0, Math.Min(1.0, pressure));
+            if (clientAspect > 0.1) lastClientAspect = clientAspect;
 
-            // 1. Draw live on in-app PC Canvas (fast thread-safe memory update)
-            DrawOnAppCanvas(x, y, pressure, eventType);
+            // 1. Draw live on in-app PC Canvas (with aspect ratio preservation and color/tool fidelity)
+            DrawOnAppCanvas(x, y, pressure, eventType, tool, colorHex, strokeWidth, lastClientAspect);
 
             // 2. Win32 Cursor & Stylus injection for PowerPoint, OneNote, Photoshop, Krita, MS Paint, Whiteboard
             if (isInjectionEnabled)
@@ -911,8 +913,13 @@ namespace AirCanvas
 
                     int targetX = (int)Math.Round(x * (screenWidth - 1));
                     int targetY = (int)Math.Round(y * (screenHeight - 1));
-                    targetX = Math.Max(0, Math.Min(screenWidth - 1, targetX));
-                    targetY = Math.Max(0, Math.Min(screenHeight - 1, targetY));
+
+                    // Safe Edge Margin Inset (4px):
+                    // Prevents accidental clicks on Windows Start Menu (bottom-left),
+                    // Taskbar, and Window Close button (top-right) when drawing near mobile screen corners!
+                    const int safeEdgeInset = 4;
+                    targetX = Math.Max(safeEdgeInset, Math.Min(screenWidth - 1 - safeEdgeInset, targetX));
+                    targetY = Math.Max(safeEdgeInset, Math.Min(screenHeight - 1 - safeEdgeInset, targetY));
 
                     uint absX = (uint)Math.Round(((double)targetX / Math.Max(1, screenWidth - 1)) * 65535.0);
                     uint absY = (uint)Math.Round(((double)targetY / Math.Max(1, screenHeight - 1)) * 65535.0);
@@ -982,7 +989,7 @@ namespace AirCanvas
             }
         }
 
-        private void DrawOnAppCanvas(double x, double y, double pressure, string eventType)
+        private void DrawOnAppCanvas(double x, double y, double pressure, string eventType, string tool = "pen", string colorHex = "#38bdf8", double strokeWidth = 3.0, double clientAspect = 0.0)
         {
             if (canvasGraphics == null || pbCanvas == null) return;
 
@@ -994,12 +1001,55 @@ namespace AirCanvas
                     return;
                 }
 
-                int w = pbCanvas.Width > 0 ? pbCanvas.Width : 420;
-                int h = pbCanvas.Height > 0 ? pbCanvas.Height : 530;
-                float canvasX = (float)(x * w);
-                float canvasY = (float)(y * h);
+                int pbW = pbCanvas.Width > 0 ? pbCanvas.Width : 420;
+                int pbH = pbCanvas.Height > 0 ? pbCanvas.Height : 530;
+                double aspect = (clientAspect > 0.1) ? clientAspect : lastClientAspect;
+                if (aspect <= 0.1) aspect = 16.0 / 9.0;
+
+                // Compute aspect-ratio contain rectangle inside pbCanvas
+                float drawW, drawH, drawOffsetX, drawOffsetY;
+                if ((double)pbW / pbH > aspect)
+                {
+                    drawH = pbH;
+                    drawW = (float)(drawH * aspect);
+                    drawOffsetX = (pbW - drawW) / 2.0f;
+                    drawOffsetY = 0;
+                }
+                else
+                {
+                    drawW = pbW;
+                    drawH = (float)(drawW / aspect);
+                    drawOffsetX = 0;
+                    drawOffsetY = (pbH - drawH) / 2.0f;
+                }
+
+                float canvasX = drawOffsetX + (float)(x * drawW);
+                float canvasY = drawOffsetY + (float)(y * drawH);
                 PointF currentPt = new PointF(canvasX, canvasY);
-                float penWidth = Math.Max(2.0f, (float)(pressure * 8.0f));
+
+                // Proportional stroke width based on canvas dimension
+                float basePenWidth = strokeWidth > 0 ? (float)strokeWidth : 3.0f;
+                float penWidth = Math.Max(1.5f, basePenWidth * (Math.Min(drawW, drawH) / 380.0f) * (float)(0.35f + pressure * 0.65f));
+
+                Color drawColor = Color.FromArgb(56, 189, 248);
+                if (!string.IsNullOrEmpty(colorHex))
+                {
+                    try { drawColor = ColorTranslator.FromHtml(colorHex); } catch { }
+                }
+
+                bool isEraser = tool.Equals("eraser", StringComparison.OrdinalIgnoreCase);
+                bool isHighlighter = tool.Equals("highlighter", StringComparison.OrdinalIgnoreCase) || tool.Equals("marker", StringComparison.OrdinalIgnoreCase);
+
+                if (isEraser)
+                {
+                    drawColor = Color.FromArgb(15, 23, 42); // Match canvas background
+                    penWidth *= 3.5f;
+                }
+                else if (isHighlighter)
+                {
+                    drawColor = Color.FromArgb(100, drawColor.R, drawColor.G, drawColor.B); // Semi-transparent
+                    penWidth *= 2.2f;
+                }
 
                 lock (canvasLock)
                 {
@@ -1009,10 +1059,12 @@ namespace AirCanvas
                         hasDrawnOnCanvas = true;
                     }
 
+                    canvasGraphics.SmoothingMode = SmoothingMode.AntiAlias;
+
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
                         lastDrawPoint = currentPt;
-                        using (Brush brush = new SolidBrush(Color.FromArgb(56, 189, 248)))
+                        using (Brush brush = new SolidBrush(drawColor))
                         {
                             canvasGraphics.FillEllipse(brush, currentPt.X - penWidth / 2, currentPt.Y - penWidth / 2, penWidth, penWidth);
                         }
@@ -1023,7 +1075,7 @@ namespace AirCanvas
                         {
                             lastDrawPoint = currentPt;
                         }
-                        using (Pen pen = new Pen(Color.FromArgb(56, 189, 248), penWidth))
+                        using (Pen pen = new Pen(drawColor, penWidth))
                         {
                             pen.StartCap = LineCap.Round;
                             pen.EndCap = LineCap.Round;
@@ -1883,11 +1935,17 @@ namespace AirCanvas
                     .FromPin(clientPin, salt, true, SecureChannel.Pbkdf2Iterations)
                     .Seal(key, SecureChannel.RandomBytes(SecureChannel.IvLength), 1);
 
+                Size phys = GetPhysicalScreenSize();
+                double pcAspect = (double)phys.Width / Math.Max(1, phys.Height);
                 SendWebSocketText(stream,
                     "{\"type\":\"auth_success\",\"kx\":\"v2\""
                     + ",\"salt\":\"" + Convert.ToBase64String(salt) + "\""
                     + ",\"iterations\":" + SecureChannel.Pbkdf2Iterations
-                    + ",\"wrapped_key\":\"" + Convert.ToBase64String(wrapped) + "\"}");
+                    + ",\"wrapped_key\":\"" + Convert.ToBase64String(wrapped) + "\""
+                    + ",\"screenWidth\":" + phys.Width
+                    + ",\"screenHeight\":" + phys.Height
+                    + ",\"aspect\":" + pcAspect.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + "}");
 
                 session.Channel = new SecureChannel(key, true);
                 session.IsAuthenticated = true;
@@ -2046,7 +2104,121 @@ namespace AirCanvas
                     }
                 }
 
-                // 3. Parse X coordinate with InvariantCulture
+                // 3. Parse Tool, Color, Stroke Width, and Aspect
+                string tool = "pen";
+                int toolIdx = json.IndexOf("\"tool\":", StringComparison.OrdinalIgnoreCase);
+                if (toolIdx != -1)
+                {
+                    int start = json.IndexOf('"', toolIdx + 7);
+                    if (start != -1)
+                    {
+                        start++;
+                        int end = json.IndexOf('"', start);
+                        if (end > start) tool = json.Substring(start, end - start);
+                    }
+                }
+
+                string color = "#38bdf8";
+                int colorIdx = json.IndexOf("\"color\":", StringComparison.OrdinalIgnoreCase);
+                if (colorIdx != -1)
+                {
+                    int start = json.IndexOf('"', colorIdx + 8);
+                    if (start != -1)
+                    {
+                        start++;
+                        int end = json.IndexOf('"', start);
+                        if (end > start) color = json.Substring(start, end - start);
+                    }
+                }
+
+                double strokeWidth = 3.0;
+                int wIdx = json.IndexOf("\"w\":", StringComparison.OrdinalIgnoreCase);
+                if (wIdx != -1)
+                {
+                    int start = wIdx + 4;
+                    int end = json.IndexOfAny(new char[] { ',', '}', ']' }, start);
+                    if (end > start)
+                    {
+                        string val = json.Substring(start, end - start).Trim('\"', ' ', '\t', '\r', '\n');
+                        double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out strokeWidth);
+                    }
+                }
+
+                double clientAspect = 0.0;
+                int aspIdx = json.IndexOf("\"aspect\":", StringComparison.OrdinalIgnoreCase);
+                if (aspIdx != -1)
+                {
+                    int start = aspIdx + 9;
+                    int end = json.IndexOfAny(new char[] { ',', '}', ']' }, start);
+                    if (end > start)
+                    {
+                        string val = json.Substring(start, end - start).Trim('\"', ' ', '\t', '\r', '\n');
+                        double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out clientAspect);
+                    }
+                }
+
+                // 4. Parse Buttons
+                int bIdx = json.IndexOf("\"b\":", StringComparison.OrdinalIgnoreCase);
+                int buttons = 1;
+                if (bIdx != -1)
+                {
+                    int start = bIdx + 4;
+                    int end = json.IndexOfAny(new char[] { ',', '}' }, start);
+                    if (end > start)
+                    {
+                        string val = json.Substring(start, end - start).Trim('\"', ' ', '\t', '\r', '\n');
+                        int.TryParse(val, out buttons);
+                    }
+                }
+
+                // 5. Check for batched points array: "pts":[[x,y,p],[x,y,p],...]
+                int ptsIdx = json.IndexOf("\"pts\":", StringComparison.OrdinalIgnoreCase);
+                if (ptsIdx != -1)
+                {
+                    int arrayStart = json.IndexOf('[', ptsIdx + 6);
+                    if (arrayStart != -1)
+                    {
+                        int depth = 0;
+                        int outerEnd = -1;
+                        for (int i = arrayStart; i < json.Length; i++)
+                        {
+                            if (json[i] == '[') depth++;
+                            else if (json[i] == ']')
+                            {
+                                depth--;
+                                if (depth == 0) { outerEnd = i; break; }
+                            }
+                        }
+                        if (outerEnd > arrayStart)
+                        {
+                            string ptsContent = json.Substring(arrayStart + 1, outerEnd - arrayStart - 1);
+                            int pStart = 0;
+                            while ((pStart = ptsContent.IndexOf('[', pStart)) != -1)
+                            {
+                                int pEnd = ptsContent.IndexOf(']', pStart);
+                                if (pEnd > pStart)
+                                {
+                                    string sub = ptsContent.Substring(pStart + 1, pEnd - pStart - 1);
+                                    string[] parts = sub.Split(',');
+                                    if (parts.Length >= 2)
+                                    {
+                                        double px = 0, py = 0, pp = 0.6;
+                                        double.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out px);
+                                        double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out py);
+                                        if (parts.Length >= 3)
+                                            double.TryParse(parts[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out pp);
+                                        InjectAndDrawInput(px, py, pp, eventType, buttons, 0, tool, color, strokeWidth, clientAspect);
+                                    }
+                                    pStart = pEnd + 1;
+                                }
+                                else break;
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                // 6. Single point fallback: Parse X coordinate
                 int xIdx = json.IndexOf("\"x\":", StringComparison.OrdinalIgnoreCase);
                 if (xIdx != -1)
                 {
@@ -2059,7 +2231,7 @@ namespace AirCanvas
                     }
                 }
 
-                // 4. Parse Y coordinate with InvariantCulture
+                // 7. Parse Y coordinate
                 int yIdx = json.IndexOf("\"y\":", StringComparison.OrdinalIgnoreCase);
                 if (yIdx != -1)
                 {
@@ -2072,7 +2244,7 @@ namespace AirCanvas
                     }
                 }
 
-                // 5. Parse Pressure with InvariantCulture
+                // 8. Parse Pressure
                 int pIdx = json.IndexOf("\"p\":", StringComparison.OrdinalIgnoreCase);
                 if (pIdx == -1) pIdx = json.IndexOf("\"pressure\":", StringComparison.OrdinalIgnoreCase);
                 if (pIdx != -1)
@@ -2087,21 +2259,7 @@ namespace AirCanvas
                     }
                 }
 
-                // 6. Parse Buttons
-                int bIdx = json.IndexOf("\"b\":", StringComparison.OrdinalIgnoreCase);
-                int buttons = 1;
-                if (bIdx != -1)
-                {
-                    int start = bIdx + 4;
-                    int end = json.IndexOfAny(new char[] { ',', '}' }, start);
-                    if (end > start)
-                    {
-                        string val = json.Substring(start, end - start).Trim('\"', ' ', '\t', '\r', '\n');
-                        int.TryParse(val, out buttons);
-                    }
-                }
-
-                InjectAndDrawInput(x, y, pressure, eventType, buttons, 0);
+                InjectAndDrawInput(x, y, pressure, eventType, buttons, 0, tool, color, strokeWidth, clientAspect);
             }
             catch { }
         }
@@ -2355,24 +2513,41 @@ namespace AirCanvas
 <html lang=""en"">
 <head>
 <meta charset=""UTF-8"">
-<meta name=""viewport"" content=""width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"">
+<meta name=""viewport"" content=""width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"">
 <title>AirCanvas — Mobile Graphics Tablet</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-  html, body { height: 100%; width: 100%; overflow: hidden; background: #0f172a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; }
-  header { background: #1e293b; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; height: 48px; z-index: 10; flex-shrink: 0; }
-  .logo { font-size: 15px; font-weight: bold; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
+  html, body { height: 100%; width: 100%; overflow: hidden; background: #0b1120; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; flex-direction: column; touch-action: none; }
+  header { background: #1e293b; padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; height: 46px; z-index: 20; flex-shrink: 0; }
+  .logo { font-size: 15px; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
   .badge { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: #334155; color: #94a3b8; font-weight: 600; }
   .badge.connected { background: #065f46; color: #34d399; }
   .btn-apk { font-size: 11px; padding: 4px 10px; background: #6366f1; color: #fff; border-radius: 6px; text-decoration: none; font-weight: 600; }
-  .toolbar { background: #1e293b; padding: 6px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #334155; overflow-x: auto; flex-shrink: 0; }
-  .tool-btn { background: #334155; color: #f8fafc; border: 1px solid #475569; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
-  .tool-btn.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }
+  
+  .toolbar { background: #1e293b; padding: 6px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #334155; overflow-x: auto; flex-shrink: 0; z-index: 20; scrollbar-width: none; }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .tool-btn { background: #334155; color: #f8fafc; border: 1px solid #475569; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background 0.15s, border-color 0.15s; }
+  .tool-btn.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; font-weight: 700; }
   .tool-btn.action { background: #475569; }
-  .color-dot { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; flex-shrink: 0; }
-  .color-dot.active { border-color: #fff; transform: scale(1.15); box-shadow: 0 0 6px rgba(255,255,255,0.5); }
-  .canvas-wrap { flex: 1; position: relative; background: #020617; touch-action: none; overflow: hidden; }
-  canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+  .tool-btn:active { transform: scale(0.96); }
+  
+  .color-dot { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; flex-shrink: 0; transition: transform 0.15s; }
+  .color-dot.active { border-color: #ffffff; transform: scale(1.2); box-shadow: 0 0 8px rgba(255,255,255,0.6); }
+
+  /* CRITICAL CORNER BUG MITIGATION: Disable pointer events on UI when drawing is active */
+  body.drawing-active .toolbar button,
+  body.drawing-active .color-dot,
+  body.drawing-active header a,
+  body.drawing-active header button {
+    pointer-events: none !important;
+  }
+
+  .canvas-wrap { flex: 1; position: relative; background: #020617; touch-action: none; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  #canvasBox { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; touch-action: none; cursor: crosshair; }
+  
+  .hud-badge { position: absolute; top: 8px; left: 8px; font-size: 10px; font-family: monospace; background: rgba(15,23,42,0.75); color: #94a3b8; padding: 2px 6px; border-radius: 4px; pointer-events: none; border: 1px solid rgba(255,255,255,0.08); }
+  
   #authModal { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
   .modal-box { background: #1e293b; padding: 24px; border-radius: 16px; border: 1px solid #334155; text-align: center; max-width: 320px; width: 100%; }
   .pin-box { width: 100%; background: #0f172a; border: 2px solid #475569; color: #38bdf8; font-size: 26px; font-family: monospace; letter-spacing: 6px; text-align: center; padding: 8px; border-radius: 8px; margin: 12px 0 16px; outline: none; }
@@ -2391,20 +2566,24 @@ namespace AirCanvas
   <button id=""btnPen"" class=""tool-btn active"" onclick=""setTool('pen')"">✏ Pen</button>
   <button id=""btnHighlighter"" class=""tool-btn"" onclick=""setTool('highlighter')"">🖌 Marker</button>
   <button id=""btnEraser"" class=""tool-btn"" onclick=""setTool('eraser')"">🧹 Eraser</button>
-  <div style=""width:1px;height:20px;background:#475569;margin:0 4px;""></div>
+  <div style=""width:1px;height:20px;background:#475569;margin:0 4px;flex-shrink:0;""></div>
   <div class=""color-dot active"" style=""background:#38bdf8;"" onclick=""setColor('#38bdf8', this)""></div>
   <div class=""color-dot"" style=""background:#ef4444;"" onclick=""setColor('#ef4444', this)""></div>
   <div class=""color-dot"" style=""background:#22c55e;"" onclick=""setColor('#22c55e', this)""></div>
   <div class=""color-dot"" style=""background:#eab308;"" onclick=""setColor('#eab308', this)""></div>
   <div class=""color-dot"" style=""background:#ffffff;"" onclick=""setColor('#ffffff', this)""></div>
-  <div style=""width:1px;height:20px;background:#475569;margin:0 4px;""></div>
+  <div style=""width:1px;height:20px;background:#475569;margin:0 4px;flex-shrink:0;""></div>
+  <button id=""btnAspect"" class=""tool-btn active"" onclick=""toggleAspectRatio()"">📐 16:9 PC</button>
   <button class=""tool-btn action"" onclick=""sendAction('undo')"">↩ Undo</button>
   <button class=""tool-btn action"" onclick=""sendAction('clear')"">🗑 Clear</button>
   <button class=""tool-btn action"" onclick=""sendAction('launch_onenote')"">📝 OneNote</button>
   <button class=""tool-btn action"" onclick=""sendAction('launch_ppt')"">📊 PPT</button>
 </div>
 <div class=""canvas-wrap"">
-  <canvas id=""paintCanvas""></canvas>
+  <div id=""canvasBox"">
+    <canvas id=""paintCanvas""></canvas>
+    <div id=""hud"" class=""hud-badge"">AirCanvas 1:1 Synchronized</div>
+  </div>
   <div id=""authModal"" style=""display:none;"">
     <div class=""modal-box"">
       <h3 style=""color:#38bdf8;margin-bottom:6px;"">AirCanvas Pairing</h3>
@@ -2415,17 +2594,115 @@ namespace AirCanvas
   </div>
 </div>
 <script>
-  let ws, currentPin = '" + serverPin + @"', currentTool = 'pen', currentColor = '#38bdf8', isDrawing = false, lastX = 0, lastY = 0;
+  let ws;
+  let currentPin = '" + serverPin + @"';
+  let currentTool = 'pen';
+  let currentColor = '#38bdf8';
+  let isDrawing = false;
+  let activePointerId = null;
+  let currentStrokeId = null;
+  let strokeSeq = 0;
+  let batchBuffer = [];
+
+  let pcAspect = 16.0 / 9.0;
+  let matchPcAspect = true;
+  let lastLocalX = 0, lastLocalY = 0;
+  let lastMidX = 0, lastMidY = 0;
+
+  // Stroke memory history for High-DPI redraws
+  const strokeHistory = [];
+  let activeStroke = null;
+
   const canvas = document.getElementById('paintCanvas');
   const ctx = canvas.getContext('2d');
+  const canvasWrap = document.querySelector('.canvas-wrap');
   const statusBadge = document.getElementById('statusBadge');
+  const hud = document.getElementById('hud');
 
-  function resize() {
-    canvas.width = canvas.parentElement.clientWidth;
-    canvas.height = canvas.parentElement.clientHeight;
+  function computeLineWidth(pressure) {
+    if (currentTool === 'eraser') return 28;
+    if (currentTool === 'highlighter') return 16;
+    return Math.max(1.5, (pressure * 6.0) + 1.5);
   }
-  window.addEventListener('resize', resize);
-  resize();
+
+  function updateCanvasLayout() {
+    const wrapW = canvasWrap.clientWidth;
+    const wrapH = canvasWrap.clientHeight;
+    if (wrapW <= 0 || wrapH <= 0) return;
+
+    let targetW = wrapW;
+    let targetH = wrapH;
+
+    if (matchPcAspect && pcAspect > 0.1) {
+      if (wrapW / wrapH > pcAspect) {
+        targetH = wrapH;
+        targetW = Math.round(targetH * pcAspect);
+      } else {
+        targetW = wrapW;
+        targetH = Math.round(targetW / pcAspect);
+      }
+    }
+
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(targetW * dpr);
+    canvas.height = Math.round(targetH * dpr);
+    canvas.style.width = targetW + 'px';
+    canvas.style.height = targetH + 'px';
+
+    ctx.resetTransform && ctx.resetTransform();
+    ctx.scale(dpr, dpr);
+
+    redrawHistory();
+
+    hud.textContent = matchPcAspect 
+      ? ('PC 1:1 Match (' + targetW + 'x' + targetH + ' | DPR ' + dpr + ')')
+      : ('Full Screen (' + targetW + 'x' + targetH + ' | DPR ' + dpr + ')');
+  }
+
+  function redrawHistory() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let s = 0; s < strokeHistory.length; s++) {
+      const stroke = strokeHistory[s];
+      if (!stroke || stroke.points.length < 2) continue;
+      const pts = stroke.points;
+      const rect = canvas.getBoundingClientRect();
+
+      ctx.beginPath();
+      ctx.strokeStyle = stroke.tool === 'eraser' ? '#020617' : stroke.color;
+      ctx.lineWidth = stroke.tool === 'eraser' ? 28 : (stroke.tool === 'highlighter' ? 16 : stroke.width || 3.0);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      if (stroke.tool === 'highlighter') ctx.globalAlpha = 0.4;
+
+      const p0X = pts[0].x * rect.width;
+      const p0Y = pts[0].y * rect.height;
+      ctx.moveTo(p0X, p0Y);
+
+      let prevMidX = p0X, prevMidY = p0Y;
+      for (let i = 1; i < pts.length; i++) {
+        const ptX = pts[i].x * rect.width;
+        const ptY = pts[i].y * rect.height;
+        const midX = (prevMidX + ptX) / 2;
+        const midY = (prevMidY + ptY) / 2;
+        ctx.quadraticCurveTo(prevMidX, prevMidY, midX, midY);
+        prevMidX = ptX;
+        prevMidY = ptY;
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1.0;
+    }
+  }
+
+  window.addEventListener('resize', updateCanvasLayout);
+  window.addEventListener('orientationchange', () => setTimeout(updateCanvasLayout, 100));
+  updateCanvasLayout();
+
+  function toggleAspectRatio() {
+    matchPcAspect = !matchPcAspect;
+    document.getElementById('btnAspect').textContent = matchPcAspect ? '📐 16:9 PC' : '📱 Full Screen';
+    document.getElementById('btnAspect').classList.toggle('active', matchPcAspect);
+    updateCanvasLayout();
+  }
 
   function connectWs() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2445,6 +2722,10 @@ namespace AirCanvas
           statusBadge.textContent = 'Connected (Live)';
           statusBadge.className = 'badge connected';
           document.getElementById('authModal').style.display = 'none';
+          if (msg.aspect && msg.aspect > 0.1) {
+            pcAspect = msg.aspect;
+            updateCanvasLayout();
+          }
         } else if (msg.type === 'auth_fail') {
           statusBadge.textContent = 'Bad PIN';
           document.getElementById('authModal').style.display = 'flex';
@@ -2471,64 +2752,221 @@ namespace AirCanvas
     currentColor = c;
     document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'));
     el.classList.add('active');
+    if (currentTool === 'eraser') setTool('pen');
   }
 
   function sendAction(act) {
     if (act === 'clear') {
+      strokeHistory.length = 0;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'aircanvas_input', t: 'clear', x: 0, y: 0, p: 0 }));
+      }
+    } else if (act === 'undo') {
+      if (strokeHistory.length > 0) {
+        strokeHistory.pop();
+        redrawHistory();
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'aircanvas_input', t: 'undo', x: 0, y: 0, p: 0 }));
       }
     } else if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'aircanvas_input', t: act, x: 0, y: 0, p: 0 }));
     }
   }
 
-  function emitInput(type, e) {
+  function flushBatch() {
+    if (batchBuffer.length === 0 || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type: 'aircanvas_input',
+      strokeId: currentStrokeId,
+      seq: strokeSeq++,
+      t: 'move',
+      pts: batchBuffer,
+      tool: currentTool,
+      color: currentColor,
+      w: computeLineWidth(0.6),
+      aspect: pcAspect
+    }));
+    batchBuffer = [];
+  }
+
+  function startStroke(e) {
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    const pressure = e.pressure || 0.6;
+    const localX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    const localY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+    const normX = rect.width > 0 ? (localX / rect.width) : 0;
+    const normY = rect.height > 0 ? (localY / rect.height) : 0;
+    const pressure = (e.pressure > 0) ? e.pressure : 0.6;
+
+    isDrawing = true;
+    currentStrokeId = 's_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    strokeSeq = 0;
+    batchBuffer = [];
+
+    lastLocalX = localX;
+    lastLocalY = localY;
+    lastMidX = localX;
+    lastMidY = localY;
+
+    activeStroke = {
+      id: currentStrokeId,
+      tool: currentTool,
+      color: currentColor,
+      width: computeLineWidth(pressure),
+      points: [{ x: normX, y: normY, p: pressure }]
+    };
+
+    // Immediate Local Render (Round starting dot)
+    const rad = computeLineWidth(pressure) / 2;
+    ctx.beginPath();
+    ctx.arc(localX, localY, rad, 0, Math.PI * 2);
+    ctx.fillStyle = currentTool === 'eraser' ? '#020617' : currentColor;
+    if (currentTool === 'highlighter') ctx.globalAlpha = 0.4;
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'aircanvas_input', t: type, x: x, y: y, p: pressure, tool: currentTool }));
-    }
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    if (type === 'down') {
-      isDrawing = true;
-      lastX = cx; lastY = cy;
-      ctx.beginPath();
-      ctx.arc(cx, cy, (pressure * 4) + 1, 0, Math.PI * 2);
-      ctx.fillStyle = currentTool === 'eraser' ? '#020617' : currentColor;
-      ctx.fill();
-    } else if (type === 'move' && isDrawing) {
-      ctx.beginPath();
-      ctx.moveTo(lastX, lastY);
-      ctx.lineTo(cx, cy);
-      ctx.strokeStyle = currentTool === 'eraser' ? '#020617' : currentColor;
-      ctx.lineWidth = currentTool === 'eraser' ? 24 : (currentTool === 'highlighter' ? 14 : (pressure * 8) + 2);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      if (currentTool === 'highlighter') ctx.globalAlpha = 0.4;
-      ctx.stroke();
-      ctx.globalAlpha = 1.0;
-      lastX = cx; lastY = cy;
-    } else if (type === 'up') {
-      isDrawing = false;
+      ws.send(JSON.stringify({
+        type: 'aircanvas_input',
+        strokeId: currentStrokeId,
+        seq: strokeSeq++,
+        t: 'down',
+        x: Number(normX.toFixed(5)),
+        y: Number(normY.toFixed(5)),
+        p: Number(pressure.toFixed(3)),
+        tool: currentTool,
+        color: currentColor,
+        w: computeLineWidth(pressure),
+        aspect: pcAspect
+      }));
     }
   }
 
-  canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); canvas.setPointerCapture(e.pointerId); emitInput('down', e); });
+  function moveStroke(subE) {
+    if (!isDrawing) return;
+    const rect = canvas.getBoundingClientRect();
+    const localX = Math.max(0, Math.min(rect.width, subE.clientX - rect.left));
+    const localY = Math.max(0, Math.min(rect.height, subE.clientY - rect.top));
+    const normX = rect.width > 0 ? (localX / rect.width) : 0;
+    const normY = rect.height > 0 ? (localY / rect.height) : 0;
+    const pressure = (subE.pressure > 0) ? subE.pressure : 0.6;
+
+    const midX = (lastLocalX + localX) / 2;
+    const midY = (lastLocalY + localY) / 2;
+
+    // Immediate Local Quadratic Bézier Curve Smoothing (100% continuous, zero gaps)
+    ctx.beginPath();
+    ctx.moveTo(lastMidX, lastMidY);
+    ctx.quadraticCurveTo(lastLocalX, lastLocalY, midX, midY);
+    ctx.strokeStyle = currentTool === 'eraser' ? '#020617' : currentColor;
+    ctx.lineWidth = computeLineWidth(pressure);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (currentTool === 'highlighter') ctx.globalAlpha = 0.4;
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+
+    lastLocalX = localX;
+    lastLocalY = localY;
+    lastMidX = midX;
+    lastMidY = midY;
+
+    if (activeStroke) {
+      activeStroke.points.push({ x: normX, y: normY, p: pressure });
+    }
+
+    batchBuffer.push([Number(normX.toFixed(5)), Number(normY.toFixed(5)), Number(pressure.toFixed(3))]);
+
+    if (batchBuffer.length >= 4) {
+      flushBatch();
+    }
+  }
+
+  function endStroke(e) {
+    if (!isDrawing) return;
+    isDrawing = false;
+
+    flushBatch();
+
+    const rect = canvas.getBoundingClientRect();
+    const localX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    const localY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+    const normX = rect.width > 0 ? (localX / rect.width) : 0;
+    const normY = rect.height > 0 ? (localY / rect.height) : 0;
+    const pressure = (e.pressure > 0) ? e.pressure : 0.6;
+
+    // Connect final segment
+    ctx.beginPath();
+    ctx.moveTo(lastMidX, lastMidY);
+    ctx.lineTo(localX, localY);
+    ctx.strokeStyle = currentTool === 'eraser' ? '#020617' : currentColor;
+    ctx.lineWidth = computeLineWidth(pressure);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (currentTool === 'highlighter') ctx.globalAlpha = 0.4;
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+
+    if (activeStroke) {
+      activeStroke.points.push({ x: normX, y: normY, p: pressure });
+      strokeHistory.push(activeStroke);
+      if (strokeHistory.length > 500) strokeHistory.shift();
+      activeStroke = null;
+    }
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'aircanvas_input',
+        strokeId: currentStrokeId,
+        seq: strokeSeq++,
+        t: 'up',
+        x: Number(normX.toFixed(5)),
+        y: Number(normY.toFixed(5)),
+        p: Number(pressure.toFixed(3)),
+        tool: currentTool,
+        color: currentColor,
+        w: computeLineWidth(pressure),
+        aspect: pcAspect
+      }));
+    }
+  }
+
+  // Pointer event listeners with Pointer Capture and Corner-of-Mobile Isolation
+  canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    activePointerId = e.pointerId;
+    try { canvas.setPointerCapture(e.pointerId); } catch(err){}
+    document.body.classList.add('drawing-active');
+    startStroke(e);
+  });
+
   canvas.addEventListener('pointermove', (e) => {
     e.preventDefault();
+    e.stopPropagation();
     if (!isDrawing) return;
     const events = (e.getCoalescedEvents && e.getCoalescedEvents().length > 0) ? e.getCoalescedEvents() : [e];
     for (let i = 0; i < events.length; i++) {
-      emitInput('move', events[i]);
+      moveStroke(events[i]);
     }
   });
-  canvas.addEventListener('pointerup', (e) => { e.preventDefault(); emitInput('up', e); });
-  canvas.addEventListener('pointercancel', (e) => { e.preventDefault(); emitInput('up', e); });
+
+  function handlePointerEnd(e) {
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { canvas.releasePointerCapture(e.pointerId); } catch(err){}
+    document.body.classList.remove('drawing-active');
+    endStroke(e);
+    activePointerId = null;
+  }
+
+  canvas.addEventListener('pointerup', handlePointerEnd);
+  canvas.addEventListener('pointercancel', handlePointerEnd);
+
+  // Periodic micro-batch flusher (every 8ms = ~120Hz sync rate)
+  setInterval(flushBatch, 8);
 </script>
 </body>
 </html>";

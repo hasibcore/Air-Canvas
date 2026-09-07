@@ -1215,8 +1215,8 @@ class DrawingProvider extends ChangeNotifier {
       offsetX = ((1.0 - scaleX) / 2.0).clamp(0.0, 1.0);
       offsetY = ((1.0 - scaleY) / 2.0).clamp(0.0, 1.0);
     } else {
-      offsetX = (0.04).clamp(0.0, (1.0 - scaleX).clamp(0.0, 1.0));
-      offsetY = (0.06).clamp(0.0, (1.0 - scaleY).clamp(0.0, 1.0));
+      offsetX = 0.0;
+      offsetY = 0.0;
     }
 
     final normalizedX = (offsetX + rawNormX * scaleX).clamp(0.0, 1.0);

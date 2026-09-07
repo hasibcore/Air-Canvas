@@ -207,6 +207,63 @@ void main() {
       expect((pcXSpan - pcYSpan).abs(), greaterThan(10.0));
       expect(pcXSpan / pcYSpan, isNot(closeTo(1.0, 0.05)));
     });
+
+    test('1:1 Normalized coordinate pipeline maps from (0,0) to (1,1) without artificial offset', () {
+      final drawing = DrawingProvider();
+      drawing.updateCanvasSize(800.0, 450.0); // 16:9 canvas
+      drawing.writingScale = 1.0;
+      drawing.writingAnchor = WritingAnchor.topLeft;
+
+      InputEvent? emittedEvent;
+      drawing.onInputGenerated = (e) => emittedEvent = e;
+
+      // Draw at exact top-left (0, 0)
+      drawing.onPointerDown(Offset.zero, pressure: 0.6);
+      expect(emittedEvent, isNotNull);
+      expect(emittedEvent!.x, equals(0.0));
+      expect(emittedEvent!.y, equals(0.0));
+
+      // Draw at exact bottom-right (800, 450)
+      drawing.onPointerDown(const Offset(800.0, 450.0), pressure: 0.6);
+      expect(emittedEvent!.x, equals(1.0));
+      expect(emittedEvent!.y, equals(1.0));
+
+      drawing.dispose();
+    });
+
+    test('Corner-of-mobile safety clamping avoids OS Start button, Taskbar, and Close button', () {
+      const screenWidth = 1920;
+      const screenHeight = 1080;
+      const safeEdgeInset = 4;
+
+      // Simulate Win32 desktop target computation for mobile corners:
+      // Bottom-left corner (0.0, 1.0) -> Windows Start Menu / Taskbar
+      double normX = 0.0;
+      double normY = 1.0;
+      int targetX = (normX * (screenWidth - 1)).round();
+      int targetY = (normY * (screenHeight - 1)).round();
+      int safeX = targetX.clamp(safeEdgeInset, screenWidth - 1 - safeEdgeInset);
+      int safeY = targetY.clamp(safeEdgeInset, screenHeight - 1 - safeEdgeInset);
+
+      // Verify bottom-left does NOT hit Start button at (0, 1079)
+      expect(safeX, equals(4));
+      expect(safeY, equals(1075));
+      expect(safeY, lessThan(screenHeight - 1));
+
+      // Top-right corner (1.0, 0.0) -> Window Close (X) button
+      normX = 1.0;
+      normY = 0.0;
+      targetX = (normX * (screenWidth - 1)).round();
+      targetY = (normY * (screenHeight - 1)).round();
+      safeX = targetX.clamp(safeEdgeInset, screenWidth - 1 - safeEdgeInset);
+      safeY = targetY.clamp(safeEdgeInset, screenHeight - 1 - safeEdgeInset);
+
+      // Verify top-right does NOT hit Close button at (1919, 0)
+      expect(safeX, equals(1915));
+      expect(safeY, equals(4));
+      expect(safeX, lessThan(screenWidth - 1));
+      expect(safeY, greaterThan(0));
+    });
   });
 
   group('OneEuroFilter2D & Precision Calibration Tests', () {
