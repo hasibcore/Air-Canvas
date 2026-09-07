@@ -29,6 +29,13 @@ class ToolbarWidget extends StatelessWidget {
   final WritingAnchor writingAnchor;
   final ValueChanged<WritingAnchor>? onWritingAnchorChanged;
   final ValueChanged<String>? onClassAction;
+  final bool customBoxEnabled;
+  final ValueChanged<bool>? onCustomBoxEnabledChanged;
+  final bool isEditingCustomBox;
+  final ValueChanged<bool>? onEditCustomBoxChanged;
+  final ValueChanged<String>? onCustomBoxPresetSelected;
+  final bool boxMapsToFullScreen;
+  final ValueChanged<bool>? onBoxMapsToFullScreenChanged;
 
   const ToolbarWidget({
     super.key,
@@ -49,12 +56,19 @@ class ToolbarWidget extends StatelessWidget {
     this.onPrecisionModeChanged,
     this.pressureCurve = PressureCurve.standard,
     this.onPressureCurveChanged,
-    this.writingScale = 0.55,
+    this.writingScale = 1.0,
     this.onWritingScaleChanged,
     this.writingAnchor = WritingAnchor.center,
     this.onWritingAnchorChanged,
     this.onClassAction,
     this.canUndo = true,
+    this.customBoxEnabled = false,
+    this.onCustomBoxEnabledChanged,
+    this.isEditingCustomBox = false,
+    this.onEditCustomBoxChanged,
+    this.onCustomBoxPresetSelected,
+    this.boxMapsToFullScreen = true,
+    this.onBoxMapsToFullScreenChanged,
   });
 
   @override
@@ -104,6 +118,13 @@ class ToolbarWidget extends StatelessWidget {
               writingAnchor: writingAnchor,
               onWritingAnchorChanged: onWritingAnchorChanged,
               onClassAction: onClassAction,
+              customBoxEnabled: customBoxEnabled,
+              onCustomBoxEnabledChanged: onCustomBoxEnabledChanged,
+              isEditingCustomBox: isEditingCustomBox,
+              onEditCustomBoxChanged: onEditCustomBoxChanged,
+              onCustomBoxPresetSelected: onCustomBoxPresetSelected,
+              boxMapsToFullScreen: boxMapsToFullScreen,
+              onBoxMapsToFullScreenChanged: onBoxMapsToFullScreenChanged,
             ),
           ],
         ),
@@ -218,6 +239,13 @@ class _ActionButtons extends StatelessWidget {
   final WritingAnchor writingAnchor;
   final ValueChanged<WritingAnchor>? onWritingAnchorChanged;
   final ValueChanged<String>? onClassAction;
+  final bool customBoxEnabled;
+  final ValueChanged<bool>? onCustomBoxEnabledChanged;
+  final bool isEditingCustomBox;
+  final ValueChanged<bool>? onEditCustomBoxChanged;
+  final ValueChanged<String>? onCustomBoxPresetSelected;
+  final bool boxMapsToFullScreen;
+  final ValueChanged<bool>? onBoxMapsToFullScreenChanged;
 
   const _ActionButtons({
     required this.brushSettings,
@@ -241,6 +269,13 @@ class _ActionButtons extends StatelessWidget {
     required this.writingAnchor,
     this.onWritingAnchorChanged,
     this.onClassAction,
+    this.customBoxEnabled = false,
+    this.onCustomBoxEnabledChanged,
+    this.isEditingCustomBox = false,
+    this.onEditCustomBoxChanged,
+    this.onCustomBoxPresetSelected,
+    this.boxMapsToFullScreen = true,
+    this.onBoxMapsToFullScreenChanged,
   });
 
   @override
@@ -264,6 +299,16 @@ class _ActionButtons extends StatelessWidget {
           tooltip: 'পিসিতে লেখার সাইজ: ${(writingScale * 100).round()}% (ছোট/বড় করতে ট্যাপ করুন)',
           onTap: () => _showWritingScaleMenu(context),
           color: const Color(0xFF4ADE80),
+        ),
+        const SizedBox(width: 6),
+        // Custom Drawing Box (Work Area / ROI) Button
+        _buildIconButton(
+          icon: customBoxEnabled ? Icons.crop_free : Icons.crop_free_outlined,
+          tooltip: customBoxEnabled
+              ? 'নির্দিষ্ট ড্রয়িং বক্স: ON (শুধুমাত্র বক্সের ভেতরে আঁকা হবে) - ট্যাপ করুন'
+              : 'নির্দিষ্ট ড্রয়িং বক্স: OFF (ফুল স্ক্রিন চালু) - ট্যাপ করে বক্স নির্ধারণ করুন',
+          onTap: () => _showCustomBoxMenu(context),
+          color: customBoxEnabled ? const Color(0xFF00E5FF) : Colors.grey.shade400,
         ),
         const SizedBox(width: 6),
         // Tablet Surface Mode toggle (Aspect match 1:1 vs Full screen stretched)
@@ -505,6 +550,189 @@ class _ActionButtons extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+
+  void _showCustomBoxMenu(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF161B26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        side: BorderSide(color: Color(0xFF2A374A)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00E5FF).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.crop_free, color: Color(0xFF00E5FF), size: 20),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'নির্দিষ্ট ড্রয়িং এরিয়া (Custom Drawing Box)',
+                          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.grey, size: 20),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'স্ক্রিনের নির্দিষ্ট অংশে ড্রয়িং বক্স নির্ধারণ করুন। এটি চালু থাকলে শুধুমাত্র বক্সের ভেতরেই ড্রয়িং কার্যকর হবে, বক্সের বাইরে কোনো দাগ পড়বে না।',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1F2937),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: customBoxEnabled ? const Color(0xFF00E5FF) : Colors.transparent,
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              customBoxEnabled ? Icons.check_circle : Icons.radio_button_unchecked,
+                              color: customBoxEnabled ? const Color(0xFF00E5FF) : Colors.grey,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            const Text(
+                              'নির্দিষ্ট ড্রয়িং বক্স সক্রিয় করুন',
+                              style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                        Switch(
+                          value: customBoxEnabled,
+                          activeColor: const Color(0xFF00E5FF),
+                          onChanged: (val) {
+                            setSheetState(() {});
+                            onCustomBoxEnabledChanged?.call(val);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (customBoxEnabled) ...[
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00E5FF),
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: const Icon(Icons.open_with, size: 18),
+                        label: const Text(
+                          'স্ক্রিনে হাত দিয়ে টেনে বক্স সাইজ করুন (Drag & Resize)',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          onEditCustomBoxChanged?.call(true);
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      'কুইক সাইজ প্রিসেট (Quick Presets):',
+                      style: TextStyle(color: Colors.grey.shade400, fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _buildBoxPresetChip('সেন্টার বক্স (৭৫%)', 'center_75', Icons.center_focus_strong, ctx),
+                        _buildBoxPresetChip('নোটবুক বক্স (৫০%)', 'center_50', Icons.crop_square, ctx),
+                        _buildBoxPresetChip('টপ হাফ (উপরের অংশ)', 'top_half', Icons.vertical_align_top, ctx),
+                        _buildBoxPresetChip('বটম হাফ (নিচের অংশ)', 'bottom_half', Icons.vertical_align_bottom, ctx),
+                        _buildBoxPresetChip('লেফট সাইড', 'left_half', Icons.align_horizontal_left, ctx),
+                        _buildBoxPresetChip('রাইট সাইড', 'right_half', Icons.align_horizontal_right, ctx),
+                        _buildBoxPresetChip('পুরো স্ক্রিন (১০০%)', 'full', Icons.fullscreen, ctx),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF111827),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'বক্সের ইনপুট পুরো পিসিতে ম্যাপ করুন',
+                                  style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  'চালু থাকলে ছোট বক্সে আঁকলেও পিসির পুরো মনিটর কভার করবে (ট্যাবলেটের মতো)',
+                                  style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Switch(
+                            value: boxMapsToFullScreen,
+                            activeColor: const Color(0xFF00E5FF),
+                            onChanged: (val) {
+                              setSheetState(() {});
+                              onBoxMapsToFullScreenChanged?.call(val);
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildBoxPresetChip(String label, String presetKey, IconData icon, BuildContext ctx) {
+    return ActionChip(
+      avatar: Icon(icon, size: 16, color: const Color(0xFF00E5FF)),
+      label: Text(label, style: const TextStyle(fontSize: 12, color: Colors.white)),
+      backgroundColor: const Color(0xFF1F2937),
+      side: BorderSide(color: Colors.grey.shade800),
+      onPressed: () {
+        onCustomBoxPresetSelected?.call(presetKey);
+        Navigator.pop(ctx);
+      },
     );
   }
 

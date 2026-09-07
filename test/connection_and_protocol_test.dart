@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:air_canvas/models/input_event.dart';
@@ -157,7 +158,7 @@ void main() {
       const phoneConstraintsH = 412.0;
 
       // In 1:1 Aspect Ratio Match mode (letterboxed/pillarboxed active area):
-      final phoneRatio = phoneConstraintsW / phoneConstraintsH;
+      const phoneRatio = phoneConstraintsW / phoneConstraintsH;
       double canvasW = phoneConstraintsW;
       double canvasH = phoneConstraintsH;
 
@@ -196,8 +197,8 @@ void main() {
       const canvasH = 412.0;
 
       const circleDiameter = 100.0;
-      final normalizedXSpan = circleDiameter / canvasW;
-      final normalizedYSpan = circleDiameter / canvasH;
+      const normalizedXSpan = circleDiameter / canvasW;
+      const normalizedYSpan = circleDiameter / canvasH;
 
       final pcXSpan = normalizedXSpan * pcWidth;
       final pcYSpan = normalizedYSpan * pcHeight;
@@ -241,7 +242,7 @@ void main() {
 
       // Fast swipe across screen: 200 pixels in 16.6ms (~12,000 px/sec)
       time = time.add(const Duration(microseconds: 16666));
-      final fastPoint = const Offset(200.0, 200.0);
+      const fastPoint = Offset(200.0, 200.0);
       final fastFiltered = filter.filter(fastPoint, time);
 
       // Under high velocity, beta dynamically increases cutoff frequency
@@ -342,4 +343,90 @@ void main() {
       expect(pcPixelSpanX, closeTo(pcPixelSpanY, 1.5));
     });
   });
+
+  group('Custom Drawing Box (ROI / Active Work Area) Tests', () {
+    test('Default configuration maps 100% full screen edge-to-edge', () {
+      final provider = DrawingProvider();
+      expect(provider.writingScale, equals(1.0));
+      expect(provider.customBoxEnabled, isFalse);
+      expect(provider.isEditingCustomBox, isFalse);
+    });
+
+    test('Custom Box gating blocks touches outside the box', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 1000.0);
+      provider.customBoxEnabled = true;
+      // Define a center box from 200..800 in X and Y (normalized 0.2..0.8)
+      provider.setCustomBoxNormalized(Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
+
+      InputEvent? emitted;
+      provider.onInputGenerated = (ev) => emitted = ev;
+
+      // Touch outside box at (100, 100) -> normalized (0.1, 0.1)
+      provider.onPointerDown(const Offset(100.0, 100.0));
+      expect(provider.isDrawing, isFalse);
+      expect(provider.currentStroke, isNull);
+      expect(emitted, isNull);
+
+      // Touch inside box at (500, 500) -> normalized (0.5, 0.5)
+      provider.onPointerDown(const Offset(500.0, 500.0));
+      expect(provider.isDrawing, isTrue);
+      expect(provider.currentStroke, isNotNull);
+      expect(emitted, isNotNull);
+    });
+
+    test('Custom Box clamps movement to box boundaries', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 1000.0);
+      provider.customBoxEnabled = true;
+      provider.setCustomBoxNormalized(Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
+
+      provider.onPointerDown(const Offset(500.0, 500.0));
+      // Move far outside the right boundary (1200, 500)
+      provider.onPointerMove(const Offset(1200.0, 500.0));
+
+      // Last position should be clamped to maxX = 0.8 * 1000 = 800.0
+      expect(provider.lastPosition!.dx, closeTo(800.0, 0.1));
+    });
+
+    test('Custom Box re-normalizes coordinates to full screen when boxMapsToFullScreen is true', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 1000.0);
+      provider.customBoxEnabled = true;
+      provider.boxMapsToFullScreen = true;
+      // Box is 200..800 in X and Y
+      provider.setCustomBoxNormalized(Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
+
+      InputEvent? emitted;
+      provider.onInputGenerated = (ev) => emitted = ev;
+
+      // Touch at the left edge of the box (200, 500) -> should map to 0.0 in X
+      provider.onPointerDown(const Offset(200.0, 500.0));
+      expect(emitted!.x, closeTo(0.0, 0.01));
+
+      // Touch at the right edge of the box (800, 500) -> should map to 1.0 in X
+      provider.onPointerMove(const Offset(800.0, 500.0));
+      expect(emitted!.x, closeTo(1.0, 0.01));
+    });
+
+    test('Custom Box presets set correct normalized bounds', () {
+      final provider = DrawingProvider();
+      provider.setCustomBoxPreset('center_75');
+      expect(provider.customBoxNormalized.left, closeTo(0.125, 0.01));
+      expect(provider.customBoxNormalized.width, closeTo(0.75, 0.01));
+
+      provider.setCustomBoxPreset('center_50');
+      expect(provider.customBoxNormalized.left, closeTo(0.25, 0.01));
+      expect(provider.customBoxNormalized.width, closeTo(0.50, 0.01));
+
+      provider.setCustomBoxPreset('top_half');
+      expect(provider.customBoxNormalized.top, closeTo(0.05, 0.01));
+      expect(provider.customBoxNormalized.height, closeTo(0.45, 0.01));
+
+      provider.setCustomBoxPreset('full');
+      expect(provider.customBoxNormalized.left, closeTo(0.0, 0.01));
+      expect(provider.customBoxNormalized.right, closeTo(1.0, 0.01));
+    });
+  });
 }
+

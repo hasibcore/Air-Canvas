@@ -280,6 +280,24 @@
     .dialog-confirm { background: var(--danger); color: #fff; border-color: var(--danger); }
     .dialog-confirm:hover { opacity: 0.85; }
 
+    /* Active Drawing Box Overlay */
+    .custom-box-overlay {
+      position: absolute; pointer-events: none;
+      border: 2px dashed var(--c);
+      box-shadow: 0 0 24px rgba(0, 229, 255, 0.25), inset 0 0 30px rgba(0, 229, 255, 0.04);
+      border-radius: 8px; z-index: 10;
+      display: none;
+      transition: all 0.25s ease;
+    }
+    .custom-box-overlay.active { display: block; }
+    .custom-box-badge {
+      position: absolute; top: -26px; left: 10px;
+      font-size: 0.70rem; font-weight: 700; color: var(--c);
+      background: var(--bg2); padding: 3px 10px; border-radius: 6px;
+      border: 1px solid var(--border-active); letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
     /* ========== RESPONSIVE ========== */
     @media (max-width: 768px) {
       .toolbar { padding: 8px 12px; gap: 8px; border-radius: 16px; bottom: 12px; }
@@ -307,6 +325,9 @@
   <div class="canvas-area" id="canvasArea">
     <canvas id="mainCanvas"></canvas>
     <div class="image-layer" id="imageLayer"></div>
+    <div class="custom-box-overlay" id="customBoxOverlay">
+      <div class="custom-box-badge" id="customBoxBadge">Active Box: 75%</div>
+    </div>
 
     <!-- HUD -->
     <div class="hud">
@@ -376,6 +397,9 @@
       <button class="tb-btn" id="redoBtn" title="Redo (Ctrl+Y)"><span class="icon">↪️</span></button>
 
       <div class="tool-sep"></div>
+
+      <!-- Custom Drawing Box (Active Work Area) -->
+      <button class="tb-btn" id="customBoxBtn" title="Custom Drawing Box (Active Work Area)"><span class="icon">⛶</span> Box: Off</button>
 
       <!-- Insert -->
       <button class="tb-btn" id="insertImgBtn"><span class="icon">🖼️</span> Insert</button>
@@ -490,7 +514,49 @@ const redoBtn = document.getElementById('redoBtn');
 const clearBtn = document.getElementById('clearBtn');
 const saveBtn = document.getElementById('saveBtn');
 const insertImgBtn = document.getElementById('insertImgBtn');
+const customBoxBtn = document.getElementById('customBoxBtn');
+const customBoxOverlay = document.getElementById('customBoxOverlay');
+const customBoxBadge = document.getElementById('customBoxBadge');
 const customColorInput = document.getElementById('customColor');
+
+// Custom Box Presets
+let customBoxIndex = 0; // 0: Off, 1: Center 75%, 2: Center 50%, 3: Top Half, 4: Bottom Half, 5: Left Half, 6: Right Half
+const customBoxPresets = [
+  { name: 'Off', l: 0.0, t: 0.0, r: 1.0, b: 1.0 },
+  { name: 'Center 75%', l: 0.125, t: 0.125, r: 0.875, b: 0.875 },
+  { name: 'Center 50%', l: 0.25, t: 0.25, r: 0.75, b: 0.75 },
+  { name: 'Top Half', l: 0.05, t: 0.05, r: 0.95, b: 0.50 },
+  { name: 'Bottom Half', l: 0.05, t: 0.50, r: 0.95, b: 0.95 },
+  { name: 'Left Half', l: 0.05, t: 0.05, r: 0.50, b: 0.95 },
+  { name: 'Right Half', l: 0.50, t: 0.05, r: 0.95, b: 0.95 },
+];
+
+function updateCustomBoxUI() {
+  const p = customBoxPresets[customBoxIndex];
+  if (customBoxIndex === 0) {
+    customBoxBtn.classList.remove('active');
+    customBoxBtn.innerHTML = '<span class="icon">⛶</span> Box: Off';
+    customBoxOverlay.classList.remove('active');
+  } else {
+    customBoxBtn.classList.add('active');
+    customBoxBtn.innerHTML = `<span class="icon">⛶</span> ${p.name}`;
+    customBoxOverlay.classList.add('active');
+    customBoxBadge.textContent = `Active Box: ${p.name}`;
+    const area = document.getElementById('canvasArea');
+    const w = area.clientWidth;
+    const h = area.clientHeight;
+    customBoxOverlay.style.left = (p.l * w) + 'px';
+    customBoxOverlay.style.top = (p.t * h) + 'px';
+    customBoxOverlay.style.width = ((p.r - p.l) * w) + 'px';
+    customBoxOverlay.style.height = ((p.b - p.t) * h) + 'px';
+  }
+}
+
+customBoxBtn.addEventListener('click', () => {
+  customBoxIndex = (customBoxIndex + 1) % customBoxPresets.length;
+  updateCustomBoxUI();
+  showToast(customBoxIndex === 0 ? 'Custom Box: Full Screen' : `Custom Box: ${customBoxPresets[customBoxIndex].name}`);
+});
 
 // Insert panel
 const insertPanel = document.getElementById('insertPanel');
@@ -513,30 +579,45 @@ const toastEl = document.getElementById('toast');
 let toastTimeout = null;
 
 // ============================================================
-//  CANVAS SETUP
+//  CANVAS SETUP (High-DPI Razor Sharp Backing Store)
 // ============================================================
 function resizeCanvas() {
   const area = document.getElementById('canvasArea');
+  const dpr = window.devicePixelRatio || 1;
   const w = area.clientWidth;
   const h = area.clientHeight;
+  if (w <= 0 || h <= 0) return;
+
   // Save current image data before resizing
-  let imageData = null;
+  let prevCanvas = null;
   if (canvas.width > 0 && canvas.height > 0) {
-    imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    prevCanvas = document.createElement('canvas');
+    prevCanvas.width = canvas.width;
+    prevCanvas.height = canvas.height;
+    prevCanvas.getContext('2d').drawImage(canvas, 0, 0);
   }
-  canvas.width = w;
-  canvas.height = h;
-  // Restore image data
-  if (imageData) {
-    ctx.putImageData(imageData, 0, 0);
+
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  if (prevCanvas) {
+    ctx.drawImage(prevCanvas, 0, 0, w, h);
   } else {
     clearCanvasContent();
   }
+  updateCustomBoxUI();
 }
 
 function clearCanvasContent() {
+  const area = document.getElementById('canvasArea');
+  ctx.save();
   ctx.fillStyle = BG_COLOR;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, area.clientWidth, area.clientHeight);
+  ctx.restore();
 }
 
 // ============================================================
@@ -627,9 +708,22 @@ function renderPageTabs() {
 }
 
 // ============================================================
-//  DRAWING ENGINE
+//  DRAWING ENGINE (Smooth Bézier Curves & Custom Box Gating)
 // ============================================================
+let lastMidX = 0, lastMidY = 0;
+
 function startStroke(x, y, pressure) {
+  // Custom Box Gating: ignore strokes originating outside designated active area
+  if (customBoxIndex > 0) {
+    const p = customBoxPresets[customBoxIndex];
+    const area = document.getElementById('canvasArea');
+    const minX = p.l * area.clientWidth;
+    const maxX = p.r * area.clientWidth;
+    const minY = p.t * area.clientHeight;
+    const maxY = p.b * area.clientHeight;
+    if (x < minX || x > maxX || y < minY || y > maxY) return;
+  }
+
   isDrawing = true;
   currentStroke = {
     points: [{ x, y, pressure }],
@@ -640,11 +734,31 @@ function startStroke(x, y, pressure) {
   };
   lastX = x;
   lastY = y;
+  lastMidX = x;
+  lastMidY = y;
   currentPressure = pressure;
 }
 
 function continueStroke(x, y, pressure) {
   if (!isDrawing || !currentStroke) return;
+
+  // Custom Box constraint: clamp drawing within active work area
+  if (customBoxIndex > 0) {
+    const p = customBoxPresets[customBoxIndex];
+    const area = document.getElementById('canvasArea');
+    const minX = p.l * area.clientWidth;
+    const maxX = p.r * area.clientWidth;
+    const minY = p.t * area.clientHeight;
+    const maxY = p.b * area.clientHeight;
+    x = Math.max(minX, Math.min(maxX, x));
+    y = Math.max(minY, Math.min(maxY, y));
+  }
+
+  // Sub-pixel anti-jitter threshold: prevent digitizer noise
+  const dx = x - lastX;
+  const dy = y - lastY;
+  if (dx * dx + dy * dy < 0.36) return;
+
   currentStroke.points.push({ x, y, pressure });
 
   // Resolve effective size
@@ -653,6 +767,10 @@ function continueStroke(x, y, pressure) {
     effectiveSize = currentStroke.size * (0.2 + pressure * 0.8 * pressureSensitivity);
   }
   if (currentStroke.isEraser) effectiveSize *= 2.5;
+
+  // Continuous Bézier midpoint interpolation for buttery smooth lines
+  const midX = (lastX + x) / 2;
+  const midY = (lastY + y) / 2;
 
   ctx.save();
   ctx.globalAlpha = currentStroke.opacity;
@@ -671,13 +789,15 @@ function continueStroke(x, y, pressure) {
   }
 
   ctx.beginPath();
-  ctx.moveTo(lastX, lastY);
-  ctx.lineTo(x, y);
+  ctx.moveTo(lastMidX, lastMidY);
+  ctx.quadraticCurveTo(lastX, lastY, midX, midY);
   ctx.stroke();
   ctx.restore();
 
   lastX = x;
   lastY = y;
+  lastMidX = midX;
+  lastMidY = midY;
   currentPressure = pressure;
 }
 
@@ -693,36 +813,58 @@ function endStroke() {
   updateUndoRedoButtons();
 }
 
-// Full redraw from strokes
+// Full redraw from strokes with quadratic Bézier interpolation
 function redrawFromStrokes(page) {
   clearCanvasContent();
   for (const stroke of page.strokes) {
-    if (stroke.points.length < 2) continue;
+    if (stroke.points.length === 0) continue;
+    if (stroke.points.length === 1) {
+      const pt = stroke.points[0];
+      ctx.save();
+      ctx.fillStyle = stroke.isEraser ? BG_COLOR : stroke.color;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, stroke.size / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      continue;
+    }
+
+    ctx.save();
+    ctx.globalAlpha = stroke.opacity;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = stroke.isEraser ? BG_COLOR : stroke.color;
+    if (!stroke.isEraser) {
+      ctx.shadowBlur = Math.min(12, stroke.size * 0.6);
+      ctx.shadowColor = stroke.color;
+    }
+
+    let p1 = stroke.points[0];
+    let midX = p1.x;
+    let midY = p1.y;
+
     for (let i = 1; i < stroke.points.length; i++) {
-      const prev = stroke.points[i - 1];
-      const pt = stroke.points[i];
+      const p2 = stroke.points[i];
+      const nextMidX = (p1.x + p2.x) / 2;
+      const nextMidY = (p1.y + p2.y) / 2;
+
       let effectiveSize = stroke.size;
       if (pressureEnabled && !stroke.isEraser) {
-        effectiveSize = stroke.size * (0.2 + pt.pressure * 0.8 * pressureSensitivity);
+        effectiveSize = stroke.size * (0.2 + p2.pressure * 0.8 * pressureSensitivity);
       }
       if (stroke.isEraser) effectiveSize *= 2.5;
-
-      ctx.save();
-      ctx.globalAlpha = stroke.opacity;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
       ctx.lineWidth = Math.max(1, effectiveSize);
-      ctx.strokeStyle = stroke.isEraser ? BG_COLOR : stroke.color;
-      if (!stroke.isEraser) {
-        ctx.shadowBlur = Math.min(12, effectiveSize * 0.6);
-        ctx.shadowColor = stroke.color;
-      }
+
       ctx.beginPath();
-      ctx.moveTo(prev.x, prev.y);
-      ctx.lineTo(pt.x, pt.y);
+      ctx.moveTo(midX, midY);
+      ctx.quadraticCurveTo(p1.x, p1.y, nextMidX, nextMidY);
       ctx.stroke();
-      ctx.restore();
+
+      p1 = p2;
+      midX = nextMidX;
+      midY = nextMidY;
     }
+    ctx.restore();
   }
 }
 

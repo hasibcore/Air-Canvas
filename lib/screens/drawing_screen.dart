@@ -293,10 +293,41 @@ class _DrawingScreenState extends State<DrawingScreen> {
                         ),
                       );
                     },
+                    customBoxEnabled: drawing.customBoxEnabled,
+                    onCustomBoxEnabledChanged: (val) {
+                      drawing.customBoxEnabled = val;
+                      ScaffoldMessenger.of(context).clearSnackBars();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            val
+                                ? '🎯 নির্দিষ্ট ড্রয়িং বক্স: ON (শুধুমাত্র বক্সের ভেতরে আঁকা হবে)'
+                                : '🖥️ ফুল স্ক্রিন মোড: ON (পুরো স্ক্রিন জুড়ে ড্রয়িং চালু)',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          duration: const Duration(seconds: 2),
+                          backgroundColor: const Color(0xFF1A1A2E),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    isEditingCustomBox: drawing.isEditingCustomBox,
+                    onEditCustomBoxChanged: (val) => drawing.isEditingCustomBox = val,
+                    onCustomBoxPresetSelected: (preset) => drawing.setCustomBoxPreset(preset),
+                    boxMapsToFullScreen: drawing.boxMapsToFullScreen,
+                    onBoxMapsToFullScreenChanged: (val) => drawing.boxMapsToFullScreen = val,
                   );
                 },
               ),
             ),
+
+          // Custom Drawing Box interactive drag & resize editor
+          Consumer<DrawingProvider>(
+            builder: (context, drawing, _) {
+              if (!drawing.isEditingCustomBox) return const SizedBox.shrink();
+              return const _CustomBoxEditorOverlay();
+            },
+          ),
 
           // Connection floating indicator (wrapped in granular Consumer to prevent whole screen rebuilds) (Bug 89)
           Positioned(
@@ -469,6 +500,11 @@ class DrawingPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // 1. Draw custom drawing box frame and dimmed exterior if enabled
+    if (drawingProvider.customBoxEnabled) {
+      _drawCustomBoxOverlay(canvas, size);
+    }
+
     // সব completed strokes আঁকা
     for (final stroke in drawingProvider.strokes) {
       _drawStroke(canvas, stroke, size);
@@ -479,6 +515,63 @@ class DrawingPainter extends CustomPainter {
     if (currentStroke != null && currentStroke.points.isNotEmpty) {
       _drawStroke(canvas, currentStroke, size);
     }
+  }
+
+  void _drawCustomBoxOverlay(Canvas canvas, Size size) {
+    final norm = drawingProvider.customBoxNormalized;
+    final boxRect = Rect.fromLTRB(
+      norm.left * size.width,
+      norm.top * size.height,
+      norm.right * size.width,
+      norm.bottom * size.height,
+    );
+
+    // 1. Dim the inactive area outside the box to protect from accidental touches
+    final dimPaint = Paint()..color = Colors.black.withValues(alpha: 0.50);
+    // Top
+    if (boxRect.top > 0) {
+      canvas.drawRect(Rect.fromLTRB(0, 0, size.width, boxRect.top), dimPaint);
+    }
+    // Bottom
+    if (boxRect.bottom < size.height) {
+      canvas.drawRect(Rect.fromLTRB(0, boxRect.bottom, size.width, size.height), dimPaint);
+    }
+    // Left
+    if (boxRect.left > 0) {
+      canvas.drawRect(Rect.fromLTRB(0, boxRect.top, boxRect.left, boxRect.bottom), dimPaint);
+    }
+    // Right
+    if (boxRect.right < size.width) {
+      canvas.drawRect(Rect.fromLTRB(boxRect.right, boxRect.top, size.width, boxRect.bottom), dimPaint);
+    }
+
+    // 2. Cyan glowing border for the active box
+    final borderPaint = Paint()
+      ..color = const Color(0xFF00E5FF).withValues(alpha: 0.8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    canvas.drawRect(boxRect, borderPaint);
+
+    // 3. Four corner L-brackets
+    final cornerPaint = Paint()
+      ..color = const Color(0xFF00E5FF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round;
+
+    const cLen = 18.0;
+    // Top-Left
+    canvas.drawLine(boxRect.topLeft, boxRect.topLeft + const Offset(cLen, 0), cornerPaint);
+    canvas.drawLine(boxRect.topLeft, boxRect.topLeft + const Offset(0, cLen), cornerPaint);
+    // Top-Right
+    canvas.drawLine(boxRect.topRight, boxRect.topRight + const Offset(-cLen, 0), cornerPaint);
+    canvas.drawLine(boxRect.topRight, boxRect.topRight + const Offset(0, cLen), cornerPaint);
+    // Bottom-Left
+    canvas.drawLine(boxRect.bottomLeft, boxRect.bottomLeft + const Offset(cLen, 0), cornerPaint);
+    canvas.drawLine(boxRect.bottomLeft, boxRect.bottomLeft + const Offset(0, -cLen), cornerPaint);
+    // Bottom-Right
+    canvas.drawLine(boxRect.bottomRight, boxRect.bottomRight + const Offset(-cLen, 0), cornerPaint);
+    canvas.drawLine(boxRect.bottomRight, boxRect.bottomRight + const Offset(0, -cLen), cornerPaint);
   }
 
   void _drawStroke(Canvas canvas, Stroke stroke, Size size) {
@@ -530,4 +623,249 @@ class GridPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Interactive Custom Box Editor Overlay for live dragging & resizing on screen
+class _CustomBoxEditorOverlay extends StatefulWidget {
+  const _CustomBoxEditorOverlay();
+
+  @override
+  State<_CustomBoxEditorOverlay> createState() => _CustomBoxEditorOverlayState();
+}
+
+class _CustomBoxEditorOverlayState extends State<_CustomBoxEditorOverlay> {
+  int _dragHandle = 0; // 1: center move
+  Offset? _dragStartPos;
+  Rect? _initialRect;
+
+  @override
+  Widget build(BuildContext context) {
+    final drawing = context.watch<DrawingProvider>();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        final norm = drawing.customBoxNormalized;
+        final boxRect = Rect.fromLTRB(
+          norm.left * w,
+          norm.top * h,
+          norm.right * w,
+          norm.bottom * h,
+        );
+
+        return Stack(
+          children: [
+            // Dark touch barrier
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {},
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.55),
+                ),
+              ),
+            ),
+
+            // Draggable & Resizable Active Box
+            Positioned(
+              left: boxRect.left,
+              top: boxRect.top,
+              width: boxRect.width,
+              height: boxRect.height,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanStart: (details) {
+                  _dragHandle = 1;
+                  _dragStartPos = details.globalPosition;
+                  _initialRect = boxRect;
+                },
+                onPanUpdate: (details) {
+                  if (_dragHandle == 1 && _dragStartPos != null && _initialRect != null) {
+                    final delta = details.globalPosition - _dragStartPos!;
+                    double newLeft = (_initialRect!.left + delta.dx).clamp(0.0, w - _initialRect!.width);
+                    double newTop = (_initialRect!.top + delta.dy).clamp(0.0, h - _initialRect!.height);
+                    final newRect = Rect.fromLTWH(newLeft, newTop, _initialRect!.width, _initialRect!.height);
+                    drawing.setCustomBoxNormalized(Rect.fromLTRB(
+                      newRect.left / w,
+                      newRect.top / h,
+                      newRect.right / w,
+                      newRect.bottom / h,
+                    ));
+                  }
+                },
+                onPanEnd: (_) => _dragHandle = 0,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00E5FF).withValues(alpha: 0.12),
+                    border: Border.all(color: const Color(0xFF00E5FF), width: 2.5),
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF00E5FF).withValues(alpha: 0.35),
+                        blurRadius: 16,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.open_with, color: Color(0xFF00E5FF), size: 30),
+                        const SizedBox(height: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.75),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text(
+                            'মাঝে ধরে সরান (Drag to Move)',
+                            style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // 4 Corner Handles for intuitive resizing
+            _buildHandle(
+              left: boxRect.left - 16,
+              top: boxRect.top - 16,
+              onPanUpdate: (d) {
+                final newLeft = (boxRect.left + d.delta.dx).clamp(0.0, boxRect.right - 60);
+                final newTop = (boxRect.top + d.delta.dy).clamp(0.0, boxRect.bottom - 60);
+                drawing.setCustomBoxNormalized(Rect.fromLTRB(
+                  newLeft / w,
+                  newTop / h,
+                  boxRect.right / w,
+                  boxRect.bottom / h,
+                ));
+              },
+            ),
+            _buildHandle(
+              left: boxRect.right - 16,
+              top: boxRect.top - 16,
+              onPanUpdate: (d) {
+                final newRight = (boxRect.right + d.delta.dx).clamp(boxRect.left + 60, w);
+                final newTop = (boxRect.top + d.delta.dy).clamp(0.0, boxRect.bottom - 60);
+                drawing.setCustomBoxNormalized(Rect.fromLTRB(
+                  boxRect.left / w,
+                  newTop / h,
+                  newRight / w,
+                  boxRect.bottom / h,
+                ));
+              },
+            ),
+            _buildHandle(
+              left: boxRect.left - 16,
+              top: boxRect.bottom - 16,
+              onPanUpdate: (d) {
+                final newLeft = (boxRect.left + d.delta.dx).clamp(0.0, boxRect.right - 60);
+                final newBottom = (boxRect.bottom + d.delta.dy).clamp(boxRect.top + 60, h);
+                drawing.setCustomBoxNormalized(Rect.fromLTRB(
+                  newLeft / w,
+                  boxRect.top / h,
+                  boxRect.right / w,
+                  newBottom / h,
+                ));
+              },
+            ),
+            _buildHandle(
+              left: boxRect.right - 16,
+              top: boxRect.bottom - 16,
+              onPanUpdate: (d) {
+                final newRight = (boxRect.right + d.delta.dx).clamp(boxRect.left + 60, w);
+                final newBottom = (boxRect.bottom + d.delta.dy).clamp(boxRect.top + 60, h);
+                drawing.setCustomBoxNormalized(Rect.fromLTRB(
+                  boxRect.left / w,
+                  boxRect.top / h,
+                  newRight / w,
+                  newBottom / h,
+                ));
+              },
+            ),
+
+            // Top Floating Control Bar
+            Positioned(
+              top: 18,
+              left: 20,
+              right: 20,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF161B26),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.5)),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withValues(alpha: 0.7), blurRadius: 18),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.crop_free, color: Color(0xFF00E5FF), size: 18),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'ড্রয়িং বক্স সাজান (Adjust Box)',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(width: 16),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00E5FF),
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        icon: const Icon(Icons.check, size: 16),
+                        label: const Text('✓ সম্পন্ন (Done)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        onPressed: () {
+                          drawing.isEditingCustomBox = false;
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildHandle({
+    required double left,
+    required double top,
+    required ValueChanged<DragUpdateDetails> onPanUpdate,
+  }) {
+    return Positioned(
+      left: left,
+      top: top,
+      width: 32,
+      height: 32,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanUpdate: onPanUpdate,
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF00E5FF),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.black, width: 2.5),
+            boxShadow: [
+              BoxShadow(color: const Color(0xFF00E5FF).withValues(alpha: 0.6), blurRadius: 8),
+            ],
+          ),
+          child: const Center(
+            child: Icon(Icons.drag_handle, size: 12, color: Colors.black),
+          ),
+        ),
+      ),
+    );
+  }
 }

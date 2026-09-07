@@ -268,12 +268,81 @@ class DrawingProvider extends ChangeNotifier {
   // Pro Precision & Jitter Filter Engine (1-Euro Filter)
   PrecisionMode _precisionMode = PrecisionMode.proAdaptive;
   PressureCurve _pressureCurve = PressureCurve.standard;
-  final OneEuroFilter2D _oneEuroFilter = OneEuroFilter2D(minCutoff: 1.2, beta: 0.008);
+  // Tuned: minCutoff 0.85 Hz for zero jitter on slow/fine strokes, beta 0.015 for instant 0-lag flick tracking
+  final OneEuroFilter2D _oneEuroFilter = OneEuroFilter2D(minCutoff: 0.85, beta: 0.015);
 
   // PC Output Writing Scale & Aspect Ratio Compensation
-  double _writingScale = 0.55; // Default compact natural writing size (55% of monitor)
+  // Default 1.0: Full screen edge-to-edge on all devices by default
+  double _writingScale = 1.0;
   WritingAnchor _writingAnchor = WritingAnchor.center;
   double _serverAspectRatio = 16.0 / 9.0;
+
+  // --- Custom Drawing Box (Active Work Area / ROI) ---
+  bool _customBoxEnabled = false;
+  Rect _customBoxNormalized = Rect.fromLTRB(0.12, 0.12, 0.88, 0.88);
+  bool _isEditingCustomBox = false;
+  bool _boxMapsToFullScreen = true;
+
+  bool get customBoxEnabled => _customBoxEnabled;
+  set customBoxEnabled(bool val) {
+    if (_customBoxEnabled != val) {
+      _customBoxEnabled = val;
+      notifyListeners();
+    }
+  }
+
+  Rect get customBoxNormalized => _customBoxNormalized;
+  void setCustomBoxNormalized(Rect rect) {
+    final l = rect.left.clamp(0.0, 0.85);
+    final t = rect.top.clamp(0.0, 0.85);
+    final r = rect.right.clamp(l + 0.10, 1.0);
+    final b = rect.bottom.clamp(t + 0.10, 1.0);
+    _customBoxNormalized = Rect.fromLTRB(l, t, r, b);
+    notifyListeners();
+  }
+
+  bool get isEditingCustomBox => _isEditingCustomBox;
+  set isEditingCustomBox(bool val) {
+    if (_isEditingCustomBox != val) {
+      _isEditingCustomBox = val;
+      notifyListeners();
+    }
+  }
+
+  bool get boxMapsToFullScreen => _boxMapsToFullScreen;
+  set boxMapsToFullScreen(bool val) {
+    if (_boxMapsToFullScreen != val) {
+      _boxMapsToFullScreen = val;
+      notifyListeners();
+    }
+  }
+
+  /// Preset selection for Custom Drawing Box
+  void setCustomBoxPreset(String preset) {
+    switch (preset) {
+      case 'center_75':
+        setCustomBoxNormalized(Rect.fromLTRB(0.125, 0.125, 0.875, 0.875));
+        break;
+      case 'center_50':
+        setCustomBoxNormalized(Rect.fromLTRB(0.25, 0.25, 0.75, 0.75));
+        break;
+      case 'top_half':
+        setCustomBoxNormalized(Rect.fromLTRB(0.05, 0.05, 0.95, 0.50));
+        break;
+      case 'bottom_half':
+        setCustomBoxNormalized(Rect.fromLTRB(0.05, 0.50, 0.95, 0.95));
+        break;
+      case 'left_half':
+        setCustomBoxNormalized(Rect.fromLTRB(0.05, 0.05, 0.50, 0.95));
+        break;
+      case 'right_half':
+        setCustomBoxNormalized(Rect.fromLTRB(0.50, 0.05, 0.95, 0.95));
+        break;
+      case 'full':
+        setCustomBoxNormalized(Rect.fromLTRB(0.0, 0.0, 1.0, 1.0));
+        break;
+    }
+  }
 
   // Smoothing buffer
   final List<Offset> _positionBuffer = [];
@@ -602,6 +671,18 @@ class DrawingProvider extends ChangeNotifier {
     int buttons = 0,
   }) {
     if (pointerId < 0) return; // Defensive pointerId check
+    if (_isEditingCustomBox) return; // Don't draw while adjusting the custom box
+
+    final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
+    final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
+    final normX = (position.dx / w).clamp(0.0, 1.0);
+    final normY = (position.dy / h).clamp(0.0, 1.0);
+
+    // Custom Drawing Box gating: ignore touches outside the designated box
+    if (_customBoxEnabled && !_customBoxNormalized.contains(Offset(normX, normY))) {
+      return;
+    }
+
     // Flutter এর গ্লোবাল pointer id কে ছোট স্লটে ম্যাপ করা — উপরের নোট দেখুন।
     final slot = _acquireSlot(pointerId);
     if (slot < 0) return; // ১৬টা স্লটই ব্যস্ত
@@ -662,6 +743,8 @@ class DrawingProvider extends ChangeNotifier {
   }) {
     if (!_isDrawing || _currentStroke == null) return;
     if (pointerId < 0) return; // Defensive pointerId check
+    if (_isEditingCustomBox) return; // Ignore drawing while editing box
+
     // তালু / দ্বিতীয় আঙুলের move উপেক্ষা — কার্সর একটাই।
     if (_drawingPointer != null && _drawingPointer != pointerId) return;
     // down মিস হয়ে থাকলেও স্লট দিয়ে দেওয়া হয় — নাহলে পুরো স্ট্রোক হারিয়ে যেত।
@@ -674,14 +757,37 @@ class DrawingProvider extends ChangeNotifier {
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
     final now = DateTime.now();
 
+    // Custom Drawing Box gating & boundary clamping
+    final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
+    final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
+    Offset boundedPosition = position;
+    if (_customBoxEnabled) {
+      final minX = _customBoxNormalized.left * w;
+      final maxX = _customBoxNormalized.right * w;
+      final minY = _customBoxNormalized.top * h;
+      final maxY = _customBoxNormalized.bottom * h;
+      boundedPosition = Offset(
+        position.dx.clamp(minX, maxX),
+        position.dy.clamp(minY, maxY),
+      );
+    }
+
+    // Sub-pixel anti-jitter: suppress micro-tremor when holding steady
+    if (_lastPosition != null) {
+      final dist = (boundedPosition - _lastPosition!).distance;
+      if (dist < 0.35) {
+        return; // Suppress sub-pixel sensor jitter
+      }
+    }
+
     // 1. Pro Precision filtering (1-Euro Adaptive vs Studio Smooth vs Raw Direct)
-    Offset precisionPosition = position;
+    Offset precisionPosition = boundedPosition;
     if (_precisionMode == PrecisionMode.proAdaptive) {
-      precisionPosition = _oneEuroFilter.filter(position, now);
+      precisionPosition = _oneEuroFilter.filter(boundedPosition, now);
     } else if (_precisionMode == PrecisionMode.studioSmooth) {
-      precisionPosition = _smoothPosition(position);
+      precisionPosition = _smoothPosition(boundedPosition);
     } else {
-      precisionPosition = position;
+      precisionPosition = boundedPosition;
     }
 
     // 2. Pro Pressure curve calibration & smoothing
@@ -872,8 +978,30 @@ class DrawingProvider extends ChangeNotifier {
   }) {
     final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
     final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
-    final rawNormX = (position.dx / w).clamp(0.0, 1.0);
-    final rawNormY = (position.dy / h).clamp(0.0, 1.0);
+    double rawNormX = (position.dx / w).clamp(0.0, 1.0);
+    double rawNormY = (position.dy / h).clamp(0.0, 1.0);
+
+    // If Custom Drawing Box is active and maps to full PC screen, re-normalize
+    if (_customBoxEnabled && _boxMapsToFullScreen) {
+      final boxW = _customBoxNormalized.width <= 0 ? 1.0 : _customBoxNormalized.width;
+      final boxH = _customBoxNormalized.height <= 0 ? 1.0 : _customBoxNormalized.height;
+      final boxNormX = ((rawNormX - _customBoxNormalized.left) / boxW).clamp(0.0, 1.0);
+      final boxNormY = ((rawNormY - _customBoxNormalized.top) / boxH).clamp(0.0, 1.0);
+
+      final event = InputEvent(
+        type: type,
+        x: boxNormX,
+        y: boxNormY,
+        pressure: pressure,
+        pointerType: pointerType,
+        pointerId: pointerId,
+        tiltX: tiltX,
+        tiltY: tiltY,
+        buttons: buttons,
+      );
+      onInputGenerated?.call(event);
+      return;
+    }
 
     // আউটপুট স্কেলিং ও রেশিও ক্ষতিপূরণ:
     // ১. মোবাইল স্ক্রিন ১০০% এজ-টু-এজ ব্যবহার হবে (কোনো কালো দাগ/বর্ডার ছাড়া)।
