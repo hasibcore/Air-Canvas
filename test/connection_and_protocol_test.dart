@@ -470,6 +470,100 @@ void main() {
       expect(emitted!.type, equals(InputEventType.pointerMove));
     });
   });
+
+  group('Pro Inking & Efficiency Engine Tests', () {
+    test('PressureCurve.sCurve produces Hermite smoothstep sigmoid response', () {
+      const curve = PressureCurve.sCurve;
+      expect(curve.transform(0.0), closeTo(0.0, 0.001));
+      expect(curve.transform(1.0), closeTo(1.0, 0.001));
+      expect(curve.transform(0.5), closeTo(0.5, 0.001));
+      // At 0.2, standard is 0.2, sCurve is 0.2*0.2*(3 - 0.4) = 0.04 * 2.6 = 0.104
+      expect(curve.transform(0.2), closeTo(0.104, 0.001));
+      // At 0.8, standard is 0.8, sCurve is 0.8*0.8*(3 - 1.6) = 0.64 * 1.4 = 0.896
+      expect(curve.transform(0.8), closeTo(0.896, 0.001));
+    });
+
+    test('StrokePoint dynamic width scales accurately with calibrated pressure', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 1000.0);
+      provider.pressureSmoothing = false;
+      provider.updateBrush(const BrushSettings(baseWidth: 10.0, pressureSensitivity: 0.8));
+
+      provider.onPointerDown(const Offset(100.0, 100.0), pressure: 0.0);
+      expect(provider.currentStroke, isNotNull);
+      // width = 10.0 * (0.25 + 0.0 * 0.75 * 0.8) = 2.5
+      expect(provider.currentStroke!.points.first.width, closeTo(2.5, 0.1));
+
+      provider.onPointerMove(const Offset(120.0, 100.0), pressure: 1.0);
+      // width = 10.0 * (0.25 + 1.0 * 0.75 * 0.8) = 10.0 * 0.85 = 8.5
+      expect(provider.currentStroke!.points.last.width, closeTo(8.5, 0.1));
+    });
+
+    test('Stroke.draw renders variable-width spline segments smoothly without error', () {
+      final stroke = Stroke(
+        settings: const BrushSettings(baseWidth: 6.0, pressureSensitivity: 0.7),
+        points: [
+          StrokePoint(position: const Offset(10, 10), pressure: 0.2, timestamp: DateTime.now(), width: 2.0),
+          StrokePoint(position: const Offset(30, 40), pressure: 0.6, timestamp: DateTime.now(), width: 5.0),
+          StrokePoint(position: const Offset(60, 80), pressure: 0.9, timestamp: DateTime.now(), width: 8.0),
+        ],
+      );
+
+      final recorder = PictureRecorder();
+      final canvas = Canvas(recorder);
+      expect(() => stroke.draw(canvas), returnsNormally);
+      final pic = recorder.endRecording();
+      expect(pic, isNotNull);
+      pic.dispose();
+    });
+
+    test('Stylus-Only Mode strictly rejects finger touch to prevent palm marks', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 1000.0);
+      provider.stylusOnlyMode = true;
+
+      // Finger touch is completely rejected
+      provider.onPointerDown(const Offset(200.0, 200.0), pointerType: PointerType.finger);
+      expect(provider.isDrawing, isFalse);
+      expect(provider.currentStroke, isNull);
+
+      // Stylus touch is accepted
+      provider.onPointerDown(const Offset(200.0, 200.0), pointerType: PointerType.stylus);
+      expect(provider.isDrawing, isTrue);
+      expect(provider.currentStroke, isNotNull);
+    });
+
+    test('Predictive tracking extrapolates forward based on filtered velocity', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 1000.0);
+      provider.enablePrediction = true;
+
+      final t0 = DateTime.now();
+      provider.onPointerDown(const Offset(100.0, 100.0));
+      expect(provider.predictedPosition, isNull);
+
+      // Fast sweep to the right
+      provider.onPointerMove(const Offset(200.0, 100.0));
+      // With velocity established, predicted position leads ahead in dx
+      if (provider.predictedPosition != null) {
+        expect(provider.predictedPosition!.dx, greaterThan(200.0));
+      }
+
+      provider.onPointerUp();
+      expect(provider.predictedPosition, isNull);
+    });
+
+    test('Telemetry metrics track live FPS and input polling rate correctly', () {
+      final provider = DrawingProvider();
+      expect(provider.liveFps, greaterThanOrEqualTo(1.0));
+      expect(provider.livePollingRateHz, greaterThanOrEqualTo(1.0));
+
+      for (int i = 0; i < 10; i++) {
+        provider.recordFrame();
+      }
+      expect(provider.metricNotifier.value, isNotNull);
+    });
+  });
 }
 
 

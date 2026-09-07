@@ -33,17 +33,23 @@ enum PressureCurve {
   soft,
 
   /// সূক্ষ্ম নিখুঁত রেখা ও ক্যালিগ্রাফির জন্য উচ্চ নিয়ন্ত্রণ (Gamma 1.4)
-  firm;
+  firm,
+
+  /// সিগময়েড এস-কার্ভ (প্রাকৃতিক প্রো কন্ট্রোল - Hermite smoothstep)
+  sCurve;
 
   /// প্রেশার ইনপুট ট্রান্সফর্ম করে (0.0 .. 1.0 রেঞ্জ নিশ্চিত করে)
   double transform(double rawPressure) {
+    final p = rawPressure.clamp(0.0, 1.0);
     switch (this) {
       case PressureCurve.soft:
-        return math.pow(rawPressure.clamp(0.0, 1.0), 0.7).toDouble().clamp(0.0, 1.0);
+        return math.pow(p, 0.7).toDouble().clamp(0.0, 1.0);
       case PressureCurve.firm:
-        return math.pow(rawPressure.clamp(0.0, 1.0), 1.4).toDouble().clamp(0.0, 1.0);
+        return math.pow(p, 1.4).toDouble().clamp(0.0, 1.0);
+      case PressureCurve.sCurve:
+        return (p * p * (3.0 - 2.0 * p)).clamp(0.0, 1.0);
       case PressureCurve.standard:
-        return rawPressure.clamp(0.0, 1.0);
+        return p;
     }
   }
 }
@@ -142,12 +148,14 @@ class StrokePoint {
   final double pressure;
   final DateTime timestamp;
   final PointerType pointerType;
+  final double width;
 
   StrokePoint({
     required this.position,
     required this.pressure,
     required this.timestamp,
     this.pointerType = PointerType.finger,
+    this.width = 3.0,
   });
 }
 
@@ -222,6 +230,69 @@ class Stroke {
       p.maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
     }
     return _cachedPaint = p;
+  }
+
+  /// High-Fidelity Variable-Width Spline Renderer with seamless C1 Bézier midpoints
+  void draw(Canvas canvas) {
+    if (_points.isEmpty) return;
+    if (_points.length == 1) {
+      final point = _points.first;
+      final w = point.width > 0 ? point.width : settings.baseWidth;
+      final p = Paint()
+        ..color = settings.mode == BrushMode.eraser
+            ? const Color(0xFF0A0A12)
+            : settings.color.withValues(alpha: settings.opacity.clamp(0.0, 1.0))
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(point.position, w / 2, p);
+      return;
+    }
+
+    if (settings.pressureSensitivity <= 0.05 || _points.length < 3) {
+      canvas.drawPath(path, paint);
+      return;
+    }
+
+    // High-Fidelity Variable Width Spline Rendering
+    final baseColor = settings.mode == BrushMode.eraser
+        ? const Color(0xFF0A0A12)
+        : settings.color.withValues(alpha: settings.opacity.clamp(0.0, 1.0));
+
+    MaskFilter? maskFilter;
+    if (settings.mode == BrushMode.brush) {
+      maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+    }
+
+    for (int i = 0; i < _points.length - 1; i++) {
+      final p1 = _points[i];
+      final p2 = _points[i + 1];
+      final segWidth = math.max(0.8, (p1.width + p2.width) / 2.0);
+
+      final segPaint = Paint()
+        ..color = baseColor
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = settings.mode == BrushMode.pencil ? segWidth * 0.7 : segWidth;
+
+      if (maskFilter != null) segPaint.maskFilter = maskFilter;
+
+      if (i == 0) {
+        canvas.drawLine(p1.position, (p1.position + p2.position) / 2, segPaint);
+      } else if (i == _points.length - 2) {
+        final prevMid = (_points[i - 1].position + p1.position) / 2;
+        final segPath = Path()
+          ..moveTo(prevMid.dx, prevMid.dy)
+          ..quadraticBezierTo(p1.position.dx, p1.position.dy, p2.position.dx, p2.position.dy);
+        canvas.drawPath(segPath, segPaint);
+      } else {
+        final prevMid = (_points[i - 1].position + p1.position) / 2;
+        final nextMid = (p1.position + p2.position) / 2;
+        final segPath = Path()
+          ..moveTo(prevMid.dx, prevMid.dy)
+          ..quadraticBezierTo(p1.position.dx, p1.position.dy, nextMid.dx, nextMid.dy);
+        canvas.drawPath(segPath, segPaint);
+      }
+    }
   }
 
   double get averagePressure {
@@ -358,6 +429,76 @@ class DrawingProvider extends ChangeNotifier {
       case 'full':
         setCustomBoxNormalized(Rect.fromLTRB(0.0, 0.0, 1.0, 1.0));
         break;
+    }
+  }
+
+  // --- Pro Features: Stylus-Only Inking & Predictive Tracking ---
+  bool _stylusOnlyMode = false;
+  bool _enablePrediction = true;
+  Offset? _predictedPosition;
+  Offset _currentVelocity = Offset.zero;
+
+  bool get stylusOnlyMode => _stylusOnlyMode;
+  set stylusOnlyMode(bool val) {
+    if (_stylusOnlyMode != val) {
+      _stylusOnlyMode = val;
+      notifyListeners();
+    }
+  }
+
+  bool get enablePrediction => _enablePrediction;
+  set enablePrediction(bool val) {
+    if (_enablePrediction != val) {
+      _enablePrediction = val;
+      notifyListeners();
+    }
+  }
+
+  Offset? get predictedPosition => _predictedPosition;
+  Offset get currentVelocity => _currentVelocity;
+
+  // --- Pro Telemetry & Real-Time Performance HUD ---
+  bool _showPerformanceHUD = true;
+  double _liveFps = 120.0;
+  double _livePollingRateHz = 240.0;
+  int _frameCount = 0;
+  DateTime _lastFpsTimestamp = DateTime.now();
+  int _inputSampleCount = 0;
+  DateTime _lastPollingTimestamp = DateTime.now();
+  final ValueNotifier<int> metricNotifier = ValueNotifier<int>(0);
+
+  bool get showPerformanceHUD => _showPerformanceHUD;
+  set showPerformanceHUD(bool val) {
+    if (_showPerformanceHUD != val) {
+      _showPerformanceHUD = val;
+      notifyListeners();
+    }
+  }
+
+  double get liveFps => _liveFps;
+  double get livePollingRateHz => _livePollingRateHz;
+
+  void recordFrame() {
+    _frameCount++;
+    final now = DateTime.now();
+    final elapsedMs = now.difference(_lastFpsTimestamp).inMilliseconds;
+    if (elapsedMs >= 500) {
+      _liveFps = (_frameCount * 1000.0 / elapsedMs).clamp(1.0, 240.0);
+      _frameCount = 0;
+      _lastFpsTimestamp = now;
+      metricNotifier.value++;
+    }
+  }
+
+  void _recordInputSample() {
+    _inputSampleCount++;
+    final now = DateTime.now();
+    final elapsedMs = now.difference(_lastPollingTimestamp).inMilliseconds;
+    if (elapsedMs >= 500) {
+      _livePollingRateHz = (_inputSampleCount * 1000.0 / elapsedMs).clamp(1.0, 1000.0);
+      _inputSampleCount = 0;
+      _lastPollingTimestamp = now;
+      metricNotifier.value++;
     }
   }
 
@@ -690,6 +831,11 @@ class DrawingProvider extends ChangeNotifier {
     if (pointerId < 0) return; // Defensive pointerId check
     if (_isSnippingBox || _isEditingCustomBox) return; // Don't draw while snipping or editing box
 
+    // Stylus-Only Inking Mode (Strict Palm Rejection: Finger touch never inks)
+    if (_stylusOnlyMode && !_isPen(pointerType)) {
+      return;
+    }
+
     final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
     final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
     final normX = (position.dx / w).clamp(0.0, 1.0);
@@ -716,16 +862,22 @@ class DrawingProvider extends ChangeNotifier {
     }
 
     _isDrawing = true;
+    _currentVelocity = Offset.zero;
+    _predictedPosition = null;
+    _recordInputSample();
 
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
     final calibratedPressure = _applyPressureCurve(clampedPressure);
 
     _resetSmoothingBuffers();
+    final dynamicWidth = _brushSettings.baseWidth *
+        (0.25 + calibratedPressure * 0.75 * _brushSettings.pressureSensitivity);
     final point = StrokePoint(
       position: position,
       pressure: calibratedPressure,
       timestamp: now,
       pointerType: pointerType,
+      width: dynamicWidth,
     );
 
     _currentStroke = Stroke(settings: _brushSettings, startTime: now);
@@ -762,6 +914,11 @@ class DrawingProvider extends ChangeNotifier {
     if (pointerId < 0) return; // Defensive pointerId check
     if (_isSnippingBox || _isEditingCustomBox) return; // Ignore drawing while snipping or editing box
 
+    // Stylus-Only Inking Mode
+    if (_stylusOnlyMode && !_isPen(pointerType)) {
+      return;
+    }
+
     // তালু / দ্বিতীয় আঙুলের move উপেক্ষা — কার্সর একটাই।
     if (_drawingPointer != null && _drawingPointer != pointerId) return;
     // down মিস হয়ে থাকলেও স্লট দিয়ে দেওয়া হয় — নাহলে পুরো স্ট্রোক হারিয়ে যেত।
@@ -773,6 +930,7 @@ class DrawingProvider extends ChangeNotifier {
 
     final clampedPressure = pressure.isNaN || pressure.isInfinite ? 0.5 : pressure.clamp(0.0, 1.0);
     final now = DateTime.now();
+    _recordInputSample();
 
     // Custom Drawing Box gating & boundary clamping
     final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
@@ -813,11 +971,32 @@ class DrawingProvider extends ChangeNotifier {
       calibratedPressure = _smoothPressure(calibratedPressure);
     }
 
+    // 3. Dynamic width calculation per point
+    final dynamicWidth = _brushSettings.baseWidth *
+        (0.25 + calibratedPressure * 0.75 * _brushSettings.pressureSensitivity);
+
+    // 4. Predictive Lead-Point Tracking (Extrapolates 5-8ms forward to eliminate visual scanout latency)
+    if (_currentStroke!.points.isNotEmpty) {
+      final lastPt = _currentStroke!.points.last;
+      final dt = now.difference(lastPt.timestamp).inMicroseconds / 1000000.0;
+      if (dt > 0.001) {
+        final instantVel = (precisionPosition - lastPt.position) / dt;
+        _currentVelocity = _currentVelocity * 0.35 + instantVel * 0.65;
+        if (_enablePrediction && _currentVelocity.distance > 15.0) {
+          const leadSecs = 0.006; // 6 milliseconds ahead
+          _predictedPosition = precisionPosition + _currentVelocity * leadSecs;
+        } else {
+          _predictedPosition = null;
+        }
+      }
+    }
+
     final point = StrokePoint(
       position: precisionPosition,
       pressure: calibratedPressure,
       timestamp: now,
       pointerType: pointerType,
+      width: dynamicWidth,
     );
 
     _currentStroke!.addPoint(point);
@@ -843,12 +1022,6 @@ class DrawingProvider extends ChangeNotifier {
   }
 
   /// টাচ/পেন আপ - স্ট্রোক শেষ
-  ///
-  /// এখানে আগে `if (!_isDrawing || _currentStroke == null) return;` দিয়ে শুরু
-  /// হতো। কিন্তু down টা কোনো কারণে ড্রপ হলে বা মাঝপথে canvas clear হলে
-  /// pointerUp নেটওয়ার্কে যেতই না — PC পাশে MOUSEEVENTF_LEFTUP আসত না, মাউস
-  /// চাপা অবস্থায় আটকে থেকে স্ক্রিনজুড়ে দাগ টানত। তাই এখন যে pointer এর জন্য
-  /// একবার down পাঠানো হয়েছে, তার up সব সময় যায় — স্ট্রোক state যা-ই থাকুক।
   void onPointerUp({
     PointerType pointerType = PointerType.finger,
     int pointerId = 0,
@@ -858,22 +1031,17 @@ class DrawingProvider extends ChangeNotifier {
 
     final slot = _pointerSlots[pointerId];
     final slotPosition = slot == null ? null : _slotLastPosition[slot];
-    // "এই pointer এর down কি সত্যিই ওয়্যারে গিয়েছিল, আর কোন স্লটে?" — অনুমান
-    // নয়, রেকর্ড। আগে এখানে `_drawingPointer == null || _drawingPointer ==
-    // pointerId` হিউরিস্টিক ছিল, কিন্তু উপেক্ষিত তালুর down কখনো যায় না অথচ তার
-    // সময় _drawingPointer null হতে পারত — ফলে তালু তোলামাত্র একটা ভুয়া up যেত
-    // এবং চলতি পেন স্ট্রোকের মাঝখানে PC তে বাটন ছেড়ে দিত।
     final downSlot = _pendingUpSlots.remove(pointerId);
     if (_isPen(_pointerKinds[pointerId] ?? pointerType)) {
       _lastStylusActivity = DateTime.now();
     }
-    // লোকাল স্ট্রোক শেষ করার অধিকার। null-ও ধরা হয়েছে ইচ্ছে করেই — নাহলে
-    // _drawingPointer কোনোভাবে হারালে _isDrawing চিরকাল true থেকে যেত।
     final ownedStroke = _drawingPointer == null || _drawingPointer == pointerId;
-    _releaseSlot(pointerId); // early return এর আগেই স্লট ছাড়া — নাহলে লিক হতো
+    _releaseSlot(pointerId);
 
-    // তালু / দ্বিতীয় আঙুল উঠল: এর down কখনো পাঠানো হয়নি, তাই up-ও পাঠানো যাবে
-    // না — পাঠালে চলতি পেন স্ট্রোকের মাঝখানে PC তে বাটন ছেড়ে দিত।
+    // Clear prediction & velocity
+    _predictedPosition = null;
+    _currentVelocity = Offset.zero;
+
     if (downSlot == null) return;
 
     final now = DateTime.now();
@@ -888,11 +1056,14 @@ class DrawingProvider extends ChangeNotifier {
 
       // Add final point using upPosition if available to ensure stroke completeness
       if (upPosition != null && _currentStroke!.points.isNotEmpty) {
+        final dynamicWidth = _brushSettings.baseWidth *
+            (0.25 + _lastPressure * 0.75 * _brushSettings.pressureSensitivity);
         final lastPoint = StrokePoint(
           position: upPosition,
           pressure: _lastPressure,
           timestamp: now,
           pointerType: pointerType,
+          width: dynamicWidth,
         );
         _currentStroke!.addPoint(lastPoint);
       }
@@ -909,9 +1080,6 @@ class DrawingProvider extends ChangeNotifier {
       _resetSmoothingBuffers();
     }
 
-    // ইনপুট ইভেন্ট পাঠানো — এই pointer এর down গেছে মানে up-ও যেতেই হবে,
-    // নাহলে PC তে বাটন চাপা থেকে যায়। down যে স্লটে গিয়েছিল সেই স্লটেই যায়,
-    // স্লটটা মাঝপথে অন্য pointer এর কাছে চলে গেলেও।
     _emitInputEvent(
       InputEventType.pointerUp, upPosition ?? Offset.zero, 0.0, pointerType, downSlot, now,
       buttons: buttons,
@@ -937,6 +1105,9 @@ class DrawingProvider extends ChangeNotifier {
       return;
     }
 
+    final dynamicWidth = _brushSettings.baseWidth *
+        (0.25 + event.pressure * 0.75 * _brushSettings.pressureSensitivity);
+
     if (event.type == InputEventType.pointerDown) {
       _isDrawing = true;
       _resetSmoothingBuffers();
@@ -945,6 +1116,7 @@ class DrawingProvider extends ChangeNotifier {
         pressure: event.pressure,
         timestamp: event.timestamp,
         pointerType: event.pointerType,
+        width: dynamicWidth,
       );
       _currentStroke = Stroke(settings: _brushSettings, startTime: event.timestamp);
       _currentStroke!.addPoint(point);
@@ -964,6 +1136,7 @@ class DrawingProvider extends ChangeNotifier {
         pressure: event.pressure,
         timestamp: event.timestamp,
         pointerType: event.pointerType,
+        width: dynamicWidth,
       );
       _currentStroke!.addPoint(point);
       _lastPosition = pos;

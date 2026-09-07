@@ -853,6 +853,15 @@ class _ActionButtons extends StatelessWidget {
                           Navigator.pop(ctx);
                         },
                       ),
+                      _buildPressureChip(
+                        label: 'S-Curve (Sigmoid Pro Smoothstep)',
+                        curve: PressureCurve.sCurve,
+                        current: pressureCurve,
+                        onTap: () {
+                          onPressureCurveChanged?.call(PressureCurve.sCurve);
+                          Navigator.pop(ctx);
+                        },
+                      ),
                     ],
                   ),
                 ],

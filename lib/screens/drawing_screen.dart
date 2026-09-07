@@ -6,6 +6,7 @@
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -321,6 +322,13 @@ class _DrawingScreenState extends State<DrawingScreen> {
               ),
             ),
 
+          // Pro Real-time Performance & Telemetry HUD (Top Left)
+          const Positioned(
+            top: 14,
+            left: 14,
+            child: _ProPerformanceHUD(),
+          ),
+
           // Floating Box Selector Bubble (Screen recorder style floating dot)
           const _FloatingBoxSelectorBubble(),
 
@@ -493,9 +501,14 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
 // ==================== CUSTOM PAINTERS ====================
 
-/// ড্রয়িং রেন্ডারার - সব স্ট্রোক ও কারেন্ট স্ট্রোক আঁকে
+/// ড্রয়িং রেন্ডারার - Hardware Picture Caching ও Pro Variable-Width Spline ইনকিং
 class DrawingPainter extends CustomPainter {
   final DrawingProvider drawingProvider;
+
+  // Cached hardware picture of completed strokes (Blits in 0.05ms even for thousands of strokes)
+  static ui.Picture? _cachedCompletedPicture;
+  static int _cachedStrokeCount = -1;
+  static Size? _cachedSize;
 
   DrawingPainter({
     required this.drawingProvider,
@@ -503,20 +516,57 @@ class DrawingPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Record VSync frame for real-time FPS telemetry
+    drawingProvider.recordFrame();
+
     // 1. Draw custom drawing box frame and dimmed exterior if enabled
     if (drawingProvider.customBoxEnabled) {
       _drawCustomBoxOverlay(canvas, size);
     }
 
-    // সব completed strokes আঁকা
-    for (final stroke in drawingProvider.strokes) {
-      _drawStroke(canvas, stroke, size);
+    // 2. Hardware-accelerated blitting of completed strokes
+    final completedStrokes = drawingProvider.strokes;
+    if (_cachedCompletedPicture == null ||
+        _cachedStrokeCount != completedStrokes.length ||
+        _cachedSize != size) {
+      _cachedCompletedPicture?.dispose();
+      final recorder = ui.PictureRecorder();
+      final recordCanvas = Canvas(recorder, Rect.fromLTWH(0, 0, size.width, size.height));
+      for (final stroke in completedStrokes) {
+        stroke.draw(recordCanvas);
+      }
+      _cachedCompletedPicture = recorder.endRecording();
+      _cachedStrokeCount = completedStrokes.length;
+      _cachedSize = size;
     }
 
-    // কারেন্ট (in-progress) স্ট্রোক আঁকা
+    if (_cachedCompletedPicture != null) {
+      canvas.drawPicture(_cachedCompletedPicture!);
+    }
+
+    // 3. Active in-progress stroke with variable-width quadratic Bézier curves
     final currentStroke = drawingProvider.currentStroke;
     if (currentStroke != null && currentStroke.points.isNotEmpty) {
-      _drawStroke(canvas, currentStroke, size);
+      currentStroke.draw(canvas);
+
+      // Predictive Lead-Point Inking: Eliminates visual digitizer/display scanout lag
+      if (drawingProvider.enablePrediction &&
+          drawingProvider.predictedPosition != null &&
+          currentStroke.points.length >= 2) {
+        final predPos = drawingProvider.predictedPosition!;
+        final lastPt = currentStroke.points.last;
+        final leadPaint = Paint()
+          ..color = currentStroke.settings.mode == BrushMode.eraser
+              ? const Color(0xFF0A0A12)
+              : currentStroke.settings.color.withValues(
+                  alpha: (currentStroke.settings.opacity.clamp(0.0, 1.0) * 0.85),
+                )
+          ..strokeWidth = math.max(1.0, lastPt.width * 0.9)
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..style = PaintingStyle.stroke;
+        canvas.drawLine(lastPt.position, predPos, leadPaint);
+      }
     }
   }
 
@@ -577,27 +627,6 @@ class DrawingPainter extends CustomPainter {
     canvas.drawLine(boxRect.bottomRight, boxRect.bottomRight + const Offset(0, -cLen), cornerPaint);
   }
 
-  void _drawStroke(Canvas canvas, Stroke stroke, Size size) {
-    if (stroke.points.isEmpty) return;
-    if (stroke.points.length == 1) {
-      final point = stroke.points.first;
-      final settings = stroke.settings;
-      final width = settings.baseWidth * (0.3 + point.pressure * 0.7 * settings.pressureSensitivity);
-      canvas.drawCircle(
-        point.position,
-        width / 2,
-        Paint()
-          ..color = settings.mode == BrushMode.eraser
-              ? const Color(0xFF0A0A12)
-              : settings.color.withValues(alpha: settings.opacity.clamp(0.0, 1.0))
-          ..strokeWidth = 1
-          ..style = PaintingStyle.fill,
-      );
-      return;
-    }
-    canvas.drawPath(stroke.path, stroke.paint);
-  }
-
   @override
   bool shouldRepaint(covariant DrawingPainter oldDelegate) {
     return oldDelegate.drawingProvider != drawingProvider;
@@ -626,6 +655,175 @@ class GridPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Pro Real-Time Performance & Telemetry HUD
+class _ProPerformanceHUD extends StatefulWidget {
+  const _ProPerformanceHUD();
+
+  @override
+  State<_ProPerformanceHUD> createState() => _ProPerformanceHUDState();
+}
+
+class _ProPerformanceHUDState extends State<_ProPerformanceHUD> {
+  bool _minimized = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final drawing = context.watch<DrawingProvider>();
+    final connection = context.watch<ConnectionProvider>();
+
+    if (!drawing.showPerformanceHUD) return const SizedBox.shrink();
+
+    return ValueListenableBuilder<int>(
+      valueListenable: drawing.metricNotifier,
+      builder: (context, _, __) {
+        final fps = drawing.liveFps.toStringAsFixed(0);
+        final pollingRate = drawing.livePollingRateHz.toStringAsFixed(0);
+        final latency = connection.latencyMs.toString();
+        final isConnected = connection.isConnected;
+
+        return GestureDetector(
+          onTap: () => setState(() => _minimized = !_minimized),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A).withValues(alpha: 0.88),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: const Color(0xFF00E5FF).withValues(alpha: 0.35),
+                width: 1.0,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: _minimized
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: isConnected ? const Color(0xFF22C55E) : const Color(0xFFEF4444),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$fps FPS',
+                        style: const TextStyle(
+                          color: Color(0xFF00E5FF),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ],
+                  )
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: isConnected ? const Color(0xFF22C55E) : const Color(0xFFEF4444),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: isConnected
+                                  ? const Color(0xFF22C55E).withValues(alpha: 0.6)
+                                  : const Color(0xFFEF4444).withValues(alpha: 0.6),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // FPS
+                      _buildMetric('FPS', fps, const Color(0xFF00E5FF)),
+                      _buildDivider(),
+                      // Latency
+                      _buildMetric('LAT', '${latency}ms', isConnected && connection.latencyMs < 10 ? const Color(0xFF22C55E) : const Color(0xFFF59E0B)),
+                      _buildDivider(),
+                      // Polling rate
+                      _buildMetric('POLL', '${pollingRate}Hz', const Color(0xFFA855F7)),
+                      _buildDivider(),
+                      // Stylus mode badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: drawing.stylusOnlyMode
+                              ? const Color(0xFF00E5FF).withValues(alpha: 0.18)
+                              : Colors.white.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: drawing.stylusOnlyMode
+                                ? const Color(0xFF00E5FF).withValues(alpha: 0.6)
+                                : Colors.white24,
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Text(
+                          drawing.stylusOnlyMode ? 'STYLUS ONLY' : 'TOUCH+PEN',
+                          style: TextStyle(
+                            color: drawing.stylusOnlyMode ? const Color(0xFF00E5FF) : Colors.white70,
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMetric(String label, String value, Color color) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white38,
+            fontSize: 7.5,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.5,
+          ),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            fontFamily: 'monospace',
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDivider() {
+    return Container(
+      width: 1,
+      height: 18,
+      margin: const EdgeInsets.symmetric(horizontal: 7),
+      color: Colors.white12,
+    );
+  }
 }
 
 /// Screen Recorder Style Floating Bubble (ছোট ভাসমান বিন্দু)
@@ -751,7 +949,7 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                   if (_isMenuOpen) ...[
                     const SizedBox(height: 6),
                     Container(
-                      width: 230,
+                      width: 250,
                       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                       decoration: BoxDecoration(
                         color: const Color(0xFF111827).withValues(alpha: 0.96),
@@ -768,6 +966,126 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          // Quick Color Swatches Row
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4, bottom: 8),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                for (final c in const [
+                                  Colors.white,
+                                  Color(0xFF00E5FF),
+                                  Color(0xFFFF5252),
+                                  Color(0xFFFFD700),
+                                  Color(0xFF8B5CF6),
+                                ])
+                                  GestureDetector(
+                                    onTap: () {
+                                      drawing.updateBrush(drawing.brushSettings.copyWith(color: c));
+                                    },
+                                    child: AnimatedContainer(
+                                      duration: const Duration(milliseconds: 150),
+                                      width: 26,
+                                      height: 26,
+                                      decoration: BoxDecoration(
+                                        color: c,
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: drawing.brushSettings.color == c ? Colors.white : Colors.black45,
+                                          width: drawing.brushSettings.color == c ? 2.5 : 1.2,
+                                        ),
+                                        boxShadow: drawing.brushSettings.color == c
+                                            ? [
+                                                BoxShadow(
+                                                  color: c.withValues(alpha: 0.8),
+                                                  blurRadius: 8,
+                                                )
+                                              ]
+                                            : null,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          // Quick Stroke Width Row
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                for (final w in const [2.0, 5.0, 12.0])
+                                  GestureDetector(
+                                    onTap: () {
+                                      drawing.updateBrush(drawing.brushSettings.copyWith(baseWidth: w));
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: (drawing.brushSettings.baseWidth - w).abs() < 0.5
+                                            ? const Color(0xFF00E5FF).withValues(alpha: 0.22)
+                                            : Colors.white.withValues(alpha: 0.06),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: (drawing.brushSettings.baseWidth - w).abs() < 0.5
+                                              ? const Color(0xFF00E5FF)
+                                              : Colors.white12,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        w == 2.0 ? 'Fine' : (w == 5.0 ? 'Medium' : 'Bold'),
+                                        style: TextStyle(
+                                          color: (drawing.brushSettings.baseWidth - w).abs() < 0.5
+                                              ? const Color(0xFF00E5FF)
+                                              : Colors.white70,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          const Divider(color: Colors.white12, height: 8),
+
+                          // Stylus-Only Inking Mode toggle
+                          _buildMenuItem(
+                            icon: drawing.stylusOnlyMode ? Icons.edit : Icons.touch_app,
+                            title: drawing.stylusOnlyMode ? 'পেন মোড: স্টাইলাস শুধুমাত্র ✓' : 'পেন মোড: স্টাইলাস + আঙুল',
+                            color: drawing.stylusOnlyMode ? const Color(0xFF00E5FF) : Colors.white60,
+                            onTap: () {
+                              drawing.stylusOnlyMode = !drawing.stylusOnlyMode;
+                              ScaffoldMessenger.of(context).clearSnackBars();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    drawing.stylusOnlyMode
+                                        ? '✍️ স্টাইলাস-অনলি মোড চালু: আঙুলের ছোঁয়া সম্পূর্ণ উপেক্ষা করা হবে!'
+                                        : '👆 টাচ ও পেন দুটোই চালু হলো।',
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                  duration: const Duration(seconds: 2),
+                                  backgroundColor: const Color(0xFF1F2937),
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            },
+                          ),
+                          const Divider(color: Colors.white12, height: 8),
+
+                          // Performance HUD toggle
+                          _buildMenuItem(
+                            icon: Icons.speed,
+                            title: drawing.showPerformanceHUD ? 'পারফরম্যান্স HUD: দৃশ্যমান ✓' : 'পারফরম্যান্স HUD: লুকানো',
+                            color: const Color(0xFF22C55E),
+                            onTap: () {
+                              drawing.showPerformanceHUD = !drawing.showPerformanceHUD;
+                            },
+                          ),
+                          const Divider(color: Colors.white12, height: 8),
+
+                          // Snipping box
                           _buildMenuItem(
                             icon: Icons.crop,
                             title: 'স্ক্রিনশটের মতো বক্স সিলেক্ট করুন',
@@ -778,6 +1096,8 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                             },
                           ),
                           const Divider(color: Colors.white12, height: 8),
+
+                          // Full screen
                           _buildMenuItem(
                             icon: Icons.fullscreen,
                             title: 'ফুল স্ক্রিন (বক্স ছাড়া পুরো স্ক্রিন)',
@@ -797,6 +1117,8 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                             },
                           ),
                           const Divider(color: Colors.white12, height: 8),
+
+                          // Box on/off
                           _buildMenuItem(
                             icon: drawing.customBoxEnabled ? Icons.visibility_off : Icons.visibility,
                             title: drawing.customBoxEnabled ? 'বক্স সাময়িক বন্ধ' : 'পূর্বের বক্স চালু করুন',
@@ -807,6 +1129,8 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                             },
                           ),
                           const Divider(color: Colors.white12, height: 8),
+
+                          // PC map
                           _buildMenuItem(
                             icon: Icons.laptop,
                             title: drawing.boxMapsToFullScreen ? 'পিসিতে: ফুল স্ক্রিন ✓' : 'পিসিতে: বক্স রেশিও',

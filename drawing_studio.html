@@ -439,6 +439,7 @@
 
     <!-- HUD -->
     <div class="hud">
+      <div class="hud-item">FPS: <span class="hud-val" id="hudFps" style="color:#00e5ff;font-family:monospace;font-weight:700;">60</span></div>
       <div class="hud-item">Mode: <span class="hud-val" id="hudMode">Pen</span></div>
       <div class="hud-item">Pressure: <span class="hud-val" id="hudPressure">50%</span></div>
       <div class="hud-item">Page: <span class="hud-val" id="hudPage">1/1</span></div>
@@ -603,9 +604,23 @@ const addPageBtn = document.getElementById('addPageBtn');
 const toolbar = document.getElementById('toolbar');
 
 // HUD
+const hudFps = document.getElementById('hudFps');
 const hudMode = document.getElementById('hudMode');
 const hudPressure = document.getElementById('hudPressure');
 const hudPage = document.getElementById('hudPage');
+
+// Real-Time Frame Telemetry
+let fpsCount = 0, lastFpsTime = performance.now();
+function fpsTicker(now) {
+  fpsCount++;
+  if (now - lastFpsTime >= 500) {
+    if (hudFps) hudFps.textContent = Math.round((fpsCount * 1000) / (now - lastFpsTime));
+    fpsCount = 0;
+    lastFpsTime = now;
+  }
+  requestAnimationFrame(fpsTicker);
+}
+requestAnimationFrame(fpsTicker);
 
 // Controls
 const brushSizeInput = document.getElementById('brushSize');
