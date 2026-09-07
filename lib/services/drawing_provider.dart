@@ -281,6 +281,7 @@ class DrawingProvider extends ChangeNotifier {
   bool _customBoxEnabled = false;
   Rect _customBoxNormalized = Rect.fromLTRB(0.12, 0.12, 0.88, 0.88);
   bool _isEditingCustomBox = false;
+  bool _isSnippingBox = false;
   bool _boxMapsToFullScreen = true;
 
   bool get customBoxEnabled => _customBoxEnabled;
@@ -291,12 +292,28 @@ class DrawingProvider extends ChangeNotifier {
     }
   }
 
+  bool get isSnippingBox => _isSnippingBox;
+  set isSnippingBox(bool val) {
+    if (_isSnippingBox != val) {
+      _isSnippingBox = val;
+      notifyListeners();
+    }
+  }
+
+  void resetToFullScreen() {
+    _customBoxEnabled = false;
+    _isSnippingBox = false;
+    _isEditingCustomBox = false;
+    _customBoxNormalized = const Rect.fromLTRB(0.0, 0.0, 1.0, 1.0);
+    notifyListeners();
+  }
+
   Rect get customBoxNormalized => _customBoxNormalized;
   void setCustomBoxNormalized(Rect rect) {
-    final l = rect.left.clamp(0.0, 0.85);
-    final t = rect.top.clamp(0.0, 0.85);
-    final r = rect.right.clamp(l + 0.10, 1.0);
-    final b = rect.bottom.clamp(t + 0.10, 1.0);
+    final l = math.min(rect.left, rect.right).clamp(0.0, 0.95);
+    final t = math.min(rect.top, rect.bottom).clamp(0.0, 0.95);
+    final r = math.max(rect.left, rect.right).clamp(l + 0.05, 1.0);
+    final b = math.max(rect.top, rect.bottom).clamp(t + 0.05, 1.0);
     _customBoxNormalized = Rect.fromLTRB(l, t, r, b);
     notifyListeners();
   }
@@ -671,7 +688,7 @@ class DrawingProvider extends ChangeNotifier {
     int buttons = 0,
   }) {
     if (pointerId < 0) return; // Defensive pointerId check
-    if (_isEditingCustomBox) return; // Don't draw while adjusting the custom box
+    if (_isSnippingBox || _isEditingCustomBox) return; // Don't draw while snipping or editing box
 
     final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
     final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
@@ -743,7 +760,7 @@ class DrawingProvider extends ChangeNotifier {
   }) {
     if (!_isDrawing || _currentStroke == null) return;
     if (pointerId < 0) return; // Defensive pointerId check
-    if (_isEditingCustomBox) return; // Ignore drawing while editing box
+    if (_isSnippingBox || _isEditingCustomBox) return; // Ignore drawing while snipping or editing box
 
     // তালু / দ্বিতীয় আঙুলের move উপেক্ষা — কার্সর একটাই।
     if (_drawingPointer != null && _drawingPointer != pointerId) return;
@@ -775,7 +792,7 @@ class DrawingProvider extends ChangeNotifier {
     // Sub-pixel anti-jitter: suppress micro-tremor when holding steady
     if (_lastPosition != null) {
       final dist = (boundedPosition - _lastPosition!).distance;
-      if (dist < 0.35) {
+      if (dist < 0.18) {
         return; // Suppress sub-pixel sensor jitter
       }
     }

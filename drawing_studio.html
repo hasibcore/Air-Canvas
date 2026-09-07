@@ -298,6 +298,91 @@
       white-space: nowrap;
     }
 
+    /* Floating Draggable Screen Recorder Dot */
+    .floating-box-bubble {
+      position: absolute; top: 70px; right: 20px;
+      width: 44px; height: 44px; border-radius: 50%;
+      background: rgba(15, 23, 42, 0.88);
+      backdrop-filter: blur(16px);
+      border: 1.8px solid var(--c);
+      box-shadow: 0 0 16px rgba(0, 229, 255, 0.35);
+      cursor: grab; z-index: 60;
+      display: flex; align-items: center; justify-content: center;
+      transition: transform 0.15s, border-color 0.2s, box-shadow 0.2s;
+      user-select: none; touch-action: none;
+    }
+    .floating-box-bubble:active { cursor: grabbing; transform: scale(0.94); }
+    .floating-box-bubble .bubble-icon { font-size: 1.15rem; pointer-events: none; }
+    .floating-box-bubble .bubble-dot {
+      position: absolute; top: 3px; right: 3px;
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--success);
+      border: 1.5px solid var(--bg);
+      box-shadow: 0 0 6px var(--success);
+    }
+    .floating-box-bubble.active-box .bubble-dot {
+      background: var(--c); box-shadow: 0 0 8px var(--c);
+    }
+
+    /* Floating Bubble Popup Menu */
+    .bubble-popup-menu {
+      position: absolute; top: 120px; right: 20px;
+      width: 230px; background: rgba(11, 19, 34, 0.96);
+      backdrop-filter: blur(20px);
+      border: 1.2px solid var(--border-active);
+      border-radius: 14px; padding: 6px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.7);
+      z-index: 65; display: none; flex-direction: column; gap: 4px;
+    }
+    .bubble-popup-menu.show { display: flex; }
+    .bubble-menu-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; border-radius: 8px;
+      font-size: 0.78rem; font-weight: 600; color: #fff;
+      cursor: pointer; transition: all 0.15s; background: transparent;
+      border: none; text-align: left; width: 100%;
+    }
+    .bubble-menu-item:hover {
+      background: rgba(0, 229, 255, 0.12); color: var(--c);
+    }
+
+    /* Laptop Screenshot Snipping Overlay */
+    .snipping-overlay {
+      position: absolute; inset: 0;
+      background: rgba(0, 0, 0, 0.52);
+      cursor: crosshair; z-index: 70;
+      display: none; touch-action: none;
+    }
+    .snipping-overlay.active { display: block; }
+    .snip-box {
+      position: absolute;
+      border: 2px dashed var(--c);
+      background: rgba(0, 229, 255, 0.08);
+      box-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
+      pointer-events: none; display: none;
+    }
+    .snip-badge {
+      position: absolute; top: -28px; left: 0;
+      background: var(--bg2); color: var(--c);
+      padding: 3px 10px; border-radius: 6px;
+      border: 1px solid var(--border-active);
+      font-size: 0.72rem; font-weight: 700;
+      letter-spacing: 0.03em; white-space: nowrap; pointer-events: none;
+    }
+    .snip-ch-x, .snip-ch-y {
+      position: absolute; pointer-events: none;
+      background: rgba(0, 229, 255, 0.4);
+    }
+    .snip-ch-x { height: 1px; left: 0; right: 0; }
+    .snip-ch-y { width: 1px; top: 0; bottom: 0; }
+    .snip-hint {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(12px);
+      border: 1px solid var(--border-active); border-radius: 30px;
+      padding: 6px 18px; color: #fff; font-size: 0.82rem; font-weight: 600;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5); pointer-events: none;
+    }
+
     /* ========== RESPONSIVE ========== */
     @media (max-width: 768px) {
       .toolbar { padding: 8px 12px; gap: 8px; border-radius: 16px; bottom: 12px; }
@@ -327,6 +412,29 @@
     <div class="image-layer" id="imageLayer"></div>
     <div class="custom-box-overlay" id="customBoxOverlay">
       <div class="custom-box-badge" id="customBoxBadge">Active Box: 75%</div>
+    </div>
+
+    <!-- Floating Screen Recorder Style Dot -->
+    <div class="floating-box-bubble" id="floatingBubble" title="Screen Area & Box Controls">
+      <span class="bubble-icon">✂️</span>
+      <span class="bubble-dot"></span>
+    </div>
+
+    <!-- Bubble Quick Menu -->
+    <div class="bubble-popup-menu" id="bubbleMenu">
+      <button class="bubble-menu-item" id="menuSnipBtn">✂️ ড্র্যাগ করে বক্স সিলেক্ট (SS Style)</button>
+      <button class="bubble-menu-item" id="menuFullBtn">🖥️ ফুল স্ক্রিন মোড (Reset Box)</button>
+      <button class="bubble-menu-item" id="menuToggleBtn">👁️ বক্স অন / অফ টগল</button>
+    </div>
+
+    <!-- Laptop Screenshot Style Snipping Overlay -->
+    <div class="snipping-overlay" id="snippingOverlay">
+      <div class="snip-hint">✂️ ড্র্যাগ করে ড্রয়িং এরিয়া বক্স নির্ধারণ করুন (Esc চাপলে বাতিল)</div>
+      <div class="snip-ch-x" id="snipChX"></div>
+      <div class="snip-ch-y" id="snipChY"></div>
+      <div class="snip-box" id="snipBox">
+        <div class="snip-badge" id="snipBadge">0 × 0 px</div>
+      </div>
     </div>
 
     <!-- HUD -->
@@ -519,8 +627,12 @@ const customBoxOverlay = document.getElementById('customBoxOverlay');
 const customBoxBadge = document.getElementById('customBoxBadge');
 const customColorInput = document.getElementById('customColor');
 
+// Custom Box State
+let customBoxActive = false;
+let customBoxBounds = { name: 'Custom Selection', l: 0.125, t: 0.125, r: 0.875, b: 0.875 };
+
 // Custom Box Presets
-let customBoxIndex = 0; // 0: Off, 1: Center 75%, 2: Center 50%, 3: Top Half, 4: Bottom Half, 5: Left Half, 6: Right Half
+let customBoxIndex = 0; // 0: Off, 1: Center 75%, 2: Center 50%, 3: Top Half, 4: Bottom Half, 5: Left Half, 6: Right Half, 7: Custom Snip
 const customBoxPresets = [
   { name: 'Off', l: 0.0, t: 0.0, r: 1.0, b: 1.0 },
   { name: 'Center 75%', l: 0.125, t: 0.125, r: 0.875, b: 0.875 },
@@ -531,31 +643,242 @@ const customBoxPresets = [
   { name: 'Right Half', l: 0.50, t: 0.05, r: 0.95, b: 0.95 },
 ];
 
+function getEffectiveCustomBox() {
+  if (!customBoxActive || customBoxIndex === 0) return null;
+  return (customBoxIndex === 7) ? customBoxBounds : customBoxPresets[customBoxIndex];
+}
+
 function updateCustomBoxUI() {
-  const p = customBoxPresets[customBoxIndex];
-  if (customBoxIndex === 0) {
+  const floatingBubble = document.getElementById('floatingBubble');
+  if (!customBoxActive || customBoxIndex === 0) {
+    customBoxActive = false;
+    customBoxIndex = 0;
     customBoxBtn.classList.remove('active');
     customBoxBtn.innerHTML = '<span class="icon">⛶</span> Box: Off';
     customBoxOverlay.classList.remove('active');
+    if (floatingBubble) floatingBubble.classList.remove('active-box');
   } else {
+    customBoxActive = true;
+    const p = getEffectiveCustomBox();
     customBoxBtn.classList.add('active');
-    customBoxBtn.innerHTML = `<span class="icon">⛶</span> ${p.name}`;
+    customBoxBtn.innerHTML = `<span class="icon">✂️</span> ${p.name}`;
     customBoxOverlay.classList.add('active');
-    customBoxBadge.textContent = `Active Box: ${p.name}`;
     const area = document.getElementById('canvasArea');
     const w = area.clientWidth;
     const h = area.clientHeight;
+    const boxW = Math.round((p.r - p.l) * w);
+    const boxH = Math.round((p.b - p.t) * h);
+    customBoxBadge.textContent = `${p.name} (${boxW} × ${boxH}px)`;
     customBoxOverlay.style.left = (p.l * w) + 'px';
     customBoxOverlay.style.top = (p.t * h) + 'px';
-    customBoxOverlay.style.width = ((p.r - p.l) * w) + 'px';
-    customBoxOverlay.style.height = ((p.b - p.t) * h) + 'px';
+    customBoxOverlay.style.width = boxW + 'px';
+    customBoxOverlay.style.height = boxH + 'px';
+    if (floatingBubble) floatingBubble.classList.add('active-box');
   }
 }
 
 customBoxBtn.addEventListener('click', () => {
-  customBoxIndex = (customBoxIndex + 1) % customBoxPresets.length;
+  if (customBoxIndex === 7) {
+    customBoxIndex = 0;
+    customBoxActive = false;
+  } else {
+    customBoxIndex = (customBoxIndex + 1) % customBoxPresets.length;
+    customBoxActive = customBoxIndex > 0;
+  }
   updateCustomBoxUI();
   showToast(customBoxIndex === 0 ? 'Custom Box: Full Screen' : `Custom Box: ${customBoxPresets[customBoxIndex].name}`);
+});
+
+// --- Floating Screen Recorder Bubble Dot & Laptop SS Snipping Tool ---
+const floatingBubble = document.getElementById('floatingBubble');
+const bubbleMenu = document.getElementById('bubbleMenu');
+const menuSnipBtn = document.getElementById('menuSnipBtn');
+const menuFullBtn = document.getElementById('menuFullBtn');
+const menuToggleBtn = document.getElementById('menuToggleBtn');
+
+const snippingOverlay = document.getElementById('snippingOverlay');
+const snipChX = document.getElementById('snipChX');
+const snipChY = document.getElementById('snipChY');
+const snipBox = document.getElementById('snipBox');
+const snipBadge = document.getElementById('snipBadge');
+
+let isSnippingMode = false;
+let isSnipDragging = false;
+let snipStartX = 0, snipStartY = 0;
+
+function startSnipping() {
+  bubbleMenu.classList.remove('show');
+  isSnippingMode = true;
+  isSnipDragging = false;
+  snipBox.style.display = 'none';
+  snippingOverlay.classList.add('active');
+  showToast('✂️ স্ক্রিনের উপর ড্র্যাগ করে বক্স সিলেক্ট করুন');
+}
+
+function cancelSnipping() {
+  isSnippingMode = false;
+  isSnipDragging = false;
+  snippingOverlay.classList.remove('active');
+  snipBox.style.display = 'none';
+}
+
+menuSnipBtn.addEventListener('click', startSnipping);
+
+menuFullBtn.addEventListener('click', () => {
+  bubbleMenu.classList.remove('show');
+  customBoxActive = false;
+  customBoxIndex = 0;
+  updateCustomBoxUI();
+  showToast('🖥️ ফুল স্ক্রিন মোড চালু (পুরো স্ক্রিন ড্রয়িং)');
+});
+
+menuToggleBtn.addEventListener('click', () => {
+  bubbleMenu.classList.remove('show');
+  if (customBoxActive) {
+    customBoxActive = false;
+    updateCustomBoxUI();
+    showToast('👁️ কাস্টম বক্স বন্ধ (ফুল স্ক্রিন)');
+  } else {
+    customBoxActive = true;
+    if (customBoxIndex === 0) customBoxIndex = 1;
+    updateCustomBoxUI();
+    showToast('👁️ কাস্টম বক্স চালু');
+  }
+});
+
+// Bubble Draggable & Tap
+let bubbleDrag = false;
+let bubbleStartPtrX = 0, bubbleStartPtrY = 0;
+let bubbleStartLeft = 0, bubbleStartTop = 0;
+let bubbleMoved = false;
+
+floatingBubble.addEventListener('pointerdown', (e) => {
+  bubbleDrag = true;
+  bubbleMoved = false;
+  bubbleStartPtrX = e.clientX;
+  bubbleStartPtrY = e.clientY;
+  bubbleStartLeft = floatingBubble.offsetLeft;
+  bubbleStartTop = floatingBubble.offsetTop;
+  floatingBubble.setPointerCapture(e.pointerId);
+});
+
+floatingBubble.addEventListener('pointermove', (e) => {
+  if (!bubbleDrag) return;
+  const dx = e.clientX - bubbleStartPtrX;
+  const dy = e.clientY - bubbleStartPtrY;
+  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) bubbleMoved = true;
+  if (bubbleMoved) {
+    const area = document.getElementById('canvasArea');
+    const maxX = area.clientWidth - 50;
+    const maxY = area.clientHeight - 50;
+    const newX = Math.max(10, Math.min(maxX, bubbleStartLeft + dx));
+    const newY = Math.max(10, Math.min(maxY, bubbleStartTop + dy));
+    floatingBubble.style.left = newX + 'px';
+    floatingBubble.style.top = newY + 'px';
+    floatingBubble.style.right = 'auto';
+
+    // Position bubble menu next to bubble
+    bubbleMenu.style.left = Math.max(10, Math.min(area.clientWidth - 240, newX - 180)) + 'px';
+    bubbleMenu.style.top = (newY + 52) + 'px';
+    bubbleMenu.style.right = 'auto';
+  }
+});
+
+floatingBubble.addEventListener('pointerup', (e) => {
+  bubbleDrag = false;
+  if (!bubbleMoved) {
+    // Tap -> Toggle menu
+    const isShow = bubbleMenu.classList.toggle('show');
+    if (isShow) {
+      const area = document.getElementById('canvasArea');
+      const bLeft = floatingBubble.offsetLeft;
+      const bTop = floatingBubble.offsetTop;
+      bubbleMenu.style.left = Math.max(10, Math.min(area.clientWidth - 240, bLeft - 180)) + 'px';
+      bubbleMenu.style.top = (bTop + 52) + 'px';
+      bubbleMenu.style.right = 'auto';
+    }
+  }
+});
+
+// Close bubble menu when clicking canvas
+canvas.addEventListener('pointerdown', () => {
+  bubbleMenu.classList.remove('show');
+});
+
+// Snipping Overlay Events (Laptop SS drag-to-select)
+snippingOverlay.addEventListener('pointerdown', (e) => {
+  const rect = snippingOverlay.getBoundingClientRect();
+  snipStartX = e.clientX - rect.left;
+  snipStartY = e.clientY - rect.top;
+  isSnipDragging = true;
+  snipBox.style.display = 'block';
+  snipBox.style.left = snipStartX + 'px';
+  snipBox.style.top = snipStartY + 'px';
+  snipBox.style.width = '0px';
+  snipBox.style.height = '0px';
+  snipBadge.textContent = '0 × 0 px';
+  snippingOverlay.setPointerCapture(e.pointerId);
+});
+
+snippingOverlay.addEventListener('pointermove', (e) => {
+  const rect = snippingOverlay.getBoundingClientRect();
+  const curX = e.clientX - rect.left;
+  const curY = e.clientY - rect.top;
+
+  // Crosshairs follow pointer
+  snipChX.style.top = curY + 'px';
+  snipChY.style.left = curX + 'px';
+
+  if (!isSnipDragging) return;
+
+  const minX = Math.min(snipStartX, curX);
+  const maxX = Math.max(snipStartX, curX);
+  const minY = Math.min(snipStartY, curY);
+  const maxY = Math.max(snipStartY, curY);
+  const w = Math.round(maxX - minX);
+  const h = Math.round(maxY - minY);
+
+  snipBox.style.left = minX + 'px';
+  snipBox.style.top = minY + 'px';
+  snipBox.style.width = w + 'px';
+  snipBox.style.height = h + 'px';
+  snipBadge.textContent = `${w} × ${h} px`;
+});
+
+snippingOverlay.addEventListener('pointerup', (e) => {
+  if (!isSnipDragging) {
+    cancelSnipping();
+    return;
+  }
+  isSnipDragging = false;
+  const rect = snippingOverlay.getBoundingClientRect();
+  const curX = e.clientX - rect.left;
+  const curY = e.clientY - rect.top;
+
+  const minX = Math.min(snipStartX, curX);
+  const maxX = Math.max(snipStartX, curX);
+  const minY = Math.min(snipStartY, curY);
+  const maxY = Math.max(snipStartY, curY);
+  const w = maxX - minX;
+  const h = maxY - minY;
+
+  cancelSnipping();
+
+  if (w > 20 && h > 20) {
+    const areaW = rect.width;
+    const areaH = rect.height;
+    customBoxBounds = {
+      name: 'Custom Area',
+      l: Math.max(0.0, minX / areaW),
+      t: Math.max(0.0, minY / areaH),
+      r: Math.min(1.0, maxX / areaW),
+      b: Math.min(1.0, maxY / areaH),
+    };
+    customBoxIndex = 7;
+    customBoxActive = true;
+    updateCustomBoxUI();
+    showToast(`✂️ কাস্টম বক্স সেট হয়েছে (${Math.round(w)} × ${Math.round(h)} px)`);
+  }
 });
 
 // Insert panel
@@ -713,9 +1036,10 @@ function renderPageTabs() {
 let lastMidX = 0, lastMidY = 0;
 
 function startStroke(x, y, pressure) {
+  if (isSnippingMode) return;
   // Custom Box Gating: ignore strokes originating outside designated active area
-  if (customBoxIndex > 0) {
-    const p = customBoxPresets[customBoxIndex];
+  const p = getEffectiveCustomBox();
+  if (p) {
     const area = document.getElementById('canvasArea');
     const minX = p.l * area.clientWidth;
     const maxX = p.r * area.clientWidth;
@@ -740,11 +1064,11 @@ function startStroke(x, y, pressure) {
 }
 
 function continueStroke(x, y, pressure) {
-  if (!isDrawing || !currentStroke) return;
+  if (!isDrawing || !currentStroke || isSnippingMode) return;
 
   // Custom Box constraint: clamp drawing within active work area
-  if (customBoxIndex > 0) {
-    const p = customBoxPresets[customBoxIndex];
+  const p = getEffectiveCustomBox();
+  if (p) {
     const area = document.getElementById('canvasArea');
     const minX = p.l * area.clientWidth;
     const maxX = p.r * area.clientWidth;
@@ -754,10 +1078,10 @@ function continueStroke(x, y, pressure) {
     y = Math.max(minY, Math.min(maxY, y));
   }
 
-  // Sub-pixel anti-jitter threshold: prevent digitizer noise
+  // Sub-pixel anti-jitter threshold: prevent digitizer noise without dropping real strokes
   const dx = x - lastX;
   const dy = y - lastY;
-  if (dx * dx + dy * dy < 0.36) return;
+  if (dx * dx + dy * dy < 0.04) return;
 
   currentStroke.points.push({ x, y, pressure });
 
@@ -1197,6 +1521,10 @@ function restoreInsertedImages(images) {
 //  KEYBOARD SHORTCUTS
 // ============================================================
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (isSnippingMode) cancelSnipping();
+    bubbleMenu.classList.remove('show');
+  }
   if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
   if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
   if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveBtn.click(); }

@@ -427,6 +427,49 @@ void main() {
       expect(provider.customBoxNormalized.left, closeTo(0.0, 0.01));
       expect(provider.customBoxNormalized.right, closeTo(1.0, 0.01));
     });
+
+    test('Snipping box arbitrary drag directions and resetToFullScreen', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 1000.0);
+
+      // Drag from bottom-right to top-left (inverted rectangle)
+      provider.setCustomBoxNormalized(const Rect.fromLTRB(0.8, 0.7, 0.2, 0.3));
+      // Should automatically normalize min/max coordinates
+      expect(provider.customBoxNormalized.left, closeTo(0.2, 0.01));
+      expect(provider.customBoxNormalized.top, closeTo(0.3, 0.01));
+      expect(provider.customBoxNormalized.right, closeTo(0.8, 0.01));
+      expect(provider.customBoxNormalized.bottom, closeTo(0.7, 0.01));
+
+      // Snipping box pauses drawing events so snip gestures don't leave stray ink
+      provider.isSnippingBox = true;
+      provider.onPointerDown(const Offset(500.0, 500.0));
+      expect(provider.isDrawing, isFalse);
+
+      provider.isSnippingBox = false;
+      provider.onPointerDown(const Offset(500.0, 500.0));
+      expect(provider.isDrawing, isTrue);
+
+      // Reset to full screen restores 100% canvas and turns off customBoxEnabled
+      provider.resetToFullScreen();
+      expect(provider.customBoxEnabled, isFalse);
+      expect(provider.customBoxNormalized, equals(const Rect.fromLTRB(0.0, 0.0, 1.0, 1.0)));
+    });
+
+    test('Delicate sub-pixel strokes are detected accurately with 0.18 threshold', () {
+      final provider = DrawingProvider();
+      provider.updateCanvasSize(1000.0, 1000.0);
+      InputEvent? emitted;
+      provider.onInputGenerated = (ev) => emitted = ev;
+
+      provider.onPointerDown(const Offset(100.0, 100.0));
+      emitted = null;
+
+      // Small movement of 0.25px (would be dropped by 0.35, but captured by 0.18)
+      provider.onPointerMove(const Offset(100.25, 100.0));
+      expect(emitted, isNotNull);
+      expect(emitted!.type, equals(InputEventType.pointerMove));
+    });
   });
 }
+
 

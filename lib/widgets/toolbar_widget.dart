@@ -648,9 +648,9 @@ class _ActionButtons extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         ),
-                        icon: const Icon(Icons.open_with, size: 18),
+                        icon: const Icon(Icons.crop, size: 18),
                         label: const Text(
-                          'স্ক্রিনে হাত দিয়ে টেনে বক্স সাইজ করুন (Drag & Resize)',
+                          '✂️ ল্যাপটপ স্ক্রিনশটের মতো ড্র্যাগ করে বক্স সিলেক্ট করুন',
                           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         onPressed: () {
