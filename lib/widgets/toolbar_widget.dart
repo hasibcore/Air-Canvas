@@ -1,4 +1,4 @@
-// ড্রয়িং টুলবার - ব্রাশ সেটিংস, আন্ডো, ক্লিয়ার, ডিসকানেক্ট
+// Drawing toolbar - brush settings, undo, clear, disconnect
 import 'package:flutter/material.dart';
 import '../services/drawing_provider.dart';
 
@@ -12,8 +12,8 @@ class ToolbarWidget extends StatelessWidget {
   final int latency;
   // Bug 146: Undo button state
   final bool canUndo;
-  /// পাম রিজেকশন চালু/বন্ধ। বন্ধ করলে যে পয়েন্টার প্রথমে নামে সে-ই আঁকে,
-  /// তালু বা দ্বিতীয় আঙুল আলাদা করে বাছা হয় না।
+  /// Palm rejection toggle. When disabled, the first active pointer draws
+  /// without differentiating palm or secondary fingers.
   final bool palmRejection;
   final ValueChanged<bool> onPalmRejectionChanged;
   final bool fullScreenMode;
@@ -56,7 +56,7 @@ class ToolbarWidget extends StatelessWidget {
     this.onPrecisionModeChanged,
     this.pressureCurve = PressureCurve.standard,
     this.onPressureCurveChanged,
-    this.writingScale = 1.0,
+    this.writingScale = 0.50,
     this.onWritingScaleChanged,
     this.writingAnchor = WritingAnchor.center,
     this.onWritingAnchorChanged,
@@ -296,7 +296,7 @@ class _ActionButtons extends StatelessWidget {
         // PC Handwriting Size / Scale Button
         _buildIconButton(
           icon: Icons.format_size_rounded,
-          tooltip: 'পিসিতে লেখার সাইজ: ${(writingScale * 100).round()}% (ছোট/বড় করতে ট্যাপ করুন)',
+          tooltip: 'PC Writing Scale: ${(writingScale * 100).round()}% (Tap to adjust)',
           onTap: () => _showWritingScaleMenu(context),
           color: const Color(0xFF4ADE80),
         ),
@@ -305,8 +305,8 @@ class _ActionButtons extends StatelessWidget {
         _buildIconButton(
           icon: customBoxEnabled ? Icons.crop_free : Icons.crop_free_outlined,
           tooltip: customBoxEnabled
-              ? 'নির্দিষ্ট ড্রয়িং বক্স: ON (শুধুমাত্র বক্সের ভেতরে আঁকা হবে) - ট্যাপ করুন'
-              : 'নির্দিষ্ট ড্রয়িং বক্স: OFF (ফুল স্ক্রিন চালু) - ট্যাপ করে বক্স নির্ধারণ করুন',
+              ? 'Custom Drawing Box: ON (Draw inside box only) - Tap to configure'
+              : 'Custom Drawing Box: OFF (Full screen active) - Tap to configure',
           onTap: () => _showCustomBoxMenu(context),
           color: customBoxEnabled ? const Color(0xFF00E5FF) : Colors.grey.shade400,
         ),
@@ -356,9 +356,8 @@ class _ActionButtons extends StatelessWidget {
           },
         ),
         const SizedBox(width: 6),
-        // পাম রিজেকশন টগল — চালু থাকলে পেন আঁকার সময় তালু/দ্বিতীয় আঙুল উপেক্ষা
-        // হয়। কোনো ডিভাইসে stylus কে touch রিপোর্ট করলে এটা বন্ধ করলেই আগের
-        // আচরণ ফিরে আসে, তাই টগলটা হাতের কাছে রাখা হলো।
+        // Palm rejection toggle - when enabled, palms and secondary fingers are
+        // rejected during pen drawing. Can be disabled if a stylus reports as touch.
         _buildIconButton(
           icon: palmRejection ? Icons.back_hand : Icons.back_hand_outlined,
           tooltip: palmRejection
@@ -424,7 +423,7 @@ class _ActionButtons extends StatelessWidget {
                       const SizedBox(width: 10),
                       const Expanded(
                         child: Text(
-                          'পিসিতে লেখার সাইজ (Handwriting Size)',
+                          'PC Handwriting Size & Scale',
                           style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                         ),
                       ),
@@ -436,13 +435,13 @@ class _ActionButtons extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'পিসির পর্দায় লেখা যাতে অনেক বড় না হয়ে স্বাভাবিক খাতার মতো সুন্দর ও নিখুঁত দেখায়, সাইজ নির্বাচন করুন:',
+                    'Scale down strokes on your PC screen so writing looks natural, crisp, and notebook-sized:',
                     style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                   ),
                   const SizedBox(height: 14),
                   _buildEngineOption(
-                    title: 'ছোট সাইজ (৫০% - Compact Note) ★প্রস্তাবিত',
-                    subtitle: 'খাতার স্বাভাবিক লেখা। এক লাইনে অনেক শব্দ ও সমীকরণ সুন্দরভাবে আঁটবে।',
+                    title: 'PC:Mobile 1:2 Scale (50% Notebook) ★ Default',
+                    subtitle: 'Natural handwriting scale. Small mobile writing renders neatly and compactly on PC.',
                     icon: Icons.notes_rounded,
                     accentColor: const Color(0xFF4ADE80),
                     isSelected: (writingScale - 0.50).abs() < 0.08,
@@ -453,8 +452,8 @@ class _ActionButtons extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   _buildEngineOption(
-                    title: 'মাঝারি সাইজ (৭৫% - Balanced)',
-                    subtitle: 'অনলাইন ক্লাস ও হোয়াইটবোর্ডে ড্রয়িংয়ের জন্য আদর্শ ব্যালেন্সড সাইজ।',
+                    title: 'Balanced Note (75%)',
+                    subtitle: 'Ideal balanced size for online teaching, tutoring, and whiteboard sketching.',
                     icon: Icons.draw_rounded,
                     accentColor: const Color(0xFF38BDF8),
                     isSelected: (writingScale - 0.75).abs() < 0.08,
@@ -465,8 +464,8 @@ class _ActionButtons extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   _buildEngineOption(
-                    title: 'পুরো মনিটর (১০০% - Full Screen)',
-                    subtitle: 'পুরো ডিসপ্লে জুড়ে বড় করে আঁকা ও ফুল স্ক্রিন নেভিগেশন।',
+                    title: 'Full Screen (100%)',
+                    subtitle: 'Full display 1:1 mapping for large sketches and whole-screen navigation.',
                     icon: Icons.fullscreen_rounded,
                     accentColor: const Color(0xFFFFD700),
                     isSelected: (writingScale - 1.0).abs() < 0.08,
@@ -480,7 +479,7 @@ class _ActionButtons extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
-                        'কাস্টম সাইজ স্লাইডার',
+                        'Custom Scale Slider',
                         style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
                       ),
                       Text(
@@ -503,7 +502,7 @@ class _ActionButtons extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'পিসির পর্দায় লেখার অবস্থান (Placement):',
+                    'Screen Writing Anchor (Placement):',
                     style: TextStyle(color: Colors.grey.shade400, fontSize: 12, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
@@ -512,7 +511,7 @@ class _ActionButtons extends StatelessWidget {
                       Expanded(
                         child: OutlinedButton.icon(
                           icon: const Icon(Icons.north_west, size: 16),
-                          label: const Text('Top-Left (শুরুতে)'),
+                          label: const Text('Top-Left (Default)'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: writingAnchor == WritingAnchor.topLeft ? const Color(0xFF4ADE80) : Colors.grey,
                             side: BorderSide(
@@ -529,7 +528,7 @@ class _ActionButtons extends StatelessWidget {
                       Expanded(
                         child: OutlinedButton.icon(
                           icon: const Icon(Icons.filter_center_focus, size: 16),
-                          label: const Text('Center (মাঝে)'),
+                          label: const Text('Center'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: writingAnchor == WritingAnchor.center ? const Color(0xFF4ADE80) : Colors.grey,
                             side: BorderSide(
@@ -583,7 +582,7 @@ class _ActionButtons extends StatelessWidget {
                       const SizedBox(width: 10),
                       const Expanded(
                         child: Text(
-                          'নির্দিষ্ট ড্রয়িং এরিয়া (Custom Drawing Box)',
+                          'Custom Drawing Box (ROI)',
                           style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                         ),
                       ),
@@ -595,7 +594,7 @@ class _ActionButtons extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'স্ক্রিনের নির্দিষ্ট অংশে ড্রয়িং বক্স নির্ধারণ করুন। এটি চালু থাকলে শুধুমাত্র বক্সের ভেতরেই ড্রয়িং কার্যকর হবে, বক্সের বাইরে কোনো দাগ পড়বে না।',
+                    'Restrict drawing to a custom screen area. When enabled, drawing is strictly contained inside the box and outside touches are ignored.',
                     style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                   ),
                   const SizedBox(height: 14),
@@ -621,7 +620,7 @@ class _ActionButtons extends StatelessWidget {
                             ),
                             const SizedBox(width: 10),
                             const Text(
-                              'নির্দিষ্ট ড্রয়িং বক্স সক্রিয় করুন',
+                              'Enable Custom Drawing Box',
                               style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
                             ),
                           ],
@@ -650,7 +649,7 @@ class _ActionButtons extends StatelessWidget {
                         ),
                         icon: const Icon(Icons.crop, size: 18),
                         label: const Text(
-                          '✂️ ল্যাপটপ স্ক্রিনশটের মতো ড্র্যাগ করে বক্স সিলেক্ট করুন',
+                          '✂️ Drag to Select Box (Like Snipping Tool)',
                           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         onPressed: () {
@@ -661,7 +660,7 @@ class _ActionButtons extends StatelessWidget {
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      'কুইক সাইজ প্রিসেট (Quick Presets):',
+                      'Quick Size Presets:',
                       style: TextStyle(color: Colors.grey.shade400, fontSize: 12, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
@@ -669,13 +668,13 @@ class _ActionButtons extends StatelessWidget {
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        _buildBoxPresetChip('সেন্টার বক্স (৭৫%)', 'center_75', Icons.center_focus_strong, ctx),
-                        _buildBoxPresetChip('নোটবুক বক্স (৫০%)', 'center_50', Icons.crop_square, ctx),
-                        _buildBoxPresetChip('টপ হাফ (উপরের অংশ)', 'top_half', Icons.vertical_align_top, ctx),
-                        _buildBoxPresetChip('বটম হাফ (নিচের অংশ)', 'bottom_half', Icons.vertical_align_bottom, ctx),
-                        _buildBoxPresetChip('লেফট সাইড', 'left_half', Icons.align_horizontal_left, ctx),
-                        _buildBoxPresetChip('রাইট সাইড', 'right_half', Icons.align_horizontal_right, ctx),
-                        _buildBoxPresetChip('পুরো স্ক্রিন (১০০%)', 'full', Icons.fullscreen, ctx),
+                        _buildBoxPresetChip('Center Box (75%)', 'center_75', Icons.center_focus_strong, ctx),
+                        _buildBoxPresetChip('Notebook Box (50%)', 'center_50', Icons.crop_square, ctx),
+                        _buildBoxPresetChip('Top Half', 'top_half', Icons.vertical_align_top, ctx),
+                        _buildBoxPresetChip('Bottom Half', 'bottom_half', Icons.vertical_align_bottom, ctx),
+                        _buildBoxPresetChip('Left Side', 'left_half', Icons.align_horizontal_left, ctx),
+                        _buildBoxPresetChip('Right Side', 'right_half', Icons.align_horizontal_right, ctx),
+                        _buildBoxPresetChip('Full Screen (100%)', 'full', Icons.fullscreen, ctx),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -692,11 +691,11 @@ class _ActionButtons extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 const Text(
-                                  'বক্সের ইনপুট পুরো পিসিতে ম্যাপ করুন',
+                                  'Map Box Input to Full PC Display',
                                   style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
                                 ),
                                 Text(
-                                  'চালু থাকলে ছোট বক্সে আঁকলেও পিসির পুরো মনিটর কভার করবে (ট্যাবলেটের মতো)',
+                                  'When enabled, drawing inside this box maps to the entire PC monitor (like a graphics tablet)',
                                   style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
                                 ),
                               ],

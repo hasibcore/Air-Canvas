@@ -109,18 +109,18 @@ namespace AirCanvas
         private const int DiscoveryPort = 9091;
 
         // Session & Auth Key
-        // serverPin হলো shared secret — ক্লায়েন্টকে এই PIN মিলিয়েই authenticate হতে হবে।
-        // প্রতিবার সার্ভার স্টার্টে নতুন র‍্যান্ডম PIN তৈরি হয় (GeneratePairingPin)।
-        // আগে এটা hardcoded "1234" ছিল, যা পাবলিক রিপোতে কমিট করা — অর্থাৎ PIN গোপনই ছিল না।
+        // serverPin is the shared secret - client must match this PIN to authenticate.
+        // Fresh random PIN generated on every server start via GeneratePairingPin().
+        // Replaced legacy hardcoded '1234' to prevent unauthorized access.
         private string serverPin = "------";
 
-        // NOTE: session state এখন per-connection (ClientSession), form-level নয়।
-        // আগে shared field ছিল, ফলে একাধিক ক্লায়েন্ট একে অন্যের key overwrite করত।
+        // NOTE: session state is per-connection (ClientSession), not form-level.
+        // Prevents multi-client session state collisions.
 
-        // ভুল PIN দিয়ে কতবার কানেক্ট করার চেষ্টা হয়েছে — UI তে দেখানো হয়
+        // Failed PIN attempt counter displayed in UI
         private long rejectedAuthAttempts = 0;
 
-        // Brute-force throttle: পরপর ব্যর্থ চেষ্টার সংখ্যা ও lockout শেষ হওয়ার সময়
+        // Brute-force throttle: consecutive failure count and lockout expiration time
         private int consecutiveAuthFailures = 0;
         private DateTime authLockoutUntil = DateTime.MinValue;
         private readonly object authThrottleLock = new object();
@@ -128,37 +128,37 @@ namespace AirCanvas
         private const int AuthLockoutSeconds = 30;
 
         /// <summary>
-        /// প্রতি TCP কানেকশনের নিজস্ব auth ও crypto state।
-        /// একটি সেশন authenticated না হওয়া পর্যন্ত কোনো input inject করা হয় না।
+        /// Per-connection authentication and cryptographic state.
+        /// Input injection remains disabled until session is authenticated.
         /// </summary>
         private class ClientSession
         {
             public bool IsAuthenticated;
 
-            // auth সফল হওয়ার পর এই চ্যানেল দিয়েই সব ফ্রেম যায়/আসে।
-            // session key চ্যানেলের ভিতরে derive হয়ে থাকে, আলাদা করে রাখার দরকার নেই।
+            // Secure channel through which all frames flow after authentication.
+            // Session key derived inside channel.
             public SecureChannel Channel;
         }
 
         /// <summary>
-        /// AirCanvas Secure Channel v2 — পুরনো XOR এর জায়গায় authenticated encryption।
-        /// রেফারেন্স ইমপ্লিমেন্টেশন: windows_server/secure_channel_ref.py
-        /// Dart পাশের নকল:        lib/services/secure_channel.dart
+    /// AirCanvas Secure Channel v2 - authenticated encryption replacing former XOR.
+    /// Reference implementation: windows_server/secure_channel_ref.py
+    /// Dart implementation:      lib/services/secure_channel.dart
         ///
-        /// ওয়্যার ফরম্যাট:
-        ///   sealed frame = IV(16) || CT(16*n) || TAG(16)        // সর্বনিম্ন ৪৮ বাইট
+    /// Wire format:
+    ///   sealed frame = IV(16) || CT(16*n) || TAG(16)        // minimum 48 bytes
         ///   plaintext    = SEQ(4, big-endian) || payload
         ///   CT           = AES-256-CBC(encKey, IV, PKCS7(plaintext))
-        ///   TAG          = HMAC-SHA256(macKey, IV || CT) এর প্রথম ১৬ বাইট
+    ///   TAG          = HMAC-SHA256(macKey, IV || CT) first 16 bytes
         ///
-        /// Encrypt-then-MAC — MAC আগে যাচাই হয়, তাই padding oracle নেই।
-        /// প্রতি দিকের আলাদা key (reflection আটকায়), SEQ কড়াভাবে বাড়ে (replay আটকায়)।
+    /// Encrypt-then-MAC: MAC verified prior to decryption to prevent padding oracles.
+    /// Directional keys prevent reflection attacks; monotonic SEQ prevents replays.
         ///
-        /// কেন AesGcm নয়: build_windows_exe.bat এই ফাইল .NET Framework 4.0 এর
-        /// csc.exe দিয়ে কম্পাইল করে, যেখানে AesGcm ক্লাস নেই (ওটা .NET Core 3.0+)।
-        /// কেন RijndaelManaged, AesCryptoServiceProvider নয়: Aes* ক্লাসগুলো
-        /// System.Core.dll এ, যেটা বিল্ড স্ক্রিপ্টে রেফারেন্স করা নেই। RijndaelManaged
-        /// mscorlib.dll এ আছে এবং BlockSize=128, KeySize=256 হলে ওটাই AES-256।
+    /// Uses RijndaelManaged from mscorlib.dll for .NET Framework 4.0 compatibility
+    /// with BlockSize=128, KeySize=256 representing AES-256.
+    ///
+    ///
+    ///
         /// </summary>
         private class SecureChannel
         {
@@ -182,7 +182,7 @@ namespace AirCanvas
             private uint sendSeq;
             private uint lastRecvSeq;
 
-            /// <summary>MAC/replay চেকে বাতিল হওয়া ফ্রেমের সংখ্যা।</summary>
+        /// <summary>Number of frames rejected by MAC/replay check.</summary>
             public long RejectedFrames;
 
             public SecureChannel(byte[] sessionKey, bool isServer)
@@ -232,9 +232,9 @@ namespace AirCanvas
             public static byte[] GenerateSalt() { return RandomBytes(Pbkdf2SaltLength); }
 
             /// <summary>
-            /// PBKDF2-HMAC-SHA1। SHA1 বাধ্যতামূলক interop-এর কারণে: .NET Framework 4.0 এর
-            /// Rfc2898DeriveBytes কেবল HMAC-SHA1 জানে (SHA256 ওভারলোড এসেছে 4.7.2 তে)।
-            /// PBKDF2-এর ভিতরে HMAC-SHA1 এখনও নিরাপদ — WPA2-ও এটাই ব্যবহার করে।
+        /// PBKDF2-HMAC-SHA1 for .NET Framework 4.0 Rfc2898DeriveBytes compatibility.
+        /// Guarantees exact interop across Dart, Python, and C#.
+        ///
             /// </summary>
             public static byte[] DerivePinKey(string pin, byte[] salt, int iterations)
             {
@@ -256,7 +256,7 @@ namespace AirCanvas
                 return Seal(payload, RandomBytes(IvLength), sendSeq);
             }
 
-            /// <summary>iv/seq সরাসরি দেওয়ার ওভারলোড — কেবল টেস্ট ভেক্টর মেলানোর জন্য।</summary>
+        /// <summary>Overload for deterministic IV/SEQ test vector verification.</summary>
             public byte[] Seal(byte[] payload, byte[] iv, uint seq)
             {
                 byte[] plain = new byte[SeqLength + payload.Length];
@@ -277,8 +277,8 @@ namespace AirCanvas
             }
 
             /// <summary>
-            /// ফ্রেম যাচাই করে payload ফেরত দেয়। null মানে বাতিল — tamper, ভুল key,
-            /// অথবা replay। কানেকশন বন্ধ করার দরকার নেই, ফ্রেমটা ফেলে দিলেই হয়।
+        /// Verifies frame and returns payload, or null if tampered, wrong key, or replayed.
+        /// Corrupt frames dropped gracefully without severing connection.
             /// </summary>
             public byte[] Open(byte[] frame)
             {
@@ -343,7 +343,7 @@ namespace AirCanvas
                     aes.BlockSize = 128;   // BlockSize 128 + KeySize 256 = AES-256
                     aes.KeySize = 256;
                     aes.Mode = CipherMode.CBC;
-                    aes.Padding = PaddingMode.None; // padding নিজে করি, তিন পাশে হুবহু মিল রাখতে
+                aes.Padding = PaddingMode.None; // Manual PKCS#7 padding for exact interop
                     aes.Key = key;
                     aes.IV = iv;
                     using (ICryptoTransform t = forEncryption
@@ -356,7 +356,7 @@ namespace AirCanvas
 
             private static byte[] Pkcs7Pad(byte[] data)
             {
-                int pad = 16 - (data.Length % 16); // ১..১৬, কখনো ০ নয়
+            int pad = 16 - (data.Length % 16); // 1..16, never 0
                 byte[] out_ = new byte[data.Length + pad];
                 Buffer.BlockCopy(data, 0, out_, 0, data.Length);
                 for (int i = data.Length; i < out_.Length; i++) out_[i] = (byte)pad;
@@ -436,14 +436,14 @@ namespace AirCanvas
         // Microsoft Whiteboard, OneNote, PowerPoint, Zoom, Photoshop and Paint accept strokes
         private static readonly UIntPtr MI_WP_SIGNATURE = UIntPtr.Zero;
 
-        // কোন বাটন এখন চাপা আছে — 0 = কিছুই না, 1 = left, 2 = right।
+        // Track currently held mouse button - 0 = none, 1 = left, 2 = right.
         //
-        // কেন দরকার: আগে up ইভেন্টে `buttons & 2` দেখে ঠিক করা হতো কোন বাটন
-        // ছাড়তে হবে। কিন্তু Flutter এর PointerUpEvent.buttons সব সময় 0 (আঙুল/পেন
-        // উঠে গেলে কোনো বাটনই আর চাপা নেই)। ফলে barrel button চেপে আঁকলে
-        // RIGHTDOWN যেত কিন্তু LEFTUP আসত — ডান বাটন চিরকাল চাপা থেকে যেত,
-        // পিসিতে context menu খুলতেই থাকত। তাই down এর সময় কোনটা চাপা হয়েছে
-        // সেটা মনে রাখা হয়, আর up এ ঠিক সেটাই ছাড়া হয়।
+        // Fixes Flutter PointerUpEvent.buttons = 0 quirk where barrel button was held,
+        // ensuring exact matching button release on up.
+        //
+        //
+        //
+        //
         private uint activeButtonDownFlag = 0;
 
         public MainForm()
@@ -944,8 +944,8 @@ namespace AirCanvas
         }
 
         /// <summary>
-        /// চাপা থাকা মাউস বাটন ছেড়ে দেয় (যদি থাকে)। idempotent — দুইবার ডাকলেও
-        /// দ্বিতীয়বার কিছুই হয় না।
+        /// Releases currently pressed mouse buttons (if any). Idempotent.
+        ///
         /// </summary>
         private void ReleaseHeldButton(uint absX, uint absY)
         {
@@ -963,7 +963,7 @@ namespace AirCanvas
         }
 
         /// <summary>
-        /// কানেকশন ছিঁড়ে গেলে ডাকা হয়।
+        /// Invoked upon client disconnection.
         /// </summary>
         private void ReleaseHeldButtonAtCursor()
         {
@@ -1453,7 +1453,7 @@ namespace AirCanvas
             {
                 cts = new CancellationTokenSource();
 
-                // প্রতিবার স্টার্টে নতুন র‍্যান্ডম PIN — পুরনো PIN আর কাজ করবে না
+            // Fresh random PIN on each start - legacy PIN invalidated
                 serverPin = GeneratePairingPin();
                 lblPinValue.Text = serverPin;
                 lock (authThrottleLock)
@@ -1485,19 +1485,19 @@ namespace AirCanvas
         }
 
         /// <summary>
-        /// ৬ ডিজিটের র‍্যান্ডম pairing PIN তৈরি করে (modulo bias ছাড়া)।
-        /// Random ক্লাস নয় — RNGCryptoServiceProvider, কারণ এটাই একমাত্র shared secret।
+        /// Generates 6-digit random pairing PIN without modulo bias.
+        /// Uses RNGCryptoServiceProvider for cryptographic security.
         /// </summary>
         private static string GeneratePairingPin()
         {
-            const int digits = 6; // lib/services/connection_provider.dart এর kPairingPinLength এর সমান রাখতে হবে
+            const int digits = 6; // Matches lib/services/connection_provider.dart kPairingPinLength
             char[] pin = new char[digits];
             byte[] buf = new byte[1];
             using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
             {
                 for (int i = 0; i < digits; i++)
                 {
-                    // 250 = 25 * 10, তাই 250-এর উপরের মান বাদ দিলে বায়াস থাকে না
+            // Exclude values >= 250 to eliminate modulo bias
                     do
                     {
                         rng.GetBytes(buf);
@@ -1509,8 +1509,8 @@ namespace AirCanvas
         }
 
         /// <summary>
-        /// অনলাইন brute-force আটকায়: পরপর কয়েকবার ভুল PIN দিলে কিছুক্ষণ সব auth চেষ্টা বন্ধ।
-        /// ৬ ডিজিটের PIN + প্রতি চেষ্টায় কানেকশন বন্ধ + এই lockout = অনলাইনে অনুমান করা অবাস্তব।
+        /// Defeats brute-force attacks by locking out auth attempts after consecutive failures.
+        /// 6-digit PIN + disconnect on fail + lockout renders online guessing infeasible.
         /// </summary>
         private bool IsAuthLockedOut()
         {
@@ -1558,7 +1558,7 @@ namespace AirCanvas
             lblStatus.Text = "○ Server Stopped";
             lblStatus.ForeColor = Color.FromArgb(148, 163, 184);
             lblClients.Text = "📱 Connected: 0";
-            // পুরনো PIN আর বৈধ নয়, তাই UI থেকেও সরিয়ে দেওয়া হয়
+            // Invalidate old PIN in UI
             serverPin = "------";
             lblPinValue.Text = serverPin;
             btnToggleServer.Text = "▶ Start Server";
@@ -1641,8 +1641,8 @@ namespace AirCanvas
             catch { }
             finally
             {
-                // ক্লায়েন্ট মাঝপথে হারিয়ে গেলে চাপা বাটন ছেড়ে দেওয়া — নাহলে
-                // ডেস্কটপে মাউস চাপা অবস্থায় আটকে থাকত।
+            // Release held buttons if client drops connection mid-stroke
+            // to prevent stuck mouse buttons on Windows desktop.
                 ReleaseHeldButtonAtCursor();
                 try { if (stream != null) stream.Close(); } catch { }
                 try { client.Close(); } catch { }
@@ -1859,14 +1859,14 @@ namespace AirCanvas
             return buffer;
         }
 
-        // পুরনো XOR "এনক্রিপশন" (Crypt) এখান থেকে সরিয়ে ফেলা হয়েছে।
-        // ওটা confidentiality দিত না (key ছোট ও পুনরাবৃত্ত, known-plaintext দিয়েই ভাঙা যায়)
-        // এবং integrity-ও দিত না। এখন সব কিছু SecureChannel দিয়ে —
+        // Legacy XOR encryption removed. All traffic post-auth uses SecureChannel
+        // with AES-256-CBC and HMAC-SHA256.
+        //
         // AES-256-CBC + HMAC-SHA256, Encrypt-then-MAC।
 
         /// <summary>
-        /// JSON মেসেজ প্রসেস করে। return false মানে কানেকশন বন্ধ করতে হবে।
-        /// authenticated না হলে auth_response ছাড়া কোনো মেসেজ গ্রহণ করা হয় না।
+        /// Processes incoming JSON messages. Returns false to terminate connection.
+        /// Only auth_response is accepted prior to authentication.
         /// </summary>
         private bool ProcessJsonMessage(string json, NetworkStream stream, ClientSession session)
         {
@@ -1916,8 +1916,8 @@ namespace AirCanvas
         }
 
         /// <summary>
-        /// auth-এর পর সার্ভার → ক্লায়েন্ট সব মেসেজ sealed বাইনারি ফ্রেমে যায়,
-        /// যাতে ক্লায়েন্ট নিশ্চিত হতে পারে মেসেজটা আসল সার্ভারেরই।
+        /// Post-auth messages from server to client are sealed in binary frames.
+        ///
         /// </summary>
         private void SendSecureJson(NetworkStream stream, ClientSession session, string json)
         {
@@ -1926,7 +1926,7 @@ namespace AirCanvas
         }
 
         /// <summary>
-        /// "key":"value" প্যাটার্ন থেকে string value বের করে। না পেলে null।
+        /// Extracts string value from 'key':'value' pattern. Returns null if not found.
         /// </summary>
         private static string ExtractJsonString(string json, string key)
         {
@@ -1954,8 +1954,8 @@ namespace AirCanvas
         }
 
         /// <summary>
-        /// দৈর্ঘ্য ও কনটেন্ট constant-time এ তুলনা করে (timing attack প্রতিরোধ)।
-        /// .NET Framework 4.0 এ CryptographicOperations.FixedTimeEquals নেই, তাই নিজে লেখা।
+        /// Constant-time comparison to prevent timing attacks on PIN verification.
+        /// Custom implementation for .NET Framework 4.0 compatibility.
         /// </summary>
         private static bool FixedTimeEquals(byte[] a, byte[] b)
         {
@@ -2119,14 +2119,14 @@ namespace AirCanvas
         }
 
         /// <summary>
-        /// বাইনারি ফ্রেম প্রসেস করে। return false মানে কানেকশন বন্ধ করতে হবে।
+        /// Processes binary frames. Returns false to terminate connection.
         ///
-        /// নিরাপত্তা নিয়ম:
-        ///  - authenticated না হলে কোনো ইনপুট inject হয় না (আগে এখানে কোনো চেক ছিল না)।
-        ///  - auth-এর পর প্রতিটি ফ্রেম SecureChannel দিয়ে যাচাই হয় (AES-256-CBC + HMAC-SHA256)।
-        ///    MAC না মিললে ভিতরে কী আছে তা দেখাই হয় না — তাই আর কোনো "unencrypted fallback"
-        ///    বা key brute-force list নেই। প্লেইন ১৩ বাইট প্যাকেট এখন স্বয়ংক্রিয়ভাবে বাতিল
-        ///    (৪৮ বাইটের ছোট যেকোনো ফ্রেমই বাতিল)।
+        /// Security rules:
+        ///  - No input injected prior to successful authentication.
+        ///  - All frames verified via SecureChannel (AES-256-CBC + HMAC-SHA256).
+        ///  - Frames with mismatched MAC are discarded immediately.
+        ///  - Unencrypted fallback is completely disabled.
+        ///  - Plaintext 13-byte packets rejected (minimum frame size 48 bytes).
         /// </summary>
         private bool ProcessBinaryPacket(byte[] data, int count, NetworkStream stream, ClientSession session)
         {
@@ -2337,7 +2337,7 @@ namespace AirCanvas
         }
 
         /// <summary>
-        /// ভুল PIN দিয়ে কেউ কানেক্ট করতে চাইলে ইউজারকে জানানো হয়।
+        /// Alerts user upon unauthorized PIN attempts.
         /// </summary>
         private void ShowAuthRejectedUI()
         {

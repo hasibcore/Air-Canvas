@@ -1,4 +1,4 @@
-// ডিভাইস লিস্ট টাইল - আবিষ্কৃত ডিভাইস দেখানোর জন্য
+// Device list tile - for displaying discovered devices on local network
 import 'package:flutter/material.dart';
 import '../services/connection_provider.dart';
 

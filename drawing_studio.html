@@ -422,14 +422,14 @@
 
     <!-- Bubble Quick Menu -->
     <div class="bubble-popup-menu" id="bubbleMenu">
-      <button class="bubble-menu-item" id="menuSnipBtn">✂️ ড্র্যাগ করে বক্স সিলেক্ট (SS Style)</button>
-      <button class="bubble-menu-item" id="menuFullBtn">🖥️ ফুল স্ক্রিন মোড (Reset Box)</button>
-      <button class="bubble-menu-item" id="menuToggleBtn">👁️ বক্স অন / অফ টগল</button>
+      <button class="bubble-menu-item" id="menuSnipBtn">✂️ Drag to Select Box (SS Style)</button>
+      <button class="bubble-menu-item" id="menuFullBtn">🖥️ Full Screen Mode (Reset Box)</button>
+      <button class="bubble-menu-item" id="menuToggleBtn">👁️ Toggle Custom Box</button>
     </div>
 
     <!-- Laptop Screenshot Style Snipping Overlay -->
     <div class="snipping-overlay" id="snippingOverlay">
-      <div class="snip-hint">✂️ ড্র্যাগ করে ড্রয়িং এরিয়া বক্স নির্ধারণ করুন (Esc চাপলে বাতিল)</div>
+      <div class="snip-hint">✂️ Drag across the screen to select active drawing area (Press Esc to cancel)</div>
       <div class="snip-ch-x" id="snipChX"></div>
       <div class="snip-ch-y" id="snipChY"></div>
       <div class="snip-box" id="snipBox">
@@ -727,7 +727,7 @@ function startSnipping() {
   isSnipDragging = false;
   snipBox.style.display = 'none';
   snippingOverlay.classList.add('active');
-  showToast('✂️ স্ক্রিনের উপর ড্র্যাগ করে বক্স সিলেক্ট করুন');
+  showToast('✂️ Drag across the screen to select a drawing box');
 }
 
 function cancelSnipping() {
@@ -744,7 +744,7 @@ menuFullBtn.addEventListener('click', () => {
   customBoxActive = false;
   customBoxIndex = 0;
   updateCustomBoxUI();
-  showToast('🖥️ ফুল স্ক্রিন মোড চালু (পুরো স্ক্রিন ড্রয়িং)');
+  showToast('🖥️ Full screen mode active (Whole display drawing)');
 });
 
 menuToggleBtn.addEventListener('click', () => {
@@ -752,12 +752,12 @@ menuToggleBtn.addEventListener('click', () => {
   if (customBoxActive) {
     customBoxActive = false;
     updateCustomBoxUI();
-    showToast('👁️ কাস্টম বক্স বন্ধ (ফুল স্ক্রিন)');
+    showToast('👁️ Custom box disabled (Full screen)');
   } else {
     customBoxActive = true;
     if (customBoxIndex === 0) customBoxIndex = 1;
     updateCustomBoxUI();
-    showToast('👁️ কাস্টম বক্স চালু');
+    showToast('👁️ Custom box enabled');
   }
 });
 
@@ -892,7 +892,7 @@ snippingOverlay.addEventListener('pointerup', (e) => {
     customBoxIndex = 7;
     customBoxActive = true;
     updateCustomBoxUI();
-    showToast(`✂️ কাস্টম বক্স সেট হয়েছে (${Math.round(w)} × ${Math.round(h)} px)`);
+    showToast(`✂️ Custom box set (${Math.round(w)} × ${Math.round(h)} px)`);
   }
 });
 

@@ -1,4 +1,4 @@
-// কানেকশন ফ্লোটিং বাটন - ড্রয়িং স্ক্রিনে কানেকশন স্ট্যাটাস দেখায়
+// Connection floating button - displays connection status on drawing screen
 import 'package:flutter/material.dart';
 
 class ConnectionFloatingButton extends StatelessWidget {

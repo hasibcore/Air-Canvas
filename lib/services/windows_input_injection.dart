@@ -1,14 +1,13 @@
 // Windows Native Input Injection
 //
-// এই কোড Windows-এ ট্যাবলেট ইনপুট ইনজেক্ট করে।
-// Windows Pen/Tablet API (Windows Ink) ব্যবহার করে OS-level
-// pointer input simulate করা হয়।
+// Injects hardware tablet pen & touch input into Windows.
+// Simulates OS-level pointer input via Windows Ink / SyntheticPointerDevice API.
 //
 // Implementation Strategy:
-// - Dart side: MethodChannel এর মাধ্যমে native কোড কল করে
-// - Native side (C++): Windows API (SendInput, CreateSyntheticPointerDevice) ব্যবহার
+// - Dart side: Invokes native code via MethodChannel
+// - Native side (C++): Windows API (SendInput, CreateSyntheticPointerDevice)
 //
-// এই ফাইলটি রেফারেন্স - আসল implementation windows/runner/ এ থাকবে
+// Reference interface matching windows/runner/ implementation
 
 import 'dart:async';
 import 'dart:io';

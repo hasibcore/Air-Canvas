@@ -1,4 +1,4 @@
-// কানেকশন স্ট্যাটাস বার - হোম স্ক্রিনে কানেকশন অবস্থা দেখায়
+// Connection status bar - displays connection state on home screen
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:provider/provider.dart';
 import '../services/connection_provider.dart';

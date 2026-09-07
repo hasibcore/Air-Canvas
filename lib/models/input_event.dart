@@ -1,10 +1,10 @@
-// ইনপুট ইভেন্ট মডেল - মোবাইল থেকে পিসিতে পাঠানোর জন্য
+// Input event model - for streaming from mobile/client to PC/server
 
 enum PointerType {
-  finger,   // আঙুল টাচ
-  stylus,   // স্টাইলাস/পেন (pressure sensitive)
-  mouse,    // মাউস (desktop mode)
-  eraser,   // ইরেজার টিপ
+  finger,   // Finger touch
+  stylus,   // Stylus/Pen (pressure sensitive)
+  mouse,    // Mouse (desktop mode)
+  eraser,   // Eraser tip
 }
 
 enum InputEventType {
@@ -51,7 +51,7 @@ class InputEvent {
         tiltY = tiltY.isNaN || tiltY.isInfinite ? 0.0 : tiltY.clamp(-90.0, 90.0),
         timestamp = timestamp ?? DateTime.now();
 
-  /// JSON এ কনভার্ট করে WebSocket এ পাঠানোর জন্য
+  /// Converts to JSON for sending over WebSocket
   Map<String, dynamic> toJson() => {
     'v': protocolVersion, // Bug 46: Versioning
     't': _inputEventTypeToString(type), // Bug 40: Order-independent enum serialization
@@ -66,7 +66,7 @@ class InputEvent {
     'ts': timestamp.millisecondsSinceEpoch,
   };
 
-  /// JSON থেকে InputEvent তৈরি (server side receive) (Bug 37: Null safety)
+  /// Creates InputEvent from JSON (server side receive) (Bug 37: Null safety)
   factory InputEvent.fromJson(Map<String, dynamic> json) {
     // Bug 41: Graceful fallback for unknown event types
     InputEventType typeVal = InputEventType.pointerMove;
@@ -330,7 +330,7 @@ class InputEvent {
       'pressure=${pressure.toStringAsFixed(2)}, ${pointerType.name})';
 }
 
-/// ডিভাইস ইনফো - ক্লায়েন্ট কানেক্ট করার সময় পাঠায় (Bug 49: Immutable)
+/// Device info - sent by client upon connection (Bug 49: Immutable)
 class DeviceInfo {
   final String deviceName;
   final String deviceModel;
@@ -417,7 +417,7 @@ class DeviceInfo {
       maxPressure.hashCode;
 }
 
-/// সার্ভার কনফিগারেশন - কানেকশন স্থাপনের সময় এক্সচেঞ্জ হয় (Bug 49: Immutable)
+/// Server configuration - exchanged during connection handshake (Bug 49: Immutable)
 class ServerConfig {
   final int port;
   final bool useBinaryProtocol;

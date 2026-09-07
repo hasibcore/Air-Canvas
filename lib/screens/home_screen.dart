@@ -1,9 +1,9 @@
-// হোম স্ক্রিন - সার্ভার/ক্লায়েন্ট মোড সিলেক্ট ও কানেকশন ম্যানেজমেন্ট
+// Home Screen - Server/Client mode selection and connection management
 //
-// এই স্ক্রিন থেকে ইউজার:
-// 1. পিসিতে সার্ভার শুরু করতে পারে
-// 2. মোবাইল থেকে সার্ভার খুঁজে কানেক্ট করতে পারে
-// 3. ম্যানুয়ালি IP দিয়ে কানেক্ট করতে পারে
+// Allows users to:
+// 1. Start server on PC
+// 2. Discover and connect to PC server from mobile/tablet
+// 3. Connect manually via IP address and port
 
 import 'dart:async';
 import 'dart:io' show Platform, Process;
@@ -985,7 +985,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ipController: _ipController,
         portController: _portController,
         onConnect: (ip, port, pin) async {
-          // context pop করার আগেই size নিন (pop করার পর context defunct হয়ে যায়)
+          // Capture size prior to popping context (context becomes defunct after pop)
           final size = MediaQuery.of(context).size;
           Navigator.pop(context);
           final success = await connection.connectToServer(

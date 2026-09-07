@@ -1,10 +1,10 @@
-// Secure Channel v2 এর ইউনিট টেস্ট।
+// Unit tests for Secure Channel v2.
 //
-// টেস্ট ভেক্টরগুলো windows_server/secure_channel_ref.py (রেফারেন্স
-// ইমপ্লিমেন্টেশন) থেকে তৈরি। এই ভেক্টর পাস করলে Dart, Python আর C# — তিন
-// পাশের বাইট হুবহু মিলছে, অর্থাৎ interop নিশ্চিত।
+// Test vectors generated from windows_server/secure_channel_ref.py (reference
+// implementation). Passing these vectors guarantees identical byte-level
+// interop across Dart, Python, and C#.
 //
-// চালান:  flutter test test/secure_channel_test.dart
+// Run: flutter test test/secure_channel_test.dart
 
 import 'dart:convert';
 import 'dart:typed_data';
@@ -23,7 +23,7 @@ Uint8List hex(String s) {
 String toHex(List<int> b) =>
     b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
 
-/// রেফারেন্স ভেক্টর — secure_channel_ref.py এর আউটপুট
+/// Reference vectors - output from secure_channel_ref.py
 const String kSessionKeyHex =
     '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
 const String kIvHex = '101112131415161718191a1b1c1d1e1f';
@@ -48,23 +48,23 @@ void main() {
   final sessionKey = hex(kSessionKeyHex);
   final payload = hex(kPayloadHex);
 
-  group('টেস্ট ভেক্টর (Python/C# এর সাথে বাইট-লেভেল মিল)', () {
-    test('seal() রেফারেন্স ফ্রেমের হুবহু মিল', () {
+  group('Test vectors (Byte-level match with Python/C#)', () {
+    test('seal() matches reference frame exactly', () {
       final client = SecureChannel(sessionKey, isServer: false);
       final frame = client.seal(payload, iv: hex(kIvHex), seq: 1);
       expect(toHex(frame), kSealedHex);
     });
 
-    test('রেফারেন্স ফ্রেম সার্ভার পাশে খোলে', () {
+    test('Reference frame opens successfully on server side', () {
       final server = SecureChannel(sessionKey, isServer: true);
       expect(server.open(hex(kSealedHex)), payload);
     });
 
-    test('PBKDF2 PIN key রেফারেন্সের সাথে মেলে', () {
+    test('PBKDF2 PIN key matches reference', () {
       expect(toHex(SecureChannel.derivePinKey(kPin, hex(kSaltHex), iterations: 100000)), kPinKeyHex);
     });
 
-    test('রেফারেন্সের wrapped session key খোলা যায়', () {
+    test('Reference wrapped session key unwraps successfully', () {
       final got = unwrapSessionKey(
           base64Decode(kWrappedKeyB64), kPin, hex(kSaltHex), iterations: 100000);
       expect(got, sessionKey);
@@ -72,7 +72,7 @@ void main() {
   });
 
   group('roundtrip', () {
-    test('১৩ বাইট ইনপুট ইভেন্ট → ৬৪ বাইট ফ্রেম → হুবহু ফেরত', () {
+    test('13-byte input event -> 64-byte frame -> exact roundtrip', () {
       final c = SecureChannel(sessionKey, isServer: false);
       final s = SecureChannel(sessionKey, isServer: true);
       final frame = c.seal(payload);
@@ -80,14 +80,14 @@ void main() {
       expect(s.open(frame), payload);
     });
 
-    test('server → client দিকও কাজ করে', () {
+    test('server -> client direction roundtrips', () {
       final c = SecureChannel(sessionKey, isServer: false);
       final s = SecureChannel(sessionKey, isServer: true);
       final msg = utf8.encode('{"type":"pong","ts":7}');
       expect(c.open(s.seal(msg)), msg);
     });
 
-    test('বড় JSON payload', () {
+    test('Large JSON payload roundtrips', () {
       final c = SecureChannel(sessionKey, isServer: false);
       final s = SecureChannel(sessionKey, isServer: true);
       final msg = utf8.encode(jsonEncode({
@@ -97,7 +97,7 @@ void main() {
       expect(s.open(c.seal(msg)), msg);
     });
 
-    test('২০০টি ফ্রেম পরপর — সব ইউনিক ও সব গৃহীত', () {
+    test('200 sequential frames - all unique and all accepted', () {
       final c = SecureChannel(sessionKey, isServer: false);
       final s = SecureChannel(sessionKey, isServer: true);
       final seen = <String>{};
@@ -106,13 +106,13 @@ void main() {
         seen.add(toHex(f));
         expect(s.open(f), payload);
       }
-      expect(seen.length, 200, reason: 'প্রতিবার নতুন random IV হওয়া উচিত');
+      expect(seen.length, 200, reason: 'Each frame must have fresh random IV');
       expect(c.sendSequence, 200);
     });
   });
 
-  group('আক্রমণ প্রতিরোধ', () {
-    test('replay — একই ফ্রেম দ্বিতীয়বার বাতিল', () {
+  group('Attack mitigation', () {
+    test('Replay attack - duplicate frame rejected', () {
       final c = SecureChannel(sessionKey, isServer: false);
       final s = SecureChannel(sessionKey, isServer: true);
       final f = c.seal(payload);
@@ -120,29 +120,29 @@ void main() {
       expect(s.open(f), isNull);
     });
 
-    test('reflection — সার্ভারের ফ্রেম সার্ভারে ফেরত দিলে বাতিল', () {
+    test('Reflection attack - server frame reflected to server rejected', () {
       final s1 = SecureChannel(sessionKey, isServer: true);
       final s2 = SecureChannel(sessionKey, isServer: true);
       expect(s2.open(s1.seal(payload)), isNull);
     });
 
-    test('tamper — ciphertext / IV / tag এর এক বিট বদলালেই বাতিল', () {
+    test('Tamper attack - single bit flipped in ciphertext / IV / tag rejected', () {
       for (final idx in <int>[2, 20, 63]) {
         final c = SecureChannel(sessionKey, isServer: false);
         final s = SecureChannel(sessionKey, isServer: true);
         final f = c.seal(payload);
         f[idx] ^= 0x01;
-        expect(s.open(f), isNull, reason: 'বাইট $idx বদলেছে');
+        expect(s.open(f), isNull, reason: 'Byte $idx was modified');
       }
     });
 
-    test('ভুল key এর ফ্রেম বাতিল', () {
+    test('Frame encrypted with mismatched key is rejected', () {
       final c = SecureChannel(SecureChannel.generateSessionKey(), isServer: false);
       final s = SecureChannel(sessionKey, isServer: true);
       expect(s.open(c.seal(payload)), isNull);
     });
 
-    test('ভুল PIN দিয়ে session key খোলা যায় না', () {
+    test('Session key cannot be unwrapped with incorrect PIN', () {
       final salt = SecureChannel.generateSalt();
       final wrapped = wrapSessionKey(sessionKey, '123456', salt);
       expect(unwrapSessionKey(wrapped, '123456', salt), sessionKey);
@@ -151,7 +151,7 @@ void main() {
           isNull);
     });
 
-    test('পুরনো ১৩ বাইট XOR প্যাকেট আর গ্রহণযোগ্য নয়', () {
+    test('Legacy 13-byte XOR packets are rejected', () {
       final s = SecureChannel(sessionKey, isServer: true);
       expect(s.open(payload), isNull);
       expect(s.open(Uint8List(0)), isNull);
@@ -159,7 +159,7 @@ void main() {
       expect(s.open(Uint8List(SecureChannel.minFrameLength + 3)), isNull);
     });
 
-    test('বাতিল ফ্রেম গোনা হয়', () {
+    test('Rejected frames counter tracks dropped frames', () {
       final s = SecureChannel(sessionKey, isServer: true);
       s.open(Uint8List(10));
       s.open(Uint8List(64));
@@ -167,8 +167,8 @@ void main() {
     });
   });
 
-  group('কর্মক্ষমতা', () {
-    test('seal+open জোড়া গড়ে ১ মিলিসেকেন্ডের অনেক নিচে', () {
+  group('Performance benchmark', () {
+    test('seal + open pair averages far below 1 millisecond', () {
       final c = SecureChannel(sessionKey, isServer: false);
       final s = SecureChannel(sessionKey, isServer: true);
       const iterations = 2000;
@@ -178,9 +178,9 @@ void main() {
       }
       sw.stop();
       final perPair = sw.elapsedMicroseconds / iterations;
-      // ১২০ Hz স্ট্রোকে প্রতি প্যাকেটে ৮৩৩৩ µs বাজেট আছে
+      // At 120 Hz stroke rate, budget is 8333 µs per packet
       expect(perPair, lessThan(1000),
-          reason: 'প্রতি জোড়ায় ${perPair.toStringAsFixed(1)} µs লেগেছে');
+          reason: 'Took ${perPair.toStringAsFixed(1)} µs per pair');
     });
   });
 }

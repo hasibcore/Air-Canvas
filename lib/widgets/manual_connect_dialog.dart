@@ -1,4 +1,4 @@
-// ম্যানুয়াল কানেক্ট ডায়ালগ - IP ও Port দিয়ে কানেক্ট করা
+// Manual connect dialog - connect to server via IP and Port
 //
 // Bug 143: TextEditingControllers owned by parent (HomeScreen).
 // Parent is responsible for disposing them.

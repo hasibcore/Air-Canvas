@@ -1,8 +1,8 @@
-// ড্রয়িং স্ক্রিন - পুরো স্ক্রিন ড্রয়িং ক্যানভাস
+// Drawing Screen - Full Screen Drawing Canvas
 //
-// এই স্ক্রিন মোবাইল/ট্যাবে পুরো স্ক্রিন জুড়ে একটি ড্রয়িং এরিয়া দেখায়।
-// টাচ ইনপুট ক্যাপচার করে WebSocket এর মাধ্যমে সার্ভারে পাঠায়।
-// স্টাইলাস সাপোর্ট সহ pressure-sensitive ড্রয়িং।
+// Displays a full screen drawing canvas on mobile/tablet.
+// Captures pointer input and streams to PC server over WebSocket.
+// Supports pressure-sensitive stylus and touch drawing.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -50,7 +50,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
     super.initState();
     _initWakelock(); // Await safely (Bug 85)
 
-    // ল্যান্ডস্কেপ মোড
+    // Landscape orientation
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -59,7 +59,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
     // Full screen
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
-    // DrawingProvider এ ইনপুট ইভেন্ট callback সেট করা
+    // Configure input event callback on DrawingProvider
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final drawing = context.read<DrawingProvider>();
@@ -302,8 +302,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
                         SnackBar(
                           content: Text(
                             val
-                                ? '🎯 নির্দিষ্ট ড্রয়িং বক্স: ON (শুধুমাত্র বক্সের ভেতরে আঁকা হবে)'
-                                : '🖥️ ফুল স্ক্রিন মোড: ON (পুরো স্ক্রিন জুড়ে ড্রয়িং চালু)',
+                                ? '🎯 Custom Drawing Box: ON (Drawing restricted inside box)'
+                                : '🖥️ Full Screen Mode: ON (Full screen drawing enabled)',
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                           duration: const Duration(seconds: 2),
@@ -363,16 +363,45 @@ class _DrawingScreenState extends State<DrawingScreen> {
             ),
           ),
 
-          // Touch to show toolbar hint
+          // Toolbar restore handle when hidden
           if (!_showToolbar)
             Positioned(
-              bottom: 16,
+              bottom: 12,
               left: 0,
               right: 0,
               child: Center(
-                child: Text(
-                  _tapToShowToolbarHint, // Extracted for localization (Bug 94)
-                  style: const TextStyle(color: Colors.white24, fontSize: 12),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    setState(() => _showToolbar = true);
+                    _resetToolbarTimer();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B).withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.4), width: 1.0),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.4),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.keyboard_arrow_up, color: Color(0xFF00E5FF), size: 16),
+                        SizedBox(width: 6),
+                        Text(
+                          'Show Toolbar',
+                          style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -432,10 +461,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
     }
 
     drawing.onPointerDown(
-      // `position` গ্লোবাল স্ক্রিন কো-অর্ডিনেট, কিন্তু নরমালাইজেশন হয় ক্যানভাসের
-      // মাপ দিয়ে। এখন ক্যানভাস স্ক্রিনের (0,0) থেকেই শুরু হয় তাই দুটো এক, কিন্তু
-      // ভবিষ্যতে AppBar/padding যোগ হলেই স্ট্রোক সরে যেত। `localPosition`
-      // সব সময় Listener এর ভেতরের কো-অর্ডিনেট, তাই এটাই সঠিক।
+      // Use localPosition to accurately map Listener-relative canvas coordinates
       event.localPosition,
       pressure: pressure,
       pointerType: pointerType,
@@ -468,7 +494,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
     }
 
     drawing.onPointerMove(
-      event.localPosition, // down এর মতোই — ক্যানভাস-লোকাল কো-অর্ডিনেট
+      event.localPosition, // Canvas-local coordinate matching pointerDown
       pressure: pressure,
       pointerType: pointerType,
       pointerId: event.pointer,
@@ -501,7 +527,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
 // ==================== CUSTOM PAINTERS ====================
 
-/// ড্রয়িং রেন্ডারার - Hardware Picture Caching ও Pro Variable-Width Spline ইনকিং
+/// Drawing Renderer - Hardware Picture Caching and Pro Variable-Width Spline Inking
 class DrawingPainter extends CustomPainter {
   final DrawingProvider drawingProvider;
 
@@ -826,7 +852,7 @@ class _ProPerformanceHUDState extends State<_ProPerformanceHUD> {
   }
 }
 
-/// Screen Recorder Style Floating Bubble (ছোট ভাসমান বিন্দু)
+/// Screen Recorder Style Floating Bubble (Small floating control point)
 /// Allows user to tap/drag to configure active drawing area and trigger laptop screenshot style box selection
 class _FloatingBoxSelectorBubble extends StatefulWidget {
   const _FloatingBoxSelectorBubble();
@@ -838,6 +864,7 @@ class _FloatingBoxSelectorBubble extends StatefulWidget {
 class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> {
   Offset _pos = const Offset(-1, -1);
   bool _isMenuOpen = false;
+  double _panDistance = 0.0;
 
   @override
   Widget build(BuildContext context) {
@@ -883,10 +910,21 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                   // The Screen Recorder style floating bubble dot
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
+                    onPanStart: (details) {
+                      _panDistance = 0.0;
+                    },
                     onPanUpdate: (details) {
+                      _panDistance += details.delta.distance;
                       setState(() {
                         _pos += details.delta;
                       });
+                    },
+                    onPanEnd: (details) {
+                      if (_panDistance < 8.0) {
+                        setState(() {
+                          _isMenuOpen = !_isMenuOpen;
+                        });
+                      }
                     },
                     onTap: () {
                       setState(() {
@@ -1052,7 +1090,7 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                           // Stylus-Only Inking Mode toggle
                           _buildMenuItem(
                             icon: drawing.stylusOnlyMode ? Icons.edit : Icons.touch_app,
-                            title: drawing.stylusOnlyMode ? 'পেন মোড: স্টাইলাস শুধুমাত্র ✓' : 'পেন মোড: স্টাইলাস + আঙুল',
+                            title: drawing.stylusOnlyMode ? 'Stylus Mode: Stylus Only ✓' : 'Stylus Mode: Stylus + Touch',
                             color: drawing.stylusOnlyMode ? const Color(0xFF00E5FF) : Colors.white60,
                             onTap: () {
                               drawing.stylusOnlyMode = !drawing.stylusOnlyMode;
@@ -1061,8 +1099,8 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                                 SnackBar(
                                   content: Text(
                                     drawing.stylusOnlyMode
-                                        ? '✍️ স্টাইলাস-অনলি মোড চালু: আঙুলের ছোঁয়া সম্পূর্ণ উপেক্ষা করা হবে!'
-                                        : '👆 টাচ ও পেন দুটোই চালু হলো।',
+                                        ? '✍️ Stylus-Only Mode: Finger touch completely ignored!'
+                                        : '👆 Touch and stylus drawing enabled.',
                                     style: const TextStyle(fontWeight: FontWeight.bold),
                                   ),
                                   duration: const Duration(seconds: 2),
@@ -1077,7 +1115,7 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                           // Performance HUD toggle
                           _buildMenuItem(
                             icon: Icons.speed,
-                            title: drawing.showPerformanceHUD ? 'পারফরম্যান্স HUD: দৃশ্যমান ✓' : 'পারফরম্যান্স HUD: লুকানো',
+                            title: drawing.showPerformanceHUD ? 'Performance HUD: Visible ✓' : 'Performance HUD: Hidden',
                             color: const Color(0xFF22C55E),
                             onTap: () {
                               drawing.showPerformanceHUD = !drawing.showPerformanceHUD;
@@ -1088,7 +1126,7 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                           // Snipping box
                           _buildMenuItem(
                             icon: Icons.crop,
-                            title: 'স্ক্রিনশটের মতো বক্স সিলেক্ট করুন',
+                            title: 'Select Box like Screenshot (Snipping Tool)',
                             color: const Color(0xFF00E5FF),
                             onTap: () {
                               setState(() => _isMenuOpen = false);
@@ -1097,10 +1135,42 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                           ),
                           const Divider(color: Colors.white12, height: 8),
 
+                          // PC:Mobile 1:2 Scale toggle
+                          _buildMenuItem(
+                            icon: Icons.aspect_ratio,
+                            title: (drawing.writingScale - 0.50).abs() < 0.08
+                                ? 'PC:Mobile Scale: 1:2 (Half / Notebook) ✓'
+                                : 'PC:Mobile Scale: ${(drawing.writingScale * 100).round()}% (Tap for 1:2)',
+                            color: const Color(0xFF4ADE80),
+                            onTap: () {
+                              if ((drawing.writingScale - 0.50).abs() < 0.08) {
+                                drawing.writingScale = 1.0;
+                              } else {
+                                drawing.writingScale = 0.50;
+                              }
+                              ScaffoldMessenger.of(context).clearSnackBars();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    (drawing.writingScale - 0.50).abs() < 0.08
+                                        ? '📐 PC:Mobile Scale set to 1:2 (Small handwriting feel on PC)'
+                                        : '📐 PC:Mobile Scale set to 1:1 (Full screen scale)',
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                  duration: const Duration(seconds: 2),
+                                  backgroundColor: const Color(0xFF1F2937),
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                              setState(() {});
+                            },
+                          ),
+                          const Divider(color: Colors.white12, height: 8),
+
                           // Full screen
                           _buildMenuItem(
                             icon: Icons.fullscreen,
-                            title: 'ফুল স্ক্রিন (বক্স ছাড়া পুরো স্ক্রিন)',
+                            title: 'Full Screen (Draw over entire display)',
                             color: const Color(0xFF22C55E),
                             onTap: () {
                               setState(() => _isMenuOpen = false);
@@ -1108,7 +1178,7 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                               ScaffoldMessenger.of(context).clearSnackBars();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
-                                  content: Text('🖥️ ফুল স্ক্রিন মোড চালু (পুরো স্ক্রিন ড্রয়িং)', style: TextStyle(fontWeight: FontWeight.bold)),
+                                  content: Text('🖥️ Full Screen Mode: Active (Full display drawing)', style: TextStyle(fontWeight: FontWeight.bold)),
                                   duration: Duration(seconds: 2),
                                   backgroundColor: Color(0xFF1F2937),
                                   behavior: SnackBarBehavior.floating,
@@ -1121,7 +1191,7 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                           // Box on/off
                           _buildMenuItem(
                             icon: drawing.customBoxEnabled ? Icons.visibility_off : Icons.visibility,
-                            title: drawing.customBoxEnabled ? 'বক্স সাময়িক বন্ধ' : 'পূর্বের বক্স চালু করুন',
+                            title: drawing.customBoxEnabled ? 'Disable Custom Box' : 'Enable Previous Custom Box',
                             color: const Color(0xFFF59E0B),
                             onTap: () {
                               setState(() => _isMenuOpen = false);
@@ -1133,7 +1203,7 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                           // PC map
                           _buildMenuItem(
                             icon: Icons.laptop,
-                            title: drawing.boxMapsToFullScreen ? 'পিসিতে: ফুল স্ক্রিন ✓' : 'পিসিতে: বক্স রেশিও',
+                            title: drawing.boxMapsToFullScreen ? 'Map to PC: Full Screen ✓' : 'Map to PC: Box Ratio',
                             color: const Color(0xFFA855F7),
                             onTap: () {
                               drawing.boxMapsToFullScreen = !drawing.boxMapsToFullScreen;
@@ -1253,7 +1323,7 @@ class _SnippingBoxSelectorOverlayState extends State<_SnippingBoxSelectorOverlay
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content: Text(
-                          '🎯 নির্দিষ্ট ড্রয়িং বক্স সেট হয়েছে! এখন শুধুমাত্র এই বক্সের ভেতরে আঁকা হবে।',
+                          '🎯 Custom drawing box set! Drawing is now confined to this box.',
                           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
                         ),
                         duration: Duration(seconds: 3),
@@ -1304,7 +1374,7 @@ class _SnippingBoxSelectorOverlayState extends State<_SnippingBoxSelectorOverlay
                         const Icon(Icons.crop, color: Color(0xFF00E5FF), size: 18),
                         const SizedBox(width: 8),
                         const Text(
-                          'স্ক্রিনে আঙুল টেনে বক্স সিলেক্ট করুন',
+                          'Drag on screen to select drawing box',
                           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         const SizedBox(width: 14),
@@ -1324,7 +1394,7 @@ class _SnippingBoxSelectorOverlayState extends State<_SnippingBoxSelectorOverlay
                               children: [
                                 Icon(Icons.close, color: Colors.redAccent, size: 14),
                                 SizedBox(width: 4),
-                                Text('বাতিল', style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                                Text('Cancel', style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold)),
                               ],
                             ),
                           ),

@@ -1,22 +1,21 @@
 // AirCanvas Secure Channel v2
 //
-// পুরনো XOR "এনক্রিপশন" সরিয়ে authenticated encryption। রেফারেন্স ইমপ্লিমেন্টেশন ও
-// টেস্ট ভেক্টর: windows_server/secure_channel_ref.py — C# পাশের নকল
-// windows_server/AirCanvasServer.cs এর SecureChannel ক্লাসে।
+// Authenticated encryption replacing former XOR obfuscation. Reference implementation
+// and test vectors: windows_server/secure_channel_ref.py - mirrors C# implementation in
+// windows_server/AirCanvasServer.cs SecureChannel class.
 //
-// ওয়্যার ফরম্যাট:
-//   sealed frame = IV(16) || CT(16*n) || TAG(16)        // সর্বনিম্ন ৪৮ বাইট
+// Wire format:
+//   sealed frame = IV(16) || CT(16*n) || TAG(16)        // minimum 48 bytes
 //   plaintext    = SEQ(4, big-endian) || payload
 //   CT           = AES-256-CBC(encKey, IV, PKCS7(plaintext))
 //   TAG          = HMAC-SHA256(macKey, IV || CT)[0..16]
 //
-// Encrypt-then-MAC — MAC আগে যাচাই, না মিললে decrypt-ই হয় না, তাই padding oracle নেই।
-// প্রতিটি দিকের নিজস্ব key, তাই সার্ভারের পাঠানো ফ্রেম সার্ভারেই ফেরত পাঠিয়ে
-// (reflection) কিছু করা যায় না। SEQ কড়াকড়িভাবে বাড়তে হয়, তাই replay বাতিল।
+// Encrypt-then-MAC: MAC verified prior to decryption, preventing padding oracle attacks.
+// Directional keys prevent reflection attacks. Monotonic sequence numbers defeat replays.
 //
-// কেন GCM নয়: স্ট্যান্ডঅ্যালোন C# সার্ভার build_windows_exe.bat দিয়ে .NET
-// Framework 4.0 এর csc.exe তে কম্পাইল হয়, যেখানে AesGcm ক্লাসই নেই। CBC + HMAC
-// (Encrypt-then-MAC) সেখানে নেটিভভাবে পাওয়া যায় এবং নিরাপত্তার দিক থেকে সমতুল্য।
+// Standalone C# server compiles on .NET Framework 4.0 via build_windows_exe.bat
+// where AesGcm is unavailable; CBC + HMAC (Encrypt-then-MAC) is natively supported
+// and cryptographically equivalent in security.
 
 import 'dart:convert';
 import 'dart:isolate';
@@ -26,19 +25,19 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as c;
 import 'package:pointycastle/export.dart' as pc;
 
-/// Web প্ল্যাটফর্মে dart:isolate সমর্থিত নয় — এই ফ্ল্যাগ দিয়ে নিরাপদ ফলব্যাক করা হয়।
+/// Web platform does not support dart:isolate - safe fallback flag.
 const bool _kIsWeb = identical(0, 0.0);
 
-/// একটি authenticated, replay-প্রতিরোধী চ্যানেল — একটি WebSocket কানেকশনের জন্য একটি।
+/// Authenticated, replay-resistant channel per WebSocket connection.
 class SecureChannel {
   static const int ivLength = 16;
   static const int tagLength = 16;
   static const int seqLength = 4;
 
-  /// এর চেয়ে ছোট ফ্রেম কখনোই বৈধ নয় (IV + অন্তত এক ব্লক CT + TAG)।
+  /// Minimum valid frame size (IV + at least one block CT + TAG).
   static const int minFrameLength = ivLength + 16 + tagLength;
 
-  /// PIN থেকে key বানানোর খরচ (2048 iterations ensures sub-50ms instant pairing on mobile).
+  /// PIN key derivation iterations (2048 iterations ensures sub-50ms instant pairing on mobile).
   static const int pbkdf2Iterations = 2048;
   static const int pbkdf2SaltLength = 16;
 
@@ -57,12 +56,12 @@ class SecureChannel {
   int _sendSeq = 0;
   int _lastRecvSeq = 0;
 
-  /// কতগুলো ফ্রেম MAC/replay চেকে বাতিল হয়েছে — UI তে দেখানোর জন্য।
+  /// Number of frames rejected by MAC/replay check.
   int rejectedFrames = 0;
 
   SecureChannel._(this._sendEnc, this._sendMac, this._recvEnc, this._recvMac);
 
-  /// [sessionKey] ঠিক ৩২ বাইট। [isServer] দিয়ে কোন দিকের key কোনটা তা ঠিক হয়।
+  /// [sessionKey] must be exactly 32 bytes. [isServer] configures directional keys.
   factory SecureChannel(List<int> sessionKey, {required bool isServer}) {
     if (sessionKey.length != 32) {
       throw ArgumentError('session key must be 32 bytes, got ${sessionKey.length}');
@@ -77,7 +76,7 @@ class SecureChannel {
         : SecureChannel._(c2sE, c2sM, s2cE, s2cM);
   }
 
-  /// PIN + salt থেকে সরাসরি চ্যানেল — কেবল session key মোড়ানো/খোলার জন্য।
+  /// Direct channel from PIN + salt for session key wrapping/unwrapping.
   factory SecureChannel.fromPin(String pin, List<int> salt,
       {required bool isServer, int iterations = pbkdf2Iterations}) {
     return SecureChannel(derivePinKey(pin, salt, iterations: iterations),
@@ -91,7 +90,7 @@ class SecureChannel {
     return Uint8List.fromList(c.sha256.convert(input).bytes);
   }
 
-  /// ক্রিপ্টোগ্রাফিকভাবে নিরাপদ র‍্যান্ডম বাইট।
+  /// Cryptographically secure random bytes.
   static Uint8List randomBytes(int length) {
     final out = Uint8List(length);
     for (int i = 0; i < length; i++) {
@@ -104,9 +103,8 @@ class SecureChannel {
 
   static Uint8List generateSalt() => randomBytes(pbkdf2SaltLength);
 
-  /// PBKDF2-HMAC-SHA1। SHA1 বেছে নেওয়ার কারণ interop: .NET Framework 4.0 এর
-  /// Rfc2898DeriveBytes কেবল HMAC-SHA1 সাপোর্ট করে (SHA256 ওভারলোড 4.7.2 তে এসেছে)।
-  /// PBKDF2-এর ভিতরে HMAC-SHA1 এখনও নিরাপদ — WPA2-ও এটাই ব্যবহার করে।
+  /// PBKDF2-HMAC-SHA1 for .NET Framework 4.0 compatibility.
+  /// RFC 2898 / HMAC-SHA1 provides secure key derivation across Dart, Python, and C#.
   static Uint8List derivePinKey(String pin, List<int> salt,
       {int iterations = pbkdf2Iterations}) {
     final derivator = pc.PBKDF2KeyDerivator(pc.HMac(pc.SHA1Digest(), 64))
@@ -114,8 +112,8 @@ class SecureChannel {
     return derivator.process(Uint8List.fromList(utf8.encode(pin)));
   }
 
-  /// [payload] এনক্রিপ্ট + authenticate করে ওয়্যারে পাঠানোর ফ্রেম বানায়।
-  /// [iv] ও [seq] কেবল টেস্ট ভেক্টর মেলানোর জন্য — আসল ব্যবহারে দেবেন না।
+  /// Encrypts and authenticates [payload] into a wire frame.
+  /// [iv] and [seq] are optional parameters for deterministic test vectors.
   Uint8List seal(List<int> payload, {Uint8List? iv, int? seq}) {
     final int sequence;
     if (seq != null) {
@@ -143,8 +141,7 @@ class SecureChannel {
     return out;
   }
 
-  /// ফ্রেম যাচাই করে payload ফেরত দেয়। বাতিল হলে null — টেম্পার, ভুল key,
-  /// অথবা replay। কানেকশন বন্ধ করার দরকার নেই, ফ্রেমটা ফেলে দিলেই হয়।
+  /// Verifies frame and returns payload, or null if tampered, wrong key, or replayed.
   Uint8List? open(List<int> frame) {
     if (frame.length < minFrameLength ||
         (frame.length - ivLength - tagLength) % 16 != 0) {
@@ -169,7 +166,7 @@ class SecureChannel {
 
     final seq = (plain[0] << 24) | (plain[1] << 16) | (plain[2] << 8) | plain[3];
     if (seq <= _lastRecvSeq) {
-      rejectedFrames++; // replay অথবা পুরনো ফ্রেম
+      rejectedFrames++; // Replay or outdated frame
       return null;
     }
     _lastRecvSeq = seq;
@@ -198,7 +195,7 @@ class SecureChannel {
   }
 
   static Uint8List _pkcs7Pad(Uint8List data) {
-    final pad = 16 - (data.length % 16); // ১..১৬, কখনো ০ নয়
+    final pad = 16 - (data.length % 16); // 1..16, never 0
     final out = Uint8List(data.length + pad);
     out.setRange(0, data.length, data);
     for (int i = data.length; i < out.length; i++) {
@@ -217,7 +214,7 @@ class SecureChannel {
     return Uint8List.sublistView(data, 0, data.length - pad);
   }
 
-  /// দৈর্ঘ্য ও কনটেন্ট constant-time এ তুলনা — timing দিয়ে tag অনুমান আটকায়।
+  /// Constant-time comparison to prevent timing side-channel attacks on tags.
   static bool constantTimeEquals(List<int> a, List<int> b) {
     if (a.length != b.length) return false;
     int diff = 0;
@@ -228,9 +225,7 @@ class SecureChannel {
   }
 }
 
-/// pairing-এর সময় সার্ভার session key এভাবে ঢেকে পাঠায় (server → client দিক)।
-/// PIN থেকে PBKDF2 দিয়ে key আসে, তাই আড়ি পাতা কেউ session key পেতে চাইলে
-/// PIN brute-force করতে হবে — প্রতি চেষ্টায় ১ লাখ PBKDF2 ইটারেশন।
+/// Wraps session key on server using PIN-derived key during pairing.
 Uint8List wrapSessionKey(List<int> sessionKey, String pin, List<int> salt,
     {int iterations = SecureChannel.pbkdf2Iterations, Uint8List? iv}) {
   final wrapper =
@@ -238,7 +233,7 @@ Uint8List wrapSessionKey(List<int> sessionKey, String pin, List<int> salt,
   return wrapper.seal(sessionKey, iv: iv, seq: 1);
 }
 
-/// ক্লায়েন্ট পাশে খোলা। null মানে PIN ভুল (MAC মেলেনি) বা ডেটা নষ্ট।
+/// Unwraps session key on client. Returns null if PIN or MAC is invalid.
 Uint8List? unwrapSessionKey(List<int> wrapped, String pin, List<int> salt,
     {int iterations = SecureChannel.pbkdf2Iterations}) {
   final wrapper =
@@ -249,19 +244,13 @@ Uint8List? unwrapSessionKey(List<int> wrapped, String pin, List<int> salt,
 }
 
 // ---------------------------------------------------------------------------
-// PBKDF2 আলাদা isolate এ
+// Background Isolate PBKDF2
 //
-// pointycastle পুরোটাই Dart-এ লেখা, native নয়। ১ লাখ HMAC-SHA1 ইটারেশন মানে
-// ~২ লাখ SHA1 কম্প্রেশন — ডেস্কটপে কয়েকশ মিলিসেকেন্ড, ফোনে কয়েক সেকেন্ডও
-// হতে পারে। pairing-এর সময় এটা UI isolate-এ সিঙ্ক্রোনাসলি চললে অ্যাপ পুরো
-// সময়টা জমে থাকে, ইউজারের কাছে "কানেক্ট হচ্ছে না" মনে হয়। তাই ভারী অংশটা
-// Isolate.run দিয়ে সরিয়ে দেওয়া হলো — ফলাফল হুবহু একই, কেবল UI থ্রেড খালি থাকে।
-//
-// এগুলো কেবল pairing-এ একবার চলে; প্রতি প্যাকেটের seal/open UI isolate-এই
-// থাকে, কারণ সেটা মাইক্রোসেকেন্ডের কাজ আর isolate hop-এর খরচই বেশি হয়ে যেত।
+// Offloads PBKDF2 execution via Isolate.run so UI thread remains completely responsive.
+// Runs once during pairing; per-packet seal/open stays on UI isolate (sub-millisecond).
 // ---------------------------------------------------------------------------
 
-/// [wrapSessionKey] এর isolate সংস্করণ (সার্ভার পাশে ব্যবহার)।
+/// Isolate-backed version of [wrapSessionKey] (server side).
 Future<Uint8List> wrapSessionKeyAsync(
     List<int> sessionKey, String pin, List<int> salt,
     {int iterations = SecureChannel.pbkdf2Iterations, Uint8List? iv}) {
@@ -273,7 +262,7 @@ Future<Uint8List> wrapSessionKeyAsync(
       wrapSessionKey(sessionKey, pin, salt, iterations: iterations, iv: iv));
 }
 
-/// [unwrapSessionKey] এর isolate সংস্করণ (ক্লায়েন্ট পাশে ব্যবহার)।
+/// Isolate-backed version of [unwrapSessionKey] (client side).
 Future<Uint8List?> unwrapSessionKeyAsync(
     List<int> wrapped, String pin, List<int> salt,
     {int iterations = SecureChannel.pbkdf2Iterations}) {

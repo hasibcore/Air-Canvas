@@ -18,15 +18,15 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    // হোম স্ক্রিনে টাইটেল থাকা উচিত
+    // Home screen should display title
     expect(find.text('Air Canvas'), findsOneWidget);
-    // Server ও Client tab থাকা উচিত
+    // Server and Client tabs should be present
     expect(find.text('SERVER (PC)'), findsOneWidget);
     expect(find.text('CLIENT (Mobile)'), findsOneWidget);
-    // Server ট্যাবে সুইচ করা
+    // Switch to Server tab
     await tester.tap(find.text('SERVER (PC)'));
     await tester.pumpAndSettle();
-    // Start Server button থাকা উচিত
+    // Start Server button should be present
     expect(find.text('Start Server'), findsOneWidget);
   });
 }

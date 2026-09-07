@@ -1,8 +1,8 @@
 // Server-side input receiver service
 //
-// সার্ভার (PC) তে ইনপুট ইভেন্ট রিসিভ করে প্রসেস করে:
-// 1. Windows: Native API তে ইনজেক্ট করে (বাস্তব ট্যাবলেট ইনপুট)
-// 2. Debug mode: লোকাল ক্যানভাসে ভিজুয়ালাইজ করে
+// Receives and processes input events on server (PC):
+// 1. Windows: Injects into Native OS Pen/Touch API (genuine tablet input)
+// 2. Debug mode: Visualizes on local canvas
 
 import 'dart:async';
 import 'dart:collection';
@@ -50,9 +50,9 @@ class ServerInputHandler {
       try {
         _nativeInjectionAvailable = await WindowsInputInjection.initialize();
         if (_nativeInjectionAvailable) {
-          debugPrint('[InputHandler] Windows native injection সক্রিয়');
+          debugPrint('[InputHandler] Windows native injection active');
         } else {
-          debugPrint('[InputHandler] Native injection পাওয়া যায়নি, debug mode ব্যবহার হবে');
+          debugPrint('[InputHandler] Native injection not available, fallback to debug mode');
         }
       } catch (e, stackTrace) {
         debugPrint('[InputHandler] Native init error: $e\n$stackTrace');
@@ -71,11 +71,8 @@ class ServerInputHandler {
   }
 
   void _onClientConnected() {
-    // Note: ক্লায়েন্টের ইনপুট ইভেন্টগুলো (event.x, event.y) ইতিমধ্যেই 0.0 থেকে 1.0 এর মধ্যে
-    // নরমালাইজড থাকে। Windows native injection স্বয়ংক্রিয়ভাবে সেটিকে ল্যাপটপের আসল
-    // মনিটর রেজোলিউশনে (monitor_width, monitor_height) ম্যাপ করে।
-    // এখানে ক্লায়েন্টের মোবাইল স্ক্রিন সাইজ ইনজেক্ট করলে ল্যাপটপে কার্সর বাম কোণে আটকে যেত
-    // এবং শেপ বিকৃত হয়ে যেত, তাই এটি আর সেট করা হচ্ছে না।
+    // Note: Client input coordinates (event.x, event.y) are normalized between 0.0 and 1.0.
+    // Windows native injection automatically maps them to native desktop monitor resolution.
   }
 
   void _onClientDisconnected() {

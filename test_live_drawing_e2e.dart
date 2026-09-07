@@ -7,21 +7,21 @@ import 'dart:math';
 import 'package:air_canvas/models/input_event.dart';
 import 'package:air_canvas/services/secure_channel.dart';
 
-// পুরনো XOR `crypt()` সরিয়ে দেওয়া হয়েছে — সার্ভার এখন কেবল Secure Channel v2
-// ফ্রেম নেয় (AES-256-CBC + HMAC-SHA256)। প্লেইন বা XOR প্যাকেট ড্রপ হবে।
+// Legacy XOR crypt() removed - server now requires Secure Channel v2
+// frames (AES-256-CBC + HMAC-SHA256). Plaintext or XOR packets are dropped.
 
 void main(List<String> args) async {
   print('====================================================');
   print('  AirCanvas Live End-to-End Drawing Simulator');
   print('====================================================');
 
-  // PIN এখন প্রতিবার সার্ভার স্টার্টে র‍্যান্ডম ৬ ডিজিট, তাই hardcode করা যায় না।
-  // ব্যবহার: dart run test_live_drawing_e2e.dart <6-digit-pin>
+  // PIN is now a random 6-digit number generated on server start.
+  // Usage: dart run test_live_drawing_e2e.dart <6-digit-pin>
   if (args.isEmpty || args.first.length != 6 ||
       int.tryParse(args.first) == null) {
     print('❌ Usage: dart run test_live_drawing_e2e.dart <6-digit-pin>');
-    print('   সার্ভার উইন্ডোর "🔑 Pairing PIN" থেকে PIN টা নিন।');
-    print('   (পুরনো hardcoded 1234 আর কাজ করে না — প্রতি স্টার্টে নতুন PIN হয়।)');
+    print('   Obtain the PIN from the server window "🔑 Pairing PIN".');
+    print('   (Legacy hardcoded PIN "1234" is disabled - fresh PIN generated per start.)');
     exit(64);
   }
   final pin = args.first;
@@ -88,7 +88,7 @@ void main(List<String> args) async {
       try {
         String? text;
         if (data is String) {
-          // handshake-পর্বের প্লেইনটেক্সট। auth এর পর সার্ভার আর টেক্সট পাঠায় না।
+          // Plaintext allowed only during handshake
           if (channel != null) {
             print('⚠️ Dropped unsealed text frame after auth');
             return;
@@ -119,7 +119,7 @@ void main(List<String> args) async {
             if (json['kx'] != 'v2' ||
                 json['salt'] == null ||
                 json['wrapped_key'] == null) {
-              print('❌ সার্ভারটি পুরনো v1 handshake ব্যবহার করছে — বাতিল।');
+              print('❌ Server is using outdated v1 handshake - aborted.');
               if (!authCompleter.isCompleted) authCompleter.complete(false);
               return;
             }
@@ -134,7 +134,7 @@ void main(List<String> args) async {
               iterations: iterations,
             );
             if (sessionKey == null) {
-              print('❌ session key খোলা গেল না (PIN ভুল?)');
+              print('❌ Failed to unwrap session key (Incorrect PIN?)');
               if (!authCompleter.isCompleted) authCompleter.complete(false);
               return;
             }
@@ -199,10 +199,10 @@ void main(List<String> args) async {
       raw = utf8.encode(jsonEncode({'type': 'input', 'data': event.toJson()}));
     }
 
-    // auth এর পর সবকিছুই sealed — channel না থাকলে পাঠানোর মানে নেই।
+    // All traffic post-auth must be sealed
     final ch = channel;
     if (ch == null) {
-      print('⚠️ channel নেই, প্যাকেট পাঠানো হলো না');
+      print('⚠️ Secure channel unavailable, packet not sent');
       return;
     }
     socket.add(ch.seal(raw));

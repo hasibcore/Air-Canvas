@@ -345,9 +345,9 @@ void main() {
   });
 
   group('Custom Drawing Box (ROI / Active Work Area) Tests', () {
-    test('Default configuration maps 100% full screen edge-to-edge', () {
+    test('Default configuration maps 100% full screen edge-to-edge with 1:2 scale', () {
       final provider = DrawingProvider();
-      expect(provider.writingScale, equals(1.0));
+      expect(provider.writingScale, equals(0.50));
       expect(provider.customBoxEnabled, isFalse);
       expect(provider.isEditingCustomBox, isFalse);
     });

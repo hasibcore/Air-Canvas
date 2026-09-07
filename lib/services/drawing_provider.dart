@@ -1,44 +1,44 @@
-// ড্রয়িং স্টেট ও লজিক ম্যানেজার
+// Drawing State & Logic Manager
 //
-// ক্যানভাসে ড্রয়িং সম্পর্কিত সব কিছু ম্যানেজ করে:
-// - স্ট্রোক কালেকশন
-// - প্রেশার সেনসিটিভিটি
-// - ব্রাশ সেটিংস
-// - অফলাইন ক্যানভাস রেন্ডারিং (client side mirror)
+// Manages canvas drawing state:
+// - Stroke collection
+// - Pressure sensitivity
+// - Brush settings
+// - Offline canvas rendering (client-side mirror)
 
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models/input_event.dart';
 import 'one_euro_filter.dart';
 
-/// ড্রয়িং অ্যাকুরেসি ও স্মুথিং ইঞ্জিন মোড
+/// Drawing accuracy & smoothing engine modes
 enum PrecisionMode {
-  /// 🎯 1-Euro অ্যাডাপ্টিভ ফিল্টার (Casiez et al.): ধীরে লিখলে জিটার ১০০% শূন্য করে,
-  /// দ্রুত লিখলে শূন্য ল্যাগে শার্প কোণা বজায় রাখে। প্রো ড্রয়িং ও হ্যান্ডরাইটিং এর জন্য আদর্শ।
+  /// Adaptive 1-Euro Filter (Casiez et al.): eliminates jitter at low speeds, zero lag on fast strokes.
+  /// Recommended for precise handwriting and mathematical formulas.
   proAdaptive,
 
-  /// ⚡ আল্ট্রা ডিরেক্ট র (Unfiltered): কোনো প্রকার ফিল্টারিং ছাড়া সরাসরি সেন্সরের ডাটা।
+  /// Ultra Direct Raw (Unfiltered): zero filtering, direct hardware touch sensor data.
   rawDirect,
 
-  /// 🎨 স্টুডিও আর্ট স্টেবিলাইজার: ধীরগতির মসৃণ কার্ভ ও ইঙ্কিং এর জন্য।
+  /// Studio Art Stabilizer: smooth curves for slow artistic inking.
   studioSmooth,
 }
 
-/// প্রেশার রেসপন্স কার্ভ
+/// Pressure response curves
 enum PressureCurve {
-  /// 1:1 লিনিয়ার রেসপন্স
+  /// 1:1 linear response
   standard,
 
-  /// হালকা স্পর্শেই গাঢ় লাইন (ক্যাপাসিটিভ পেন ও হালকা হাতের জন্য উপযোগী - Gamma 0.7)
+  /// Soft touch response for capacitive pens (Gamma 0.7)
   soft,
 
-  /// সূক্ষ্ম নিখুঁত রেখা ও ক্যালিগ্রাফির জন্য উচ্চ নিয়ন্ত্রণ (Gamma 1.4)
+  /// High control for precise calligraphy (Gamma 1.4)
   firm,
 
-  /// সিগময়েড এস-কার্ভ (প্রাকৃতিক প্রো কন্ট্রোল - Hermite smoothstep)
+  /// Sigmoid S-Curve (Hermite smoothstep)
   sCurve;
 
-  /// প্রেশার ইনপুট ট্রান্সফর্ম করে (0.0 .. 1.0 রেঞ্জ নিশ্চিত করে)
+  /// Transforms pressure input ensuring 0.0 .. 1.0 range
   double transform(double rawPressure) {
     final p = rawPressure.clamp(0.0, 1.0);
     switch (this) {
@@ -54,29 +54,29 @@ enum PressureCurve {
   }
 }
 
-/// পিসিতে লেখার সাইজ ও স্কেল প্রিসেট
+/// PC handwriting size & scale presets
 enum WritingScalePreset {
-  /// ছোট সাইজ (খাতা ও নোটের স্বাভাবিক সাইজ - ৫০%)
+  /// Compact note size (natural notebook size - 50%)
   compact,
 
-  /// মাঝারি সাইজ (হোয়াইটবোর্ড ও প্রেজেন্টেশন - ৭৫%)
+  /// Balanced note size (whiteboard and presentation - 75%)
   medium,
 
-  /// পুরো স্ক্রিন (১০০% মনিটর জুড়ে)
+  /// Full screen (100% monitor coverage)
   full,
 }
 
-/// পিসিতে লেখার অবস্থান / অ্যাঙ্কর
+/// Screen writing anchor position
 enum WritingAnchor {
   topLeft,
   center,
 }
 
 enum BrushMode {
-  pen,      // সাধারণ পেন
-  pencil,   // পেন্সিল (rougher)
-  brush,    // ব্রাশ (thicker, opacity)
-  eraser,   // ইরেজার
+  pen,      // Standard pen
+  pencil,   // Pencil (rougher)
+  brush,    // Brush (thicker, opacity)
+  eraser,   // Eraser
 }
 
 class BrushSettings {
@@ -304,7 +304,7 @@ class Stroke {
   bool get isEmpty => _points.isEmpty;
   bool get isSinglePoint => _points.length == 1;
 
-  /// স্ট্রোকের বাউন্ডিং বক্স
+  /// Stroke bounding box
   Rect? get bounds {
     if (_points.isEmpty) return null;
     double minX = double.infinity, minY = double.infinity;
@@ -343,8 +343,8 @@ class DrawingProvider extends ChangeNotifier {
   final OneEuroFilter2D _oneEuroFilter = OneEuroFilter2D(minCutoff: 0.85, beta: 0.015);
 
   // PC Output Writing Scale & Aspect Ratio Compensation
-  // Default 1.0: Full screen edge-to-edge on all devices by default
-  double _writingScale = 1.0;
+  // Default 0.50: PC:Mobile 1:2 ratio (small writing on mobile renders neatly and compactly on PC)
+  double _writingScale = 0.50;
   WritingAnchor _writingAnchor = WritingAnchor.center;
   double _serverAspectRatio = 16.0 / 9.0;
 
@@ -353,7 +353,7 @@ class DrawingProvider extends ChangeNotifier {
   Rect _customBoxNormalized = Rect.fromLTRB(0.12, 0.12, 0.88, 0.88);
   bool _isEditingCustomBox = false;
   bool _isSnippingBox = false;
-  bool _boxMapsToFullScreen = true;
+  bool _boxMapsToFullScreen = false;
 
   bool get customBoxEnabled => _customBoxEnabled;
   set customBoxEnabled(bool val) {
@@ -508,52 +508,52 @@ class DrawingProvider extends ChangeNotifier {
 
   // --- Pointer slot mapping ---
   //
-  // Flutter এর `PointerEvent.pointer` একটা প্রসেস-গ্লোবাল কাউন্টার — অ্যাপ চালু
-  // থাকা অবস্থায় প্রতিটি নতুন টাচ/হোভার/স্ক্রলে ১ করে বাড়ে, কখনো রিসেট হয় না।
-  // মেনু ট্যাপ, স্ক্রল, বাটন চাপ — সবই গোনায় ধরা হয়। আগে এখানে
-  // `pointerId > 100` হলে ইভেন্ট ফেলে দেওয়া হতো, ফলে অ্যাপ কিছুক্ষণ ব্যবহারের
-  // পর (~১০০ বার আঙুল ছোঁয়ানোর পর) down/move/up তিনটাই সাইলেন্টলি ড্রপ হতো —
-  // অ্যাপ "connected" দেখাত কিন্তু কিছুই আঁকা হতো না।
+  // Flutter PointerEvent.pointer is a process-global counter that increments
+  // with every touch/hover/scroll. Previously pointerId > 100 caused events to be dropped.
+  // Now active pointers are dynamically mapped to reusable 0..15 slots, preventing
+  // wire pointerId overflow and allowing accurate multi-touch tracking.
+  // Active pointers release slots upon pointerUp/cancel.
   //
-  // এখন প্রতিটি সক্রিয় পয়েন্টারকে ০..১৫ এর একটা ছোট স্লট দেওয়া হয়, pointer
-  // উঠে গেলে স্লট ছেড়ে দেওয়া হয়। তাই ওয়্যারের ১ বাইট pointerId কখনো ওভারফ্লো
-  // করে না (আগে input_event.dart `clamp(0, 255)` করত, মানে ২৫৫+ সব এক হয়ে যেত),
-  // আর multi-touch এ কোন আঙুল কোনটা সেটাও PC পাশে আলাদা করে বোঝা যায়।
+  //
+  // Desktop has a single cursor. Multiple pointers (stylus, palm, fingers)
+  // are disambiguated by palm rejection rules:
+  // - If idle, first touching pointer gains ownership.
+  // - If drawing with finger and stylus touches, stylus takes precedence and finger emits pointerUp.
   static const int maxPointerSlots = 16;
   final Map<int, int> _pointerSlots = <int, int>{};
   final Map<int, Offset> _slotLastPosition = <int, Offset>{};
 
   // --- Palm rejection / single-cursor arbitration ---
   //
-  // PC পাশে কার্সর একটাই। কিন্তু স্ক্রিনে একসাথে কয়েকটা পয়েন্টার থাকতে পারে —
-  // পেন, পেন ধরা হাতের তালু, আরেকটা আঙুল। আগে সবগুলোর down/move/up একই
-  // কার্সরে ইনজেক্ট হতো, ফলে তালু ছোঁয়ালেই লাইন লাফ দিত আর দুই আঙুল লাগলে
-  // স্ট্রোক এলোমেলো হয়ে যেত — "draw ঠিকমতো হচ্ছে না" এর একটা বড় কারণ।
+  // - If drawing with stylus and finger touches, finger is rejected as palm.
+  // - Finger touches are suppressed for 400ms after stylus lifts (palm lift delay).
+  // - Secondary pointers of the same kind are ignored (single desktop cursor).
   //
-  // নিয়ম (palmRejection চালু থাকলে):
-  //   • কেউ না আঁকলে — প্রথম যে পয়েন্টার নামে, সে-ই স্ট্রোকের মালিক।
-  //   • আঙুল আঁকছিল, পেন নামল — পেন জেতে। আঙুলের জন্য pointerUp পাঠিয়ে
-  //     (PC তে বাটন ছেড়ে) মালিকানা পেনকে দেওয়া হয়।
-  //   • পেন আঁকছে, আঙুল নামল — সেটা তালু, চুপচাপ উপেক্ষা।
-  //   • পেন উঠে যাওয়ার পরেও ৪০০ ms আঙুল উপেক্ষা করা হয়, কারণ তালু সাধারণত
-  //     পেনের একটু পরে ওঠে।
-  //   • একই ধরনের দ্বিতীয় পয়েন্টার — উপেক্ষা (একটাই কার্সর)।
   //
-  // উপেক্ষিত পয়েন্টারও স্লট পায় এবং তার up ট্র্যাক হয়, শুধু ওয়্যারে কিছু যায় না।
+  // Palm rejection rules:
+  //   • When idle: first active pointer becomes stroke owner.
+  //   • Finger drawing + stylus touches: stylus wins, pointerUp emitted for finger.
+  //   • Stylus drawing + finger touches: finger ignored as palm.
+  //   • Stylus lifted: finger ignored for 400ms cooldown.
+  //   • Secondary pointer of same kind: ignored.
+  //
+  // Ignored pointers still receive slots to track pointerUp, but send no wire packets.
+  //
+  //
   static const Duration stylusGracePeriod = Duration(milliseconds: 400);
   bool _palmRejection = true;
   int? _drawingPointer;
   final Map<int, PointerType> _pointerKinds = <int, PointerType>{};
   DateTime? _lastStylusActivity;
 
-  /// যেসব raw pointer এর জন্য সত্যিই একটা `pointerDown` ওয়্যারে গেছে →
-  /// সেই down টা কোন স্লট নাম্বারে গিয়েছিল।
+  /// Maps raw pointer IDs that sent pointerDown to their assigned wire slot.
+  /// Ensures pointerDown is always balanced by a matching pointerUp.
   ///
-  /// up পাঠানো হবে কি না এই ম্যাপ দেখেই ঠিক হয়। "down গেছে ⇒ up যেতেই হবে,
-  /// down যায়নি ⇒ up কখনো যাবে না" — এই দুটো একসাথে ধরে রাখলে PC তে বাটন
-  /// চাপা থেকে যাওয়া আর চলতি স্ট্রোকের মাঝপথে বাটন ছেড়ে দেওয়া, দুটোই আটকায়।
-  /// স্লটটাও এখানেই রাখা হয়, কারণ `_pointerSlots` থেকে স্লট কেড়ে নেওয়া হতে
-  /// পারে — তখনও up টা যে স্লটে down গিয়েছিল সেই স্লটেই যাওয়া দরকার।
+  /// Guarantees PC mouse/pen buttons are never stuck pressed.
+  /// Prevents premature button release mid-stroke.
+  ///
+  /// Slot is recorded during down so up transmits on identical slot
+  /// even if slot allocation changes.
   final Map<int, int> _pendingUpSlots = <int, int>{};
 
   bool get palmRejection => _palmRejection;
@@ -573,7 +573,7 @@ class DrawingProvider extends ChangeNotifier {
     return DateTime.now().difference(last) < stylusGracePeriod;
   }
 
-  /// এই pointer টা স্ট্রোক চালানোর অধিকার পাবে কি না ঠিক করে।
+  /// Determines whether pointer is granted drawing ownership.
   bool _claimOnDown(int rawPointerId, PointerType kind, DateTime now) {
     if (!_palmRejection) {
       _drawingPointer ??= rawPointerId;
@@ -582,7 +582,7 @@ class DrawingProvider extends ChangeNotifier {
 
     final current = _drawingPointer;
     if (current == null) {
-      if (!_isPen(kind) && _stylusRecentlyActive) return false; // তালু
+    if (!_isPen(kind) && _stylusRecentlyActive) return false; // Palm rejection
       _drawingPointer = rawPointerId;
       return true;
     }
@@ -593,18 +593,18 @@ class DrawingProvider extends ChangeNotifier {
       _yieldOwnershipTo(rawPointerId, now);
       return true;
     }
-    return false; // দ্বিতীয় আঙুল / তালু
+    return false; // Secondary pointer rejection
   }
 
-  /// চলতি স্ট্রোক বন্ধ করে মালিকানা [newPointerId] কে দেয়, এবং পুরনো পয়েন্টারের
-  /// জন্য pointerUp পাঠায় যাতে PC তে বাটন চাপা থেকে না যায়।
+  /// Yields stroke ownership to newPointerId and emits pointerUp for previous pointer.
+  /// Prevents stuck buttons on PC when switching pointers.
   void _yieldOwnershipTo(int newPointerId, DateTime now) {
     final old = _drawingPointer;
     _drawingPointer = newPointerId;
     if (old == null) return;
 
-    // স্লট না থাকলেও up যাবে — _emitPointerUpFor নিজেই down এর রেকর্ড করা স্লট
-    // ব্যবহার করে, তাই পুরনো pointer এর বাটন কোনো অবস্থাতেই চাপা থাকে না।
+    // Emits pointerUp using recorded slot even if slot was reclaimed.
+    // Guarantees desktop button release.
     final oldSlot = _pointerSlots[old];
     _emitPointerUpFor(
         old, oldSlot == null ? null : _slotLastPosition[oldSlot], now);
@@ -618,8 +618,8 @@ class DrawingProvider extends ChangeNotifier {
     _resetSmoothingBuffers();
   }
 
-  /// [rawPointerId] এর জন্য একটা pointerUp পাঠায়, শুধু যদি তার down আগে গিয়ে
-  /// থাকে। রেকর্ডটা মুছেও দেয়, তাই একই pointer এর জন্য দুইবার up যায় না।
+  /// Emits pointerUp for rawPointerId if pointerDown was previously sent.
+  /// Removes tracking record so duplicate pointerUp is never sent.
   void _emitPointerUpFor(int rawPointerId, Offset? position, DateTime now) {
     final slot = _pendingUpSlots.remove(rawPointerId);
     if (slot == null) return;
@@ -633,12 +633,12 @@ class DrawingProvider extends ChangeNotifier {
     );
   }
 
-  /// এই raw pointer এর স্লট, না থাকলে নতুন একটা দেয়।
+  /// Returns existing or newly allocated slot for rawPointerId.
   ///
-  /// সব স্লট ব্যস্ত থাকলে সবচেয়ে পুরনোটা কেড়ে নেওয়া হয়, ব্যর্থ হওয়া হয় না।
-  /// কারণ pointer up/cancel কোনোভাবে মিস হলে (যেমন অ্যাপ ব্যাকগ্রাউন্ডে গেলে)
-  /// স্লট আটকে থাকতে পারে — তখন "ব্যর্থ" হলে ড্রয়িং চিরতরে বন্ধ হয়ে যেত,
-  /// অর্থাৎ পুরনো `pointerId > 100` বাগটাই ছোট আকারে ফিরে আসত।
+  /// If all slots are full, reclaims oldest slot to avoid lockup.
+  /// Prevents drawing failure if pointerUp was missed during app backgrounding.
+  ///
+  /// Avoids legacy pointerId > 100 bug.
   int _acquireSlot(int rawPointerId) {
     final existing = _pointerSlots[rawPointerId];
     if (existing != null) return existing;
@@ -651,11 +651,11 @@ class DrawingProvider extends ChangeNotifier {
       }
     }
 
-    // Map টা insertion-ordered, তাই প্রথম key-ই সবচেয়ে পুরনো pointer।
+    // Insertion-ordered map ensures first key is oldest pointer.
     final stalest = _pointerSlots.keys.first;
     final reclaimed = _pointerSlots.remove(stalest)!;
-    // স্লট কেড়ে নেওয়ার আগে ওই হারানো pointer এর up পাঠিয়ে দেওয়া, নাহলে PC তে
-    // তার বাটন চিরকাল চাপা থাকত। পজিশনটা মুছে ফেলার আগেই নিতে হয়।
+    // Emits pointerUp prior to slot eviction to prevent stuck button.
+    // Captures last known position before removing record.
     _emitPointerUpFor(stalest, _slotLastPosition[reclaimed], DateTime.now());
     _slotLastPosition.remove(reclaimed);
     _pointerKinds.remove(stalest);
@@ -672,10 +672,10 @@ class DrawingProvider extends ChangeNotifier {
     if (_drawingPointer == rawPointerId) _drawingPointer = null;
   }
 
-  /// সব pointer state ছেড়ে দেওয়া (canvas clear, dispose, রিমোট reset)।
+  /// Releases all pointer state (canvas clear, dispose, remote reset).
   ///
-  /// [flushPendingUps] true হলে যেসব pointer এর down ওয়্যারে গেছে কিন্তু up যায়নি,
-  /// তাদের জন্য আগে up পাঠানো হয় — নাহলে PC তে বাটন চাপা অবস্থায় আটকে থাকত।
+  /// If flushPendingUps is true, emits pointerUp for active pointers
+  /// to prevent stuck buttons on PC.
   void _releaseAllSlots({bool flushPendingUps = false}) {
     if (flushPendingUps && _pendingUpSlots.isNotEmpty) {
       final now = DateTime.now();
@@ -692,7 +692,7 @@ class DrawingProvider extends ChangeNotifier {
     _drawingPointer = null;
   }
 
-  /// UI/ডিবাগের জন্য — এখন কতগুলো পয়েন্টার সক্রিয় ধরে রাখা হয়েছে।
+  /// Active pointer count for UI diagnostics and debugging.
   int get activePointerCount => _pointerSlots.length;
 
   // Canvas repaint notifier (prevents whole screen rebuilding during fast pointer movements)
@@ -714,10 +714,10 @@ class DrawingProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// হাই-পারফরম্যান্স গ্রাফিক্স ট্যাবলেট মোড:
-  /// true থাকলে পিসিতে 0-latency তে অবিকল raw touch কো-অর্ডিনেট পাঠানো হয়,
-  /// ফলে অনলাইন ক্লাসে ব্ল্যাকবোর্ড/হোয়াইটবোর্ডে গণিতের সমীকরণ বা দ্রুত হাতের
-  /// লেখা (handwriting) কোনোরকম lag বা বিকৃতি ছাড়া অবিকল ফুটিয়ে তোলা যায়।
+  /// High-performance graphics tablet mode:
+  /// Streams raw touch coordinates with zero latency for responsive whiteboard writing.
+  /// Ensures crisp handwritten notes and mathematical equations without distortion.
+  ///
   PrecisionMode get precisionMode => _precisionMode;
 
   set precisionMode(PrecisionMode mode) {
@@ -738,14 +738,14 @@ class DrawingProvider extends ChangeNotifier {
     }
   }
 
-  /// হাই-পারফরম্যান্স গ্রাফিক্স ট্যাবলেট মোড (Backwards-compatible API)
+  /// High-performance graphics tablet mode (Backwards-compatible API)
   bool get directTabletMode => _precisionMode != PrecisionMode.studioSmooth;
 
   set directTabletMode(bool val) {
     precisionMode = val ? PrecisionMode.proAdaptive : PrecisionMode.studioSmooth;
   }
 
-  /// পিসিতে লেখার সাইজ / আউটপুট স্কেল (০.২৫ - ১.০)
+  /// PC handwriting size / output scale (0.25 - 1.0)
   double get writingScale => _writingScale;
 
   set writingScale(double val) {
@@ -756,7 +756,7 @@ class DrawingProvider extends ChangeNotifier {
     }
   }
 
-  /// পিসিতে লেখার অবস্থান (Top-Left নাকি Center)
+  /// Screen writing anchor position (Top-Left or Center)
   WritingAnchor get writingAnchor => _writingAnchor;
 
   set writingAnchor(WritingAnchor anchor) {
@@ -766,7 +766,7 @@ class DrawingProvider extends ChangeNotifier {
     }
   }
 
-  /// পিসির আসল স্ক্রিন রেশিও আপডেট করা
+  /// Updates native PC display aspect ratio
   void updateServerAspectRatio(double ratio) {
     if (ratio > 0.1 && (_serverAspectRatio - ratio).abs() > 0.01) {
       _serverAspectRatio = ratio;
@@ -774,7 +774,7 @@ class DrawingProvider extends ChangeNotifier {
     }
   }
 
-  /// প্রিসেট নির্বাচন (Compact, Medium, Full)
+  /// Selects preset (Compact, Balanced, Full)
   void setWritingScalePreset(WritingScalePreset preset) {
     switch (preset) {
       case WritingScalePreset.compact:
@@ -819,7 +819,7 @@ class DrawingProvider extends ChangeNotifier {
     _oneEuroFilter.reset();
   }
 
-  /// টাচ/পেন ডাউন - নতুন স্ট্রোক শুরু
+  /// Touch/Pen down - starts new stroke
   void onPointerDown(Offset position, {
     double pressure = 0.5,
     PointerType pointerType = PointerType.finger,
@@ -846,16 +846,16 @@ class DrawingProvider extends ChangeNotifier {
       return;
     }
 
-    // Flutter এর গ্লোবাল pointer id কে ছোট স্লটে ম্যাপ করা — উপরের নোট দেখুন।
+    // Map Flutter global pointer id to compact slot (0..15)
     final slot = _acquireSlot(pointerId);
-    if (slot < 0) return; // ১৬টা স্লটই ব্যস্ত
+    if (slot < 0) return; // All 16 slots busy
 
     final now = DateTime.now();
     _pointerKinds[pointerId] = pointerType;
     if (_isPen(pointerType)) _lastStylusActivity = now;
 
-    // তালু / দ্বিতীয় আঙুল হলে এখানেই থামা — স্লট রাখা হয় (যাতে up ট্র্যাক হয়)
-    // কিন্তু স্ট্রোকও শুরু হয় না, ওয়্যারেও কিছু যায় না।
+    // Palm / secondary finger rejected here - slot tracked for up
+    // but stroke does not start and no packet sent to wire.
     if (!_claimOnDown(pointerId, pointerType, now)) {
       _slotLastPosition[slot] = position;
       return;
@@ -889,19 +889,19 @@ class DrawingProvider extends ChangeNotifier {
     _positionBuffer.add(position);
     _pressureBuffer.add(calibratedPressure);
 
-    // ইনপুট ইভেন্ট জেনারেট ও পাঠানো
+    // Generate and send input event
     _emitInputEvent(
       InputEventType.pointerDown, position, calibratedPressure, pointerType, slot, now,
       tiltX: tiltX, tiltY: tiltY, buttons: buttons,
     );
-    // down গেল — এখন এই pointer এর up পাঠানো বাধ্যতামূলক।
+    // pointerDown sent - pointerUp is now required upon completion.
     _pendingUpSlots[pointerId] = slot;
 
     canvasNotifier.notify();
     notifyListeners();
   }
 
-  /// টাচ/পেন মুভ - স্ট্রোক চালিয়ে যাওয়া
+  /// Touch/Pen move - continues stroke
   void onPointerMove(Offset position, {
     double pressure = 0.5,
     PointerType pointerType = PointerType.finger,
@@ -919,9 +919,9 @@ class DrawingProvider extends ChangeNotifier {
       return;
     }
 
-    // তালু / দ্বিতীয় আঙুলের move উপেক্ষা — কার্সর একটাই।
+    // Palm / secondary finger moves ignored (single cursor)
     if (_drawingPointer != null && _drawingPointer != pointerId) return;
-    // down মিস হয়ে থাকলেও স্লট দিয়ে দেওয়া হয় — নাহলে পুরো স্ট্রোক হারিয়ে যেত।
+    // Re-allocate slot if down was missed to prevent lost stroke
     final slot = _pointerSlots[pointerId] ?? _acquireSlot(pointerId);
     if (slot < 0) return;
     _drawingPointer ??= pointerId;
@@ -1021,7 +1021,7 @@ class DrawingProvider extends ChangeNotifier {
     canvasNotifier.notify();
   }
 
-  /// টাচ/পেন আপ - স্ট্রোক শেষ
+  /// Touch/Pen up - finishes stroke
   void onPointerUp({
     PointerType pointerType = PointerType.finger,
     int pointerId = 0,
@@ -1068,7 +1068,7 @@ class DrawingProvider extends ChangeNotifier {
         _currentStroke!.addPoint(lastPoint);
       }
 
-      // স্ট্রোক সেভ করা (minimum 1 point থাকলে)
+    // Save stroke if at least 1 point exists
       if (_currentStroke!.points.isNotEmpty) {
         _strokes.add(_currentStroke!);
         // Limit strokes history length to prevent memory leak
@@ -1154,7 +1154,7 @@ class DrawingProvider extends ChangeNotifier {
     }
   }
 
-  /// ইনপুট ইভেন্ট জেনারেট ও callback এ পাঠানো
+  /// Generates and sends input event via callback
   void _emitInputEvent(
     InputEventType type,
     Offset position,
@@ -1193,10 +1193,10 @@ class DrawingProvider extends ChangeNotifier {
       return;
     }
 
-    // আউটপুট স্কেলিং ও রেশিও ক্ষতিপূরণ:
-    // ১. মোবাইল স্ক্রিন ১০০% এজ-টু-এজ ব্যবহার হবে (কোনো কালো দাগ/বর্ডার ছাড়া)।
-    // ২. পিসিতে লেখার সাইজ স্বাভাবিক ও স্পষ্ট হবে (অপ্রয়োজনীয় বিশাল বা স্ক্রিন পার হবে না)।
-    // ৩. মোবাইলে আঁকা বৃত্ত পিসিতে নিখুঁত বৃত্ত থাকবে।
+      // Output scaling and aspect ratio compensation:
+      // 1. Mobile screen is 100% edge-to-edge (no black borders).
+      // 2. Handwriting scale on PC remains natural and crisp.
+      // 3. Circles drawn on mobile remain true circles on PC.
     double scaleX = _writingScale;
     double scaleY = _writingScale;
     if (_serverAspectRatio > 0.1 && _canvasWidth > 0 && _canvasHeight > 0) {
@@ -1242,7 +1242,7 @@ class DrawingProvider extends ChangeNotifier {
     }
   }
 
-  /// পজিশন স্মুথিং (Moving Average based on brushSettings.smoothingStrength)
+  /// Position smoothing (Moving Average based on brushSettings.smoothingStrength)
   Offset _smoothPosition(Offset position) {
     _positionBuffer.add(position);
     final maxBufSize = _brushSettings.smoothingStrength.clamp(1, 20);
@@ -1262,7 +1262,7 @@ class DrawingProvider extends ChangeNotifier {
     return Offset(sumX / totalWeight, sumY / totalWeight);
   }
 
-  /// প্রেশার স্মুথিং (Exponential Moving Average)
+  /// Pressure smoothing (Exponential Moving Average)
   double _smoothPressure(double pressure) {
     if (!_pressureSmoothing) return pressure;
     const alpha = 0.4; // Smoothing factor
@@ -1273,7 +1273,7 @@ class DrawingProvider extends ChangeNotifier {
   /// Whether there are strokes available to undo (Bug 146)
   bool get canUndo => _strokes.isNotEmpty;
 
-  /// আন্ডো - শেষ স্ট্রোক মুছে ফেলা
+  /// Undo - removes last stroke
   void undo() {
     if (_strokes.isNotEmpty) {
       _strokes.removeLast();
@@ -1283,16 +1283,16 @@ class DrawingProvider extends ChangeNotifier {
     }
   }
 
-  /// সব স্ট্রোক মুছে ফেলা
+  /// Clears all strokes
   void clearCanvas() {
     _strokes.clear();
     _currentStroke = null;
     _isDrawing = false;
     _resetSmoothingBuffers();
 
-    // আঙুল/পেন এখনো স্ক্রিনে থাকতে পারে। clear এর পর ওই pointer এর move গুলো
-    // ড্রপ হবে (স্ট্রোক নেই), তাই তার up-ও আর যাবে না — সেই কারণে এখানেই বাকি
-    // up গুলো পাঠিয়ে PC এর বাটন ছেড়ে দেওয়া হয়।
+    // Pointer may still touch screen. Emit pending pointerUp
+    // to release PC buttons immediately.
+    //
     _releaseAllSlots(flushPendingUps: true);
 
     // Emit clear event to remote side
@@ -1316,8 +1316,8 @@ class DrawingProvider extends ChangeNotifier {
 
   @override
   void dispose() {
-    // pointer slot map ও canvas notifier ছেড়ে দেওয়া — নাহলে hot restart এর পর
-    // পুরনো স্লট ধরে থাকা state নিয়ে ভুল pointerId ওয়্যারে যেতে পারত।
+    // Release pointer slot map and canvas notifier
+    // to prevent stale pointerId state across hot restarts.
     _releaseAllSlots();
     canvasNotifier.dispose();
     super.dispose();
