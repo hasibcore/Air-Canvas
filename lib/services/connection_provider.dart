@@ -1340,7 +1340,7 @@ class ConnectionProvider extends ChangeNotifier {
 
   /// Send classroom action or keyboard shortcut to server (e.g. ppt_pen, ppt_laser, ppt_eraser, launch_onenote, launch_ppt)
   void sendAction(String action) {
-    if (_socket != null && isConnected) {
+    if ((_socket != null || _rawTcpSocket != null) && isConnected) {
       _sendToServer({
         'type': 'aircanvas_input',
         't': action,
@@ -1348,14 +1348,32 @@ class ConnectionProvider extends ChangeNotifier {
     }
   }
 
+  /// Send brush settings update (tool, color, stroke width) to PC server
+  void sendBrushUpdate({
+    required String tool,
+    required String colorHex,
+    required double strokeWidth,
+  }) {
+    if ((_socket != null || _rawTcpSocket != null) && isConnected) {
+      _sendToServer({
+        'type': 'brush_update',
+        'tool': tool,
+        'color': colorHex,
+        'width': strokeWidth,
+      });
+    }
+  }
+
   void _sendToServer(dynamic data) {
-    if (_socket != null) {
+    if (_socket != null || _rawTcpSocket != null) {
       final encoded = data is String ? data : jsonEncode(data);
       try {
-        if (_channel != null) {
-          _socket!.add(_channel!.seal(utf8.encode(encoded)));
+        final bytes = utf8.encode(encoded);
+        if (_rawTcpSocket != null) {
+          _rawTcpSocket!.add(bytes);
+        } else if (_channel != null) {
+          _socket!.add(_channel!.seal(bytes));
         } else {
-          // Handshake message (auth_response) prior to channel creation
           _socket!.add(encoded);
         }
         _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;

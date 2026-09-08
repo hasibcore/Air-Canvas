@@ -351,8 +351,8 @@ class DrawingProvider extends ChangeNotifier {
   final OneEuroFilter2D _oneEuroFilter = OneEuroFilter2D(minCutoff: 0.85, beta: 0.015);
 
   // PC Output Writing Scale & Aspect Ratio Compensation
-  // Default 0.50: PC:Mobile 1:2 ratio (small writing on mobile renders neatly and compactly on PC)
-  double _writingScale = 0.50;
+  // Default 1.0: 100% Full Screen Graphics Tablet mode (1:1 full monitor coverage)
+  double _writingScale = 1.0;
   WritingAnchor _writingAnchor = WritingAnchor.center;
   double _serverAspectRatio = 16.0 / 9.0;
 
@@ -383,6 +383,7 @@ class DrawingProvider extends ChangeNotifier {
     _customBoxEnabled = false;
     _isSnippingBox = false;
     _isEditingCustomBox = false;
+    _writingScale = 1.0;
     _customBoxNormalized = const Rect.fromLTRB(0.0, 0.0, 1.0, 1.0);
     notifyListeners();
   }
@@ -494,7 +495,9 @@ class DrawingProvider extends ChangeNotifier {
       _liveFps = (_frameCount * 1000.0 / elapsedMs).clamp(1.0, 240.0);
       _frameCount = 0;
       _lastFpsTimestamp = now;
-      metricNotifier.value++;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        metricNotifier.value++;
+      });
     }
   }
 
@@ -506,7 +509,9 @@ class DrawingProvider extends ChangeNotifier {
       _livePollingRateHz = (_inputSampleCount * 1000.0 / elapsedMs).clamp(1.0, 1000.0);
       _inputSampleCount = 0;
       _lastPollingTimestamp = now;
-      metricNotifier.value++;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        metricNotifier.value++;
+      });
     }
   }
 
@@ -798,10 +803,15 @@ class DrawingProvider extends ChangeNotifier {
   }
 
   WritingScalePreset get currentScalePreset {
-    if ((_writingScale - 0.50).abs() < 0.08) return WritingScalePreset.compact;
-    if ((_writingScale - 0.75).abs() < 0.08) return WritingScalePreset.medium;
     if ((_writingScale - 1.0).abs() < 0.08) return WritingScalePreset.full;
-    return WritingScalePreset.compact;
+    if ((_writingScale - 0.75).abs() < 0.08) return WritingScalePreset.medium;
+    if ((_writingScale - 0.50).abs() < 0.08) return WritingScalePreset.compact;
+    return WritingScalePreset.full;
+  }
+
+  void setCanvasDimensionsSilently(double width, double height) {
+    if (width > 0) _canvasWidth = width;
+    if (height > 0) _canvasHeight = height;
   }
 
   void updateCanvasSize(double width, double height) {
@@ -870,32 +880,27 @@ class DrawingProvider extends ChangeNotifier {
     }
 
     // Authoritative Single Transform Contract:
-    // 1. Mobile screen is 100% edge-to-edge usable.
-    // 2. Writing scale (e.g. 0.50x) renders compact, neat handwriting on PC.
-    // 3. Aspect-ratio compensation guarantees circles drawn on mobile remain perfect 1:1 circles on PC.
-    double scaleX = _writingScale.clamp(0.25, 1.0);
-    double scaleY = _writingScale.clamp(0.25, 1.0);
-    if (_serverAspectRatio > 0.1 && _canvasWidth > 0 && _canvasHeight > 0) {
-      final mobileRatio = _canvasWidth / _canvasHeight;
-      if (mobileRatio > 0.05) {
-        scaleY = scaleX * (_serverAspectRatio / mobileRatio);
-        if (scaleY > 1.0) {
-          final factor = 1.0 / scaleY;
-          scaleX *= factor;
-          scaleY = 1.0;
-        }
+    // 1. Full-screen Graphics Tablet Mode (Default writingScale == 1.0):
+    //    Mobile [0.0..1.0] maps 1:1 directly to PC [0.0..1.0].
+    //    Left (0.0) -> Left (0.0), Center (0.5) -> Center (0.5), Right (1.0) -> Right (1.0).
+    //    Entire PC screen is 100% reachable without arbitrary offsets.
+    // 2. Scaled Note Mode (writingScale < 0.99):
+    //    Scales stroke within selected anchor for compact handwriting when explicitly chosen.
+    double normalizedX = rawNormX;
+    double normalizedY = rawNormY;
+
+    if (_writingScale < 0.99) {
+      final scale = _writingScale.clamp(0.25, 1.0);
+      double offsetX = 0.0;
+      double offsetY = 0.0;
+      if (_writingAnchor == WritingAnchor.center) {
+        offsetX = ((1.0 - scale) / 2.0).clamp(0.0, 1.0);
+        offsetY = ((1.0 - scale) / 2.0).clamp(0.0, 1.0);
       }
+      normalizedX = (offsetX + rawNormX * scale).clamp(0.0, 1.0);
+      normalizedY = (offsetY + rawNormY * scale).clamp(0.0, 1.0);
     }
 
-    double offsetX = 0.0;
-    double offsetY = 0.0;
-    if (_writingAnchor == WritingAnchor.center) {
-      offsetX = ((1.0 - scaleX) / 2.0).clamp(0.0, 1.0);
-      offsetY = ((1.0 - scaleY) / 2.0).clamp(0.0, 1.0);
-    }
-
-    final normalizedX = (offsetX + rawNormX * scaleX).clamp(0.0, 1.0);
-    final normalizedY = (offsetY + rawNormY * scaleY).clamp(0.0, 1.0);
     final event = InputEvent(
       type: type,
       x: normalizedX,
@@ -938,6 +943,11 @@ class DrawingProvider extends ChangeNotifier {
       return;
     }
 
+    // Pen State Machine: ensure clean transition from idle BEFORE acquiring slot
+    if (_penState != PenState.idle && _pendingUpSlots.isEmpty) {
+      _releaseAllSlots(flushPendingUps: true);
+    }
+
     // Map Flutter global pointer id to compact slot (0..15)
     final slot = _acquireSlot(pointerId);
     if (slot < 0) return; // All 16 slots busy
@@ -953,10 +963,6 @@ class DrawingProvider extends ChangeNotifier {
       return;
     }
 
-    // Pen State Machine: ensure clean transition from idle
-    if (_penState != PenState.idle) {
-      _releaseAllSlots(flushPendingUps: true);
-    }
     _penState = PenState.down;
 
     _isDrawing = true;
@@ -1200,15 +1206,32 @@ class DrawingProvider extends ChangeNotifier {
   }) {
     if (_pendingUpSlots.containsKey(pointerId)) {
       onPointerUp(pointerType: pointerType, pointerId: pointerId, buttons: buttons);
-    } else if (_pendingUpSlots.isNotEmpty) {
+    } else {
       _releaseAllSlots(flushPendingUps: true);
       _currentStroke = null;
       _isDrawing = false;
       _penState = PenState.idle;
+      _lastPosition = null;
+      _predictedPosition = null;
+      _currentVelocity = Offset.zero;
       _resetSmoothingBuffers();
       canvasNotifier.notify();
       notifyListeners();
     }
+  }
+
+  /// Fully resets drawing session upon disconnect, window change, or remote reset
+  void resetDrawingSession() {
+    _releaseAllSlots(flushPendingUps: false);
+    _currentStroke = null;
+    _isDrawing = false;
+    _penState = PenState.idle;
+    _lastPosition = null;
+    _predictedPosition = null;
+    _currentVelocity = Offset.zero;
+    _resetSmoothingBuffers();
+    canvasNotifier.notify();
+    notifyListeners();
   }
 
   /// Handle incoming remote input event (e.g. tablet strokes received on PC server)

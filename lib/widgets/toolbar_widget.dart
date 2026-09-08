@@ -56,7 +56,7 @@ class ToolbarWidget extends StatelessWidget {
     this.onPrecisionModeChanged,
     this.pressureCurve = PressureCurve.standard,
     this.onPressureCurveChanged,
-    this.writingScale = 0.50,
+    this.writingScale = 1.0,
     this.onWritingScaleChanged,
     this.writingAnchor = WritingAnchor.center,
     this.onWritingAnchorChanged,
@@ -440,13 +440,13 @@ class _ActionButtons extends StatelessWidget {
                   ),
                   const SizedBox(height: 14),
                   _buildEngineOption(
-                    title: 'PC:Mobile 1:2 Scale (50% Notebook) ★ Default',
-                    subtitle: 'Natural handwriting scale. Small mobile writing renders neatly and compactly on PC.',
-                    icon: Icons.notes_rounded,
-                    accentColor: const Color(0xFF4ADE80),
-                    isSelected: (writingScale - 0.50).abs() < 0.08,
+                    title: 'Full Screen (100%) ★ Default',
+                    subtitle: 'Full display 1:1 mapping for full PC screen reach, sketches, and whole-screen drawing.',
+                    icon: Icons.fullscreen_rounded,
+                    accentColor: const Color(0xFFFFD700),
+                    isSelected: (writingScale - 1.0).abs() < 0.08,
                     onTap: () {
-                      onWritingScaleChanged?.call(0.50);
+                      onWritingScaleChanged?.call(1.0);
                       Navigator.pop(ctx);
                     },
                   ),
@@ -464,13 +464,13 @@ class _ActionButtons extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   _buildEngineOption(
-                    title: 'Full Screen (100%)',
-                    subtitle: 'Full display 1:1 mapping for large sketches and whole-screen navigation.',
-                    icon: Icons.fullscreen_rounded,
-                    accentColor: const Color(0xFFFFD700),
-                    isSelected: (writingScale - 1.0).abs() < 0.08,
+                    title: 'Compact Note (50% Notebook)',
+                    subtitle: 'Natural handwriting scale. Small mobile writing renders compactly on PC.',
+                    icon: Icons.notes_rounded,
+                    accentColor: const Color(0xFF4ADE80),
+                    isSelected: (writingScale - 0.50).abs() < 0.08,
                     onTap: () {
-                      onWritingScaleChanged?.call(1.0);
+                      onWritingScaleChanged?.call(0.50);
                       Navigator.pop(ctx);
                     },
                   ),

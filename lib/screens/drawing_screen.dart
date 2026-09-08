@@ -66,10 +66,26 @@ class _DrawingScreenState extends State<DrawingScreen> {
       drawing.onInputGenerated = (event) {
         connection.sendInputEvent(event);
       };
+      final settings = drawing.brushSettings;
+      connection.sendBrushUpdate(
+        tool: settings.mode == BrushMode.eraser ? 'eraser' : 'pen',
+        colorHex: '#${settings.color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}',
+        strokeWidth: settings.baseWidth,
+      );
     });
 
     // Auto-hide toolbar
     _resetToolbarTimer();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final drawing = context.read<DrawingProvider>();
+    final connection = context.read<ConnectionProvider>();
+    drawing.onInputGenerated = (event) {
+      connection.sendInputEvent(event);
+    };
   }
 
   // Await and handle Wakelock (Bug 85)
@@ -96,6 +112,9 @@ class _DrawingScreenState extends State<DrawingScreen> {
     SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _hideToolbarTimer?.cancel();
+    try {
+      context.read<DrawingProvider>().resetDrawingSession();
+    } catch (_) {}
     super.dispose();
   }
 
@@ -114,6 +133,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A12),
       body: Stack(
+        fit: StackFit.expand,
         children: [
           // Drawing Canvas with Graphics Tablet Surface (Full Width or PC Aspect Ratio Match)
           Positioned.fill(
@@ -144,6 +164,9 @@ class _DrawingScreenState extends State<DrawingScreen> {
                     final double currentServerAspect = (serverCfg.screenWidth > 0 && serverCfg.screenHeight > 0)
                         ? (serverCfg.screenWidth.toDouble() / serverCfg.screenHeight.toDouble())
                         : (16.0 / 9.0);
+
+                    final drawing = context.read<DrawingProvider>();
+                    drawing.setCanvasDimensionsSilently(canvasW, canvasH);
 
                     if (_lastWidth != canvasW || _lastHeight != canvasH || _lastServerAspect != currentServerAspect) {
                       _lastWidth = canvasW;
@@ -226,7 +249,14 @@ class _DrawingScreenState extends State<DrawingScreen> {
                   builder: (context, drawing, connection, child) {
                     return ToolbarWidget(
                     brushSettings: drawing.brushSettings,
-                    onBrushChanged: (settings) => drawing.updateBrush(settings),
+                    onBrushChanged: (settings) {
+                      drawing.updateBrush(settings);
+                      connection.sendBrushUpdate(
+                        tool: settings.mode == BrushMode.eraser ? 'eraser' : 'pen',
+                        colorHex: '#${settings.color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}',
+                        strokeWidth: settings.baseWidth,
+                      );
+                    },
                     onUndo: () => drawing.undo(),
                     onClear: () => drawing.clearCanvas(),
                     onDisconnect: () {
@@ -329,46 +359,71 @@ class _DrawingScreenState extends State<DrawingScreen> {
           ),
 
           // Pro Real-time Performance & Telemetry HUD (Top Left)
-          const Positioned(
+          Positioned(
             top: 14,
             left: 14,
-            child: _ProPerformanceHUD(),
+            child: Selector<DrawingProvider, bool>(
+              selector: (_, d) => d.isDrawing,
+              builder: (_, isDrawing, child) => IgnorePointer(
+                ignoring: isDrawing,
+                child: child,
+              ),
+              child: const _ProPerformanceHUD(),
+            ),
           ),
 
           // Floating Box Selector Bubble (Screen recorder style floating dot)
-          const _FloatingBoxSelectorBubble(),
+          Positioned.fill(
+            child: Selector<DrawingProvider, bool>(
+              selector: (_, d) => d.isDrawing,
+              builder: (_, isDrawing, child) => IgnorePointer(
+                ignoring: isDrawing,
+                child: child,
+              ),
+              child: const _FloatingBoxSelectorBubble(),
+            ),
+          ),
 
           // Laptop Screenshot (Snipping Tool) Drag-to-Select Box Overlay
-          Consumer<DrawingProvider>(
-            builder: (context, drawing, _) {
-              if (!drawing.isSnippingBox) return const SizedBox.shrink();
-              return const _SnippingBoxSelectorOverlay();
-            },
+          Positioned.fill(
+            child: Consumer<DrawingProvider>(
+              builder: (context, drawing, _) {
+                if (!drawing.isSnippingBox) return const SizedBox.shrink();
+                return const _SnippingBoxSelectorOverlay();
+              },
+            ),
           ),
 
           // Connection floating indicator (wrapped in granular Consumer to prevent whole screen rebuilds) (Bug 89)
           Positioned(
             top: 16,
             right: 16,
-            child: Listener(
-              behavior: HitTestBehavior.opaque,
-              onPointerDown: (_) {}, // Prevents tap on connection button from leaking down to canvas
-              child: Consumer<ConnectionProvider>(
-                builder: (context, connection, child) {
-                  return ConnectionFloatingButton(
-                    isConnected: connection.isConnected,
-                    latency: connection.latencyMs,
-                    deviceName: connection.connectedDeviceName,
-                    onTap: () {
-                      if (!_showToolbar) {
-                        setState(() => _showToolbar = true);
-                      } else {
-                        setState(() => _showToolbar = false);
-                      }
-                      _resetToolbarTimer();
-                    },
-                  );
-                },
+            child: Selector<DrawingProvider, bool>(
+              selector: (_, d) => d.isDrawing,
+              builder: (_, isDrawing, child) => IgnorePointer(
+                ignoring: isDrawing,
+                child: child,
+              ),
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: (_) {}, // Prevents tap on connection button from leaking down to canvas
+                child: Consumer<ConnectionProvider>(
+                  builder: (context, connection, child) {
+                    return ConnectionFloatingButton(
+                      isConnected: connection.isConnected,
+                      latency: connection.latencyMs,
+                      deviceName: connection.connectedDeviceName,
+                      onTap: () {
+                        if (!_showToolbar) {
+                          setState(() => _showToolbar = true);
+                        } else {
+                          setState(() => _showToolbar = false);
+                        }
+                        _resetToolbarTimer();
+                      },
+                    );
+                  },
+                ),
               ),
             ),
           ),
@@ -379,37 +434,44 @@ class _DrawingScreenState extends State<DrawingScreen> {
               bottom: 12,
               left: 0,
               right: 0,
-              child: Center(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    setState(() => _showToolbar = true);
-                    _resetToolbarTimer();
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E293B).withValues(alpha: 0.85),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.4), width: 1.0),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.4),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.keyboard_arrow_up, color: Color(0xFF00E5FF), size: 16),
-                        SizedBox(width: 6),
-                        Text(
-                          'Show Toolbar',
-                          style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
-                        ),
-                      ],
+              child: Selector<DrawingProvider, bool>(
+                selector: (_, d) => d.isDrawing,
+                builder: (_, isDrawing, child) => IgnorePointer(
+                  ignoring: isDrawing,
+                  child: child,
+                ),
+                child: Center(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      setState(() => _showToolbar = true);
+                      _resetToolbarTimer();
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E293B).withValues(alpha: 0.85),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.4), width: 1.0),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.4),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.keyboard_arrow_up, color: Color(0xFF00E5FF), size: 16),
+                          SizedBox(width: 6),
+                          Text(
+                            'Show Toolbar',
+                            style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -703,7 +765,7 @@ class _ProPerformanceHUD extends StatefulWidget {
 }
 
 class _ProPerformanceHUDState extends State<_ProPerformanceHUD> {
-  bool _minimized = false;
+  bool _minimized = true;
 
   @override
   Widget build(BuildContext context) {
@@ -893,8 +955,10 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
           _pos = Offset(screenW - 58, screenH * 0.38);
         }
 
-        final clampedX = _pos.dx.clamp(6.0, screenW - 54.0);
-        final clampedY = _pos.dy.clamp(50.0, screenH - 110.0);
+        final maxX = math.max(6.0, screenW - 54.0);
+        final maxY = math.max(50.0, screenH - 110.0);
+        final clampedX = _pos.dx.clamp(6.0, maxX);
+        final clampedY = _pos.dy.clamp(50.0, maxY);
         final isRightSide = clampedX > screenW / 2;
 
         return Stack(
@@ -1030,7 +1094,13 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                                 ])
                                   GestureDetector(
                                     onTap: () {
-                                      drawing.updateBrush(drawing.brushSettings.copyWith(color: c));
+                                      final newSettings = drawing.brushSettings.copyWith(color: c);
+                                      drawing.updateBrush(newSettings);
+                                      context.read<ConnectionProvider>().sendBrushUpdate(
+                                        tool: newSettings.mode == BrushMode.eraser ? 'eraser' : 'pen',
+                                        colorHex: '#${c.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}',
+                                        strokeWidth: newSettings.baseWidth,
+                                      );
                                     },
                                     child: AnimatedContainer(
                                       duration: const Duration(milliseconds: 150),
@@ -1066,7 +1136,13 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                                 for (final w in const [2.0, 5.0, 12.0])
                                   GestureDetector(
                                     onTap: () {
-                                      drawing.updateBrush(drawing.brushSettings.copyWith(baseWidth: w));
+                                      final newSettings = drawing.brushSettings.copyWith(baseWidth: w);
+                                      drawing.updateBrush(newSettings);
+                                      context.read<ConnectionProvider>().sendBrushUpdate(
+                                        tool: newSettings.mode == BrushMode.eraser ? 'eraser' : 'pen',
+                                        colorHex: '#${newSettings.color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}',
+                                        strokeWidth: w,
+                                      );
                                     },
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -1148,10 +1224,10 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
 
                           // PC:Mobile 1:2 Scale toggle
                           _buildMenuItem(
-                            icon: Icons.aspect_ratio,
+                            icon: Icons.format_size,
                             title: (drawing.writingScale - 0.50).abs() < 0.08
-                                ? 'PC:Mobile Scale: 1:2 (Half / Notebook) ✓'
-                                : 'PC:Mobile Scale: ${(drawing.writingScale * 100).round()}% (Tap for 1:2)',
+                                ? 'Notebook Scale (0.50x Centered) ✓'
+                                : 'Full Screen Scale (1.0x Full Display)',
                             color: const Color(0xFF4ADE80),
                             onTap: () {
                               if ((drawing.writingScale - 0.50).abs() < 0.08) {
@@ -1164,8 +1240,8 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                                 SnackBar(
                                   content: Text(
                                     (drawing.writingScale - 0.50).abs() < 0.08
-                                        ? '📐 PC:Mobile Scale set to 1:2 (Small handwriting feel on PC)'
-                                        : '📐 PC:Mobile Scale set to 1:1 (Full screen scale)',
+                                        ? '📐 Notebook Scale (0.50x centered on PC)'
+                                        : '🖥️ Full Screen Scale (1.0x 100% display)',
                                     style: const TextStyle(fontWeight: FontWeight.bold),
                                   ),
                                   duration: const Duration(seconds: 2),
@@ -1181,7 +1257,7 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                           // Full screen
                           _buildMenuItem(
                             icon: Icons.fullscreen,
-                            title: 'Full Screen (Draw over entire display)',
+                            title: 'Full Screen (1:1 100% Display Scale)',
                             color: const Color(0xFF22C55E),
                             onTap: () {
                               setState(() => _isMenuOpen = false);
@@ -1189,7 +1265,7 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                               ScaffoldMessenger.of(context).clearSnackBars();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
-                                  content: Text('🖥️ Full Screen Mode: Active (Full display drawing)', style: TextStyle(fontWeight: FontWeight.bold)),
+                                  content: Text('🖥️ Full Screen Mode: 100% display coverage active', style: TextStyle(fontWeight: FontWeight.bold)),
                                   duration: Duration(seconds: 2),
                                   backgroundColor: Color(0xFF1F2937),
                                   behavior: SnackBarBehavior.floating,

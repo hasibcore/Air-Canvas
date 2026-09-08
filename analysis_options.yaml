@@ -9,6 +9,11 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    - "test_*.dart"
+    - "scratch/**"
+
 # Removed previous analyzer deprecated_member_use suppression.
 # All deprecated APIs (such as .withOpacity) have been updated to modern equivalents (.withValues).
 

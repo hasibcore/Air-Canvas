@@ -1001,12 +1001,9 @@ namespace AirCanvas
                     int targetX = drawArea.Left + (int)Math.Round(x * Math.Max(1, drawArea.Width - 1));
                     int targetY = drawArea.Top + (int)Math.Round(y * Math.Max(1, drawArea.Height - 1));
 
-                    // Safe Edge Margin Inset (3px):
-                    // Prevents edge gestures from triggering outer resize borders or accidental desktop clicks
-                    // while retaining full reach across the application canvas.
-                    const int safeEdgeInset = 3;
-                    targetX = Math.Max(drawArea.Left + safeEdgeInset, Math.Min(drawArea.Right - 1 - safeEdgeInset, targetX));
-                    targetY = Math.Max(drawArea.Top + safeEdgeInset, Math.Min(drawArea.Bottom - 1 - safeEdgeInset, targetY));
+                    // Bounds clamping to target drawing area without artificial edge insets
+                    targetX = Math.Max(drawArea.Left, Math.Min(drawArea.Right - 1, targetX));
+                    targetY = Math.Max(drawArea.Top, Math.Min(drawArea.Bottom - 1, targetY));
 
                     // Multi-Monitor Virtual Desktop Normalization
                     int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
@@ -1018,8 +1015,7 @@ namespace AirCanvas
 
                     uint absX = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetX - vx) / Math.Max(1, vw - 1)) * 65535.0)));
                     uint absY = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetY - vy) / Math.Max(1, vh - 1)) * 65535.0)));
-
-                    bool isRightClick = (buttons & 2) != 0;
+                    bool isRightClick = (buttons & 2) != 0 || tool.Equals("eraser", StringComparison.OrdinalIgnoreCase) || pointerType == 3;
                     uint baseFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE;
 
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
@@ -1033,11 +1029,13 @@ namespace AirCanvas
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
                     {
+                        SetCursorPos(targetX, targetY);
                         mouse_event(baseFlags, absX, absY, 0, UIntPtr.Zero);
                         lastInjectedPoint = new PointF((float)x, (float)y);
                     }
                     else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
                     {
+                        SetCursorPos(targetX, targetY);
                         ReleaseHeldButton(absX, absY);
                         lastInjectedPoint = PointF.Empty;
                     }
@@ -1052,11 +1050,9 @@ namespace AirCanvas
         /// </summary>
         private void ReleaseHeldButton(uint absX, uint absY)
         {
-            if (activeButtonDownFlag == 0) return;
-
             uint upFlag = (activeButtonDownFlag == MOUSEEVENTF_RIGHTDOWN)
                 ? MOUSEEVENTF_RIGHTUP
-                : MOUSEEVENTF_LEFTUP;
+                : (activeButtonDownFlag == MOUSEEVENTF_LEFTDOWN ? MOUSEEVENTF_LEFTUP : (MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP));
             activeButtonDownFlag = 0;
             try
             {
@@ -1070,7 +1066,6 @@ namespace AirCanvas
         /// </summary>
         private void ReleaseHeldButtonAtCursor()
         {
-            if (activeButtonDownFlag == 0) return;
             try
             {
                 Point p = Cursor.Position;
@@ -2273,6 +2268,44 @@ namespace AirCanvas
                 if (json.Contains("\"ppt_eraser\""))
                 {
                     TriggerPowerPointEraser();
+                    return;
+                }
+                if (json.Contains("\"brush_update\""))
+                {
+                    string updateTool = "pen";
+                    int tPos = json.IndexOf("\"tool\":", StringComparison.OrdinalIgnoreCase);
+                    if (tPos != -1)
+                    {
+                        int s = json.IndexOf('"', tPos + 7);
+                        if (s != -1) { s++; int e = json.IndexOf('"', s); if (e > s) updateTool = json.Substring(s, e - s); }
+                    }
+                    string updateColor = "#38bdf8";
+                    int cPos = json.IndexOf("\"color\":", StringComparison.OrdinalIgnoreCase);
+                    if (cPos != -1)
+                    {
+                        int s = json.IndexOf('"', cPos + 8);
+                        if (s != -1) { s++; int e = json.IndexOf('"', s); if (e > s) updateColor = json.Substring(s, e - s); }
+                    }
+                    double updateWidth = 3.0;
+                    int wPos = json.IndexOf("\"width\":", StringComparison.OrdinalIgnoreCase);
+                    if (wPos == -1) wPos = json.IndexOf("\"w\":", StringComparison.OrdinalIgnoreCase);
+                    if (wPos != -1)
+                    {
+                        int offset = (json[wPos + 1] == 'w' || json[wPos + 1] == 'W') ? (json[wPos + 2] == 'i' || json[wPos + 2] == 'I' ? 8 : 4) : 8;
+                        int s = wPos + offset;
+                        int e = json.IndexOfAny(new char[] { ',', '}', ']' }, s);
+                        if (e > s)
+                        {
+                            string val = json.Substring(s, e - s).Trim('\"', ' ', '\t', '\r', '\n');
+                            double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out updateWidth);
+                        }
+                    }
+                    if (session != null)
+                    {
+                        session.Tool = updateTool;
+                        session.ColorHex = updateColor;
+                        if (updateWidth > 0.1) session.StrokeWidth = updateWidth;
+                    }
                     return;
                 }
 
