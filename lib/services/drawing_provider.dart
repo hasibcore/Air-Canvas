@@ -356,6 +356,16 @@ class DrawingProvider extends ChangeNotifier {
   WritingAnchor _writingAnchor = WritingAnchor.center;
   double _serverAspectRatio = 16.0 / 9.0;
 
+  // Canvas Mode: 16:9 PC Fit (false, default: zero distortion, perfect circles on laptop) vs Full Phone (true: stretched)
+  bool _fullScreenTabletMode = false;
+  bool get fullScreenTabletMode => _fullScreenTabletMode;
+  set fullScreenTabletMode(bool val) {
+    if (_fullScreenTabletMode != val) {
+      _fullScreenTabletMode = val;
+      notifyListeners();
+    }
+  }
+
   // --- Custom Drawing Box (Active Work Area / ROI) ---
   bool _customBoxEnabled = false;
   Rect _customBoxNormalized = const Rect.fromLTRB(0.12, 0.12, 0.88, 0.88);

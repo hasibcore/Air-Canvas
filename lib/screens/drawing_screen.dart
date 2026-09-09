@@ -40,10 +40,6 @@ class _DrawingScreenState extends State<DrawingScreen> {
   // Default fallback pressure constant (Bug 93)
   static const double _defaultPressure = 0.5;
 
-
-  // Graphics Tablet Mode: true = 100% full screen edge-to-edge (Software aspect ratio compensation guarantees perfect shapes)
-  bool _fullScreenTabletMode = true;
-
   @override
   void initState() {
     super.initState();
@@ -137,8 +133,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
         children: [
           // Drawing Canvas with Graphics Tablet Surface (Full Width or PC Aspect Ratio Match)
           Positioned.fill(
-            child: Consumer<ConnectionProvider>(
-              builder: (context, connection, _) {
+            child: Consumer2<ConnectionProvider, DrawingProvider>(
+              builder: (context, connection, drawing, _) {
                 return LayoutBuilder(
                   builder: (context, constraints) {
                     final serverCfg = connection.serverConfig;
@@ -149,8 +145,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
                     double canvasW = constraints.maxWidth;
                     double canvasH = constraints.maxHeight;
 
-                    // If not in 100% full screen mode, preserve PC monitor aspect ratio
-                    if (!_fullScreenTabletMode) {
+                    // If not in 100% full screen mode, preserve PC monitor aspect ratio (16:9 PC Fit Mode)
+                    if (!drawing.fullScreenTabletMode) {
                       final screenRatio = constraints.maxWidth / constraints.maxHeight;
                       if (screenRatio > targetRatio) {
                         canvasH = constraints.maxHeight;
@@ -165,7 +161,6 @@ class _DrawingScreenState extends State<DrawingScreen> {
                         ? (serverCfg.screenWidth.toDouble() / serverCfg.screenHeight.toDouble())
                         : (16.0 / 9.0);
 
-                    final drawing = context.read<DrawingProvider>();
                     drawing.setCanvasDimensionsSilently(canvasW, canvasH);
 
                     if (_lastWidth != canvasW || _lastHeight != canvasH || _lastServerAspect != currentServerAspect) {
@@ -174,7 +169,6 @@ class _DrawingScreenState extends State<DrawingScreen> {
                       _lastServerAspect = currentServerAspect;
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) {
-                          final drawing = context.read<DrawingProvider>();
                           drawing.updateCanvasSize(canvasW, canvasH);
                           drawing.updateServerAspectRatio(currentServerAspect);
                         }
@@ -194,11 +188,11 @@ class _DrawingScreenState extends State<DrawingScreen> {
                           child: Container(
                             decoration: BoxDecoration(
                               color: const Color(0xFF0A0A12),
-                              borderRadius: !_fullScreenTabletMode ? BorderRadius.circular(8) : null,
-                              border: !_fullScreenTabletMode
+                              borderRadius: !drawing.fullScreenTabletMode ? BorderRadius.circular(8) : null,
+                              border: !drawing.fullScreenTabletMode
                                   ? Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.6), width: 1.5)
                                   : null,
-                              boxShadow: !_fullScreenTabletMode
+                              boxShadow: !drawing.fullScreenTabletMode
                                   ? [
                                       BoxShadow(
                                         color: const Color(0xFF00E5FF).withValues(alpha: 0.12),
@@ -210,7 +204,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
                             ),
                             child: CustomPaint(
                               painter: DrawingPainter(
-                                drawingProvider: context.read<DrawingProvider>(),
+                                drawingProvider: drawing,
                               ),
                               size: Size.infinite,
                             ),
@@ -269,9 +263,9 @@ class _DrawingScreenState extends State<DrawingScreen> {
                     palmRejection: drawing.palmRejection,
                     onPalmRejectionChanged: (value) =>
                         drawing.palmRejection = value,
-                    fullScreenMode: _fullScreenTabletMode,
+                    fullScreenMode: drawing.fullScreenTabletMode,
                     onFullScreenModeChanged: (val) {
-                      setState(() => _fullScreenTabletMode = val);
+                      drawing.fullScreenTabletMode = val;
                       ScaffoldMessenger.of(context).clearSnackBars();
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
@@ -391,6 +385,99 @@ class _DrawingScreenState extends State<DrawingScreen> {
                 if (!drawing.isSnippingBox) return const SizedBox.shrink();
                 return const _SnippingBoxSelectorOverlay();
               },
+            ),
+          ),
+
+          // Canvas Ratio Mode Badge Chip (16:9 PC Fit vs Full Screen toggle)
+          Positioned(
+            top: 16,
+            right: 124,
+            child: Selector<DrawingProvider, bool>(
+              selector: (_, d) => d.isDrawing,
+              builder: (_, isDrawing, child) => IgnorePointer(
+                ignoring: isDrawing,
+                child: child,
+              ),
+              child: Consumer<DrawingProvider>(
+                builder: (context, drawing, _) {
+                  final isFull = drawing.fullScreenTabletMode;
+                  return Listener(
+                    behavior: HitTestBehavior.opaque,
+                    onPointerDown: (_) {},
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        drawing.fullScreenTabletMode = !isFull;
+                        ScaffoldMessenger.of(context).clearSnackBars();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              !isFull
+                                  ? '📱 Full Phone Mode: Canvas fills phone screen (Stretched)'
+                                  : '🖥️ 16:9 PC Fit: 1:1 Laptop Aspect Ratio (Zero Distortion, Perfect Circles)',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            duration: const Duration(seconds: 2),
+                            backgroundColor: const Color(0xFF1E293B),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                      child: Container(
+                        height: 38,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        decoration: BoxDecoration(
+                          color: isFull
+                              ? const Color(0xFF7C3AED).withValues(alpha: 0.3)
+                              : const Color(0xFF00E5FF).withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(19),
+                          border: Border.all(
+                            color: isFull
+                                ? const Color(0xFFA78BFA)
+                                : const Color(0xFF00E5FF),
+                            width: 1.3,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: (isFull
+                                      ? const Color(0xFF7C3AED)
+                                      : const Color(0xFF00E5FF))
+                                  .withValues(alpha: 0.3),
+                              blurRadius: 10,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              isFull
+                                  ? Icons.smartphone
+                                  : Icons.laptop_chromebook,
+                              color: isFull
+                                  ? const Color(0xFFA78BFA)
+                                  : const Color(0xFF00E5FF),
+                              size: 16,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              isFull ? 'Full Phone' : '16:9 PC Fit',
+                              style: TextStyle(
+                                color: isFull
+                                    ? const Color(0xFFA78BFA)
+                                    : const Color(0xFF00E5FF),
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
           ),
 
@@ -1222,26 +1309,59 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                           ),
                           const Divider(color: Colors.white12, height: 8),
 
-                          // PC:Mobile 1:2 Scale toggle
+                          // Canvas Aspect Ratio Match Mode toggle
+                          _buildMenuItem(
+                            icon: !drawing.fullScreenTabletMode ? Icons.laptop_chromebook : Icons.smartphone,
+                            title: !drawing.fullScreenTabletMode
+                                ? 'Canvas Ratio: 16:9 PC Fit (Zero Distortion) ✓'
+                                : 'Canvas Ratio: Full Phone (Stretched)',
+                            color: !drawing.fullScreenTabletMode ? const Color(0xFF00E5FF) : const Color(0xFFA78BFA),
+                            onTap: () {
+                              drawing.fullScreenTabletMode = !drawing.fullScreenTabletMode;
+                              ScaffoldMessenger.of(context).clearSnackBars();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    !drawing.fullScreenTabletMode
+                                        ? '🖥️ 16:9 PC Fit Active: Perfect circles & proportions on laptop'
+                                        : '📱 Full Phone Mode Active: Fills entire phone screen',
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                  duration: const Duration(seconds: 2),
+                                  backgroundColor: const Color(0xFF1F2937),
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            },
+                          ),
+                          const Divider(color: Colors.white12, height: 8),
+
+                          // PC Note Writing Scale cycle (1.0x -> 0.75x -> 0.50x)
                           _buildMenuItem(
                             icon: Icons.format_size,
                             title: (drawing.writingScale - 0.50).abs() < 0.08
-                                ? 'Notebook Scale (0.50x Centered) ✓'
-                                : 'Full Screen Scale (1.0x Full Display)',
+                                ? 'Writing Scale: 0.50x Notebook (OneNote) ✓'
+                                : ((drawing.writingScale - 0.75).abs() < 0.08
+                                    ? 'Writing Scale: 0.75x Medium (Slides) ✓'
+                                    : 'Writing Scale: 1.0x Full Display ✓'),
                             color: const Color(0xFF4ADE80),
                             onTap: () {
-                              if ((drawing.writingScale - 0.50).abs() < 0.08) {
-                                drawing.writingScale = 1.0;
-                              } else {
+                              if ((drawing.writingScale - 1.0).abs() < 0.08) {
+                                drawing.writingScale = 0.75;
+                              } else if ((drawing.writingScale - 0.75).abs() < 0.08) {
                                 drawing.writingScale = 0.50;
+                              } else {
+                                drawing.writingScale = 1.0;
                               }
                               ScaffoldMessenger.of(context).clearSnackBars();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text(
                                     (drawing.writingScale - 0.50).abs() < 0.08
-                                        ? '📐 Notebook Scale (0.50x centered on PC)'
-                                        : '🖥️ Full Screen Scale (1.0x 100% display)',
+                                        ? '📐 0.50x Notebook Mode: Perfect for neat notes in OneNote & PDF'
+                                        : ((drawing.writingScale - 0.75).abs() < 0.08
+                                            ? '📊 0.75x Medium Mode: Balanced for slides & diagrams'
+                                            : '🖥️ 1.0x Full Display: Full screen graphics tablet reach'),
                                     style: const TextStyle(fontWeight: FontWeight.bold),
                                   ),
                                   duration: const Duration(seconds: 2),

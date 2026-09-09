@@ -24,14 +24,29 @@ namespace AirCanvas
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
+        private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
+        [DllImport("user32.dll")]
         private static extern bool SetProcessDPIAware();
+
+        private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
 
         [STAThread]
         public static void Main()
         {
             try
             {
-                try { SetProcessDPIAware(); } catch { }
+                try
+                {
+                    if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
+                    {
+                        SetProcessDPIAware();
+                    }
+                }
+                catch
+                {
+                    try { SetProcessDPIAware(); } catch { }
+                }
                 // Clean up any stale background instances
                 Process current = Process.GetCurrentProcess();
                 foreach (Process p in Process.GetProcessesByName("AirCanvas"))
@@ -421,6 +436,23 @@ namespace AirCanvas
         [DllImport("user32.dll")]
         private static extern int GetSystemMetrics(int nIndex);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        public struct MONITORINFOEX
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string szDevice;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct RECT
         {
@@ -445,60 +477,71 @@ namespace AirCanvas
             try
             {
                 IntPtr fgHwnd = GetForegroundWindow();
-                Screen targetScreen = null;
-                if (fgHwnd != IntPtr.Zero)
+                // MONITOR_DEFAULTTONEAREST = 2, MONITOR_DEFAULTTOPRIMARY = 1
+                IntPtr hMon = fgHwnd != IntPtr.Zero ? MonitorFromWindow(fgHwnd, 2) : MonitorFromWindow(IntPtr.Zero, 1);
+                if (hMon != IntPtr.Zero)
                 {
-                    targetScreen = Screen.FromHandle(fgHwnd);
-                }
-                if (targetScreen == null)
-                {
-                    targetScreen = Screen.PrimaryScreen;
-                }
-
-                // If foreground window is fullscreen (e.g. PowerPoint slide show, presentation, full-screen canvas),
-                // use entire Bounds. Otherwise, use WorkingArea to protect the Windows Taskbar & Start Menu!
-                if (fgHwnd != IntPtr.Zero && targetScreen != null)
-                {
-                    RECT fgRect;
-                    if (GetWindowRect(fgHwnd, out fgRect))
+                    MONITORINFOEX mi = new MONITORINFOEX();
+                    mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
+                    if (GetMonitorInfo(hMon, ref mi))
                     {
-                        bool isFullScreen = (fgRect.Left <= targetScreen.Bounds.Left &&
-                                             fgRect.Top <= targetScreen.Bounds.Top &&
-                                             fgRect.Right >= targetScreen.Bounds.Right &&
-                                             fgRect.Bottom >= targetScreen.Bounds.Bottom);
-                        if (isFullScreen)
+                        // If foreground window is fullscreen (e.g. PowerPoint slide show, presentation, full-screen canvas),
+                        // use entire physical monitor bounds rcMonitor. Otherwise use rcWork (protects Windows Taskbar).
+                        if (fgHwnd != IntPtr.Zero)
                         {
-                            return targetScreen.Bounds;
+                            RECT fgRect;
+                            if (GetWindowRect(fgHwnd, out fgRect))
+                            {
+                                bool isFullScreen = (fgRect.Left <= mi.rcMonitor.Left &&
+                                                     fgRect.Top <= mi.rcMonitor.Top &&
+                                                     fgRect.Right >= mi.rcMonitor.Right &&
+                                                     fgRect.Bottom >= mi.rcMonitor.Bottom);
+                                if (isFullScreen)
+                                {
+                                    return new Rectangle(mi.rcMonitor.Left, mi.rcMonitor.Top,
+                                        mi.rcMonitor.Right - mi.rcMonitor.Left, mi.rcMonitor.Bottom - mi.rcMonitor.Top);
+                                }
+                            }
                         }
+
+                        return new Rectangle(mi.rcWork.Left, mi.rcWork.Top,
+                            mi.rcWork.Right - mi.rcWork.Left, mi.rcWork.Bottom - mi.rcWork.Top);
                     }
                 }
+            }
+            catch { }
 
-                return targetScreen != null ? targetScreen.WorkingArea : Screen.PrimaryScreen.WorkingArea;
-            }
-            catch
-            {
-                return Screen.PrimaryScreen != null ? Screen.PrimaryScreen.WorkingArea : new Rectangle(0, 0, 1920, 1080);
-            }
+            // Fallback: system physical metrics
+            int sw = GetSystemMetrics(0); // SM_CXSCREEN
+            int sh = GetSystemMetrics(1); // SM_CYSCREEN
+            if (sw <= 0) sw = 1920;
+            if (sh <= 0) sh = 1080;
+            return new Rectangle(0, 0, sw, sh);
         }
 
         public static Size GetPhysicalScreenSize()
         {
             try
             {
-                IntPtr hdc = GetDC(IntPtr.Zero);
-                if (hdc != IntPtr.Zero)
+                IntPtr hMon = MonitorFromWindow(IntPtr.Zero, 1); // MONITOR_DEFAULTTOPRIMARY
+                if (hMon != IntPtr.Zero)
                 {
-                    int w = GetDeviceCaps(hdc, DESKTOPHORZRES);
-                    int h = GetDeviceCaps(hdc, DESKTOPVERTRES);
-                    ReleaseDC(IntPtr.Zero, hdc);
-                    if (w > 0 && h > 0)
+                    MONITORINFOEX mi = new MONITORINFOEX();
+                    mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
+                    if (GetMonitorInfo(hMon, ref mi))
                     {
-                        return new Size(w, h);
+                        int w = mi.rcMonitor.Right - mi.rcMonitor.Left;
+                        int h = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
+                        if (w > 0 && h > 0) return new Size(w, h);
                     }
                 }
             }
             catch { }
-            return Screen.PrimaryScreen.Bounds.Size;
+
+            int sw = GetSystemMetrics(0);
+            int sh = GetSystemMetrics(1);
+            if (sw > 0 && sh > 0) return new Size(sw, sh);
+            return new Size(1920, 1080);
         }
 
         private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
@@ -1010,8 +1053,8 @@ namespace AirCanvas
                     int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
                     int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
                     int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-                    if (vw <= 0) vw = Screen.PrimaryScreen.Bounds.Width;
-                    if (vh <= 0) vh = Screen.PrimaryScreen.Bounds.Height;
+                    if (vw <= 0) vw = drawArea.Width;
+                    if (vh <= 0) vh = drawArea.Height;
 
                     uint absX = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetX - vx) / Math.Max(1, vw - 1)) * 65535.0)));
                     uint absY = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetY - vy) / Math.Max(1, vh - 1)) * 65535.0)));
