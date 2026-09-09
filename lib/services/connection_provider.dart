@@ -285,6 +285,7 @@ class ConnectionProvider extends ChangeNotifier {
       await _startDiscoveryBroadcast(port);
 
       // Accept incoming connections
+      _httpServer = await HttpServer.bind(InternetAddress.anyIPv4, port);
       _httpServer!.listen(_handleIncomingConnection);
 
       debugPrint('[Server] Server started: $_localIp:$port');
@@ -455,7 +456,8 @@ class ConnectionProvider extends ChangeNotifier {
           // (network corruptions over WiFi are expected)
           return;
         }
-        if (payload.length == InputEvent.binaryPacketLength) {
+        if (payload.length == InputEvent.binaryPacketLength ||
+            payload.length == InputEvent.binaryPacketLengthV2) {
           onInputEventReceived?.call(InputEvent.fromBinary(payload));
         } else {
           try {
@@ -1045,8 +1047,6 @@ class ConnectionProvider extends ChangeNotifier {
     _completeAuth(false);
     _outboundQueue.clear();
     onClientDisconnected?.call();
-    // Only auto-reconnect if we were successfully connected and the connection dropped.
-    // Do NOT reconnect on initial handshake failure or incorrect PIN.
     if (_state == ConnectionState.connected) {
       _setState(ConnectionState.reconnecting);
 
@@ -1104,6 +1104,8 @@ class ConnectionProvider extends ChangeNotifier {
           _reconnectInProgress = false;
         }
       });
+    } else if (_state != ConnectionState.reconnecting) {
+      _setState(ConnectionState.disconnected);
     }
   }
 
@@ -1307,7 +1309,7 @@ class ConnectionProvider extends ChangeNotifier {
     // If connected via raw TCP (USB transport)
     if (_rawTcpSocket != null) {
       try {
-        _rawTcpSocket!.add(event.toBinary());
+        _rawTcpSocket!.add(event.toBinary(v2: true));
         _lastDataSentOrReceivedTime = DateTime.now().millisecondsSinceEpoch;
       } catch (e) {
         debugPrint('[USB] Raw TCP send error: $e');
@@ -1318,7 +1320,7 @@ class ConnectionProvider extends ChangeNotifier {
 
     if (_socket == null) return;
     final List<int> rawBytes = _serverConfig.useBinaryProtocol
-        ? event.toBinary()
+        ? event.toBinary(v2: true)
         : utf8.encode(jsonEncode({
             'type': 'input',
             'data': event.toJson(),

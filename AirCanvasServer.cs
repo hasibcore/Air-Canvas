@@ -239,8 +239,7 @@ namespace AirCanvas
                     int virtualTop = GetSystemMetrics(SM_YVIRTUALSCREEN);
                     int relX = screenX - virtualLeft;
                     int relY = screenY - virtualTop;
-                    _lastX = relX;
-                    _lastY = relY;
+                    bool relocated = (!_isInRange || _lastX != relX || _lastY != relY);
 
                     uint pVal = (uint)Math.Max(0, Math.Min(1024, (int)Math.Round(pressure * 1024.0)));
                     int tx = Math.Max(-90, Math.Min(90, (int)Math.Round(tiltX)));
@@ -265,13 +264,15 @@ namespace AirCanvas
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
                         // Pre-hover arrival frame if not currently in range or relocated
-                        if (!_isInRange || _lastX != relX || _lastY != relY)
+                        if (relocated)
                         {
                             POINTER_TYPE_INFO hover = p;
                             hover.penInfo.pointerInfo.pointerFlags = PointerFlags.POINTER_FLAG_INRANGE | PointerFlags.POINTER_FLAG_UPDATE;
                             hover.penInfo.pressure = 0;
                             InjectSyntheticPointerInput(_device, ref hover, 1);
                         }
+                        _lastX = relX;
+                        _lastY = relY;
 
                         PointerFlags flags = PointerFlags.POINTER_FLAG_INRANGE | PointerFlags.POINTER_FLAG_INCONTACT | PointerFlags.POINTER_FLAG_DOWN | PointerFlags.POINTER_FLAG_FIRSTBUTTON;
                         if ((buttons & 2) != 0) flags |= PointerFlags.POINTER_FLAG_SECONDBUTTON;
@@ -3319,7 +3320,8 @@ namespace AirCanvas
                 if (packet.Length >= 17 && packet[11] == 2)
                 {
                     uint seq = ((uint)packet[12] << 24) | ((uint)packet[13] << 16) | ((uint)packet[14] << 8) | (uint)packet[15];
-                    if (session.HasSequenceNumber && seq <= session.LastSequenceNumber)
+                    int diff = unchecked((int)(seq - session.LastSequenceNumber));
+                    if (session.HasSequenceNumber && diff <= 0 && diff > -100000)
                     {
                         // Duplicate or out-of-order packet rejected
                         return true;
@@ -3496,6 +3498,16 @@ namespace AirCanvas
 
         private string GetWebDrawingAppHtml()
         {
+            try
+            {
+                string studioPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "drawing_studio.html");
+                if (File.Exists(studioPath))
+                {
+                    return File.ReadAllText(studioPath, Encoding.UTF8);
+                }
+            }
+            catch { }
+
             return @"<!DOCTYPE html>
 <html lang=""en"">
 <head>

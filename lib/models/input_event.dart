@@ -130,7 +130,7 @@ class InputEvent {
     );
   }
 
-  /// Binary format for ultra-low-latency mode (Bug 45: Endianness independent)
+  /// Binary format for ultra-low-latency mode (v1 13-byte or v2 17-byte with sequence numbers)
   List<int> toBinary({bool v2 = false}) {
     final list = [
       type.index,

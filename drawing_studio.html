@@ -942,7 +942,9 @@ function resizeCanvas() {
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  if (prevCanvas) {
+  if (typeof pages !== 'undefined' && pages.length > 0 && activePageIndex >= 0 && pages[activePageIndex] && pages[activePageIndex].strokes.length > 0) {
+    redrawFromStrokes(pages[activePageIndex]);
+  } else if (prevCanvas) {
     ctx.drawImage(prevCanvas, 0, 0, w, h);
   } else {
     clearCanvasContent();
@@ -1242,6 +1244,7 @@ function updateUndoRedoButtons() {
 // ============================================================
 canvas.addEventListener('pointerdown', (e) => {
   e.preventDefault();
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
@@ -1262,7 +1265,12 @@ canvas.addEventListener('pointermove', (e) => {
   updateHUD();
 });
 
-canvas.addEventListener('pointerup', (e) => { e.preventDefault(); endStroke(); updateHUD(); });
+canvas.addEventListener('pointerup', (e) => {
+  e.preventDefault();
+  try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  endStroke();
+  updateHUD();
+});
 canvas.addEventListener('pointerleave', (e) => { if (isDrawing) { endStroke(); updateHUD(); } });
 canvas.addEventListener('pointercancel', (e) => { if (isDrawing) { endStroke(); updateHUD(); } });
 

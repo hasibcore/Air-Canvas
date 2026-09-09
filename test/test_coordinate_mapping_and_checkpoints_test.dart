@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_print
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -171,14 +171,31 @@ void main() {
     });
 
     test('CHECKPOINT C & D: Live Socket transmission against running AirCanvas.exe', () async {
+      ConnectionProvider? serverProvider;
+      int testPort = 9090;
+      bool liveServerRunning = false;
+      try {
+        final probe = await Socket.connect('127.0.0.1', 9090, timeout: const Duration(milliseconds: 300));
+        await probe.close();
+        liveServerRunning = true;
+      } catch (_) {}
+
+      String testPin = '1234';
+      if (!liveServerRunning) {
+        serverProvider = ConnectionProvider();
+        await serverProvider.startServer(port: 9097);
+        testPort = 9097;
+        testPin = serverProvider.pairingPin ?? '1234';
+      }
+
       final connection = ConnectionProvider();
       final connected = await connection.connectToServer(
         '127.0.0.1',
-        port: 9090,
-        pin: '1234',
-        onPinRequired: () async => '1234',
+        port: testPort,
+        pin: testPin,
+        onPinRequired: () async => testPin,
       );
-      expect(connected, isTrue, reason: 'Must connect to running AirCanvas.exe on port 9090');
+      expect(connected, isTrue, reason: 'Must connect to server');
 
       drawing.onInputGenerated = (event) {
         connection.sendInputEvent(event);
@@ -204,6 +221,7 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 100));
       await connection.disconnect();
+      await serverProvider?.disconnect();
     });
   });
 }

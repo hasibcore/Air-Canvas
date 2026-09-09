@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_print
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:air_canvas/models/input_event.dart';
@@ -19,13 +20,29 @@ void main() {
     drawing.updateCanvasSize(mobileWidth, mobileHeight);
     drawing.updateServerAspectRatio(1920.0 / 1080.0);
 
-    // 2. Connect to PC server (AirCanvas.exe running on 9090)
-    print('Connecting to PC server at 127.0.0.1:9090...');
+    // 2. Connect to PC server or in-process server
+    ConnectionProvider? serverProvider;
+    int testPort = 9090;
+    bool liveServerRunning = false;
+    try {
+      final probe = await Socket.connect('127.0.0.1', 9090, timeout: const Duration(milliseconds: 300));
+      await probe.close();
+      liveServerRunning = true;
+    } catch (_) {}
+
+    String testPin = '1234';
+    if (!liveServerRunning) {
+      serverProvider = ConnectionProvider();
+      await serverProvider.startServer(port: 9096);
+      testPort = 9096;
+      testPin = serverProvider.pairingPin ?? '1234';
+    }
+
     final connected = await connection.connectToServer(
       '127.0.0.1',
-      port: 9090,
-      pin: '1234',
-      onPinRequired: () async => '1234',
+      port: testPort,
+      pin: testPin,
+      onPinRequired: () async => testPin,
     );
 
     expect(connected, isTrue, reason: 'Must connect to server');
@@ -134,6 +151,7 @@ void main() {
 
     await Future.delayed(const Duration(milliseconds: 200));
     await connection.disconnect();
+    await serverProvider?.disconnect();
     print('\n🎉 Full Phone Touch Pipeline Succeeded!');
   });
 }

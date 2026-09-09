@@ -108,6 +108,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
     SystemChrome.setPreferredOrientations([]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _hideToolbarTimer?.cancel();
+    DrawingPainter.disposeCache();
     try {
       context.read<DrawingProvider>().resetDrawingSession();
     } catch (_) {}
@@ -725,6 +726,13 @@ class DrawingPainter extends CustomPainter {
   static ui.Picture? _cachedCompletedPicture;
   static int _cachedStrokeCount = -1;
   static Size? _cachedSize;
+
+  static void disposeCache() {
+    _cachedCompletedPicture?.dispose();
+    _cachedCompletedPicture = null;
+    _cachedStrokeCount = -1;
+    _cachedSize = null;
+  }
 
   DrawingPainter({
     required this.drawingProvider,
