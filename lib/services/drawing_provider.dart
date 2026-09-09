@@ -357,13 +357,24 @@ class DrawingProvider extends ChangeNotifier {
   WritingAnchor _writingAnchor = WritingAnchor.center;
   double _serverAspectRatio = 16.0 / 9.0;
 
-  // Canvas Mode: 16:9 PC Fit (false, default: zero distortion, perfect circles on laptop) vs Full Phone (true: stretched)
-  bool _fullScreenTabletMode = false;
+  // Canvas Mode: Full Screen (true, default: edge-to-edge graphics tablet digitizer) vs 16:9 PC Fit (false: letterboxed)
+  bool _fullScreenTabletMode = true;
   bool get fullScreenTabletMode => _fullScreenTabletMode;
   set fullScreenTabletMode(bool val) {
     if (_fullScreenTabletMode != val) {
       _fullScreenTabletMode = val;
       notifyListeners();
+    }
+  }
+
+  // Phase 15: Center Dot Diagnostic Mode (Displays exact center dot (0.5, 0.5) for alignment verification)
+  bool _showCenterGuide = false;
+  bool get showCenterGuide => _showCenterGuide;
+  set showCenterGuide(bool val) {
+    if (_showCenterGuide != val) {
+      _showCenterGuide = val;
+      notifyListeners();
+      canvasNotifier.notify();
     }
   }
 

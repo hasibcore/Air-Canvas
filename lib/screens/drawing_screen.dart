@@ -430,20 +430,20 @@ class _DrawingScreenState extends State<DrawingScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         decoration: BoxDecoration(
                           color: isFull
-                              ? const Color(0xFF7C3AED).withValues(alpha: 0.3)
-                              : const Color(0xFF00E5FF).withValues(alpha: 0.22),
+                              ? const Color(0xFF00E5FF).withValues(alpha: 0.22)
+                              : const Color(0xFF7C3AED).withValues(alpha: 0.22),
                           borderRadius: BorderRadius.circular(19),
                           border: Border.all(
                             color: isFull
-                                ? const Color(0xFFA78BFA)
-                                : const Color(0xFF00E5FF),
+                                ? const Color(0xFF00E5FF)
+                                : const Color(0xFFA78BFA),
                             width: 1.3,
                           ),
                           boxShadow: [
                             BoxShadow(
                               color: (isFull
-                                      ? const Color(0xFF7C3AED)
-                                      : const Color(0xFF00E5FF))
+                                      ? const Color(0xFF00E5FF)
+                                      : const Color(0xFF7C3AED))
                                   .withValues(alpha: 0.3),
                               blurRadius: 10,
                               spreadRadius: 1,
@@ -455,20 +455,20 @@ class _DrawingScreenState extends State<DrawingScreen> {
                           children: [
                             Icon(
                               isFull
-                                  ? Icons.smartphone
+                                  ? Icons.fullscreen
                                   : Icons.laptop_chromebook,
                               color: isFull
-                                  ? const Color(0xFFA78BFA)
-                                  : const Color(0xFF00E5FF),
+                                  ? const Color(0xFF00E5FF)
+                                  : const Color(0xFFA78BFA),
                               size: 16,
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              isFull ? 'Full Phone' : '16:9 PC Fit',
+                              isFull ? 'Full Screen' : '16:9 PC Fit',
                               style: TextStyle(
                                 color: isFull
-                                    ? const Color(0xFFA78BFA)
-                                    : const Color(0xFF00E5FF),
+                                    ? const Color(0xFF00E5FF)
+                                    : const Color(0xFFA78BFA),
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -792,6 +792,11 @@ class DrawingPainter extends CustomPainter {
         canvas.drawLine(lastPt.position, predPos, leadPaint);
       }
     }
+
+    // 4. Center Dot Alignment Diagnostic Guide (Phase 15 & 16)
+    if (drawingProvider.showCenterGuide) {
+      _drawCenterAlignmentGuide(canvas, size);
+    }
   }
 
   void _drawCustomBoxOverlay(Canvas canvas, Size size) {
@@ -849,6 +854,39 @@ class DrawingPainter extends CustomPainter {
     // Bottom-Right
     canvas.drawLine(boxRect.bottomRight, boxRect.bottomRight + const Offset(-cLen, 0), cornerPaint);
     canvas.drawLine(boxRect.bottomRight, boxRect.bottomRight + const Offset(0, -cLen), cornerPaint);
+  }
+
+  void _drawCenterAlignmentGuide(Canvas canvas, Size size) {
+    final center = Offset(size.width * 0.5, size.height * 0.5);
+
+    // Subtle outer halo
+    final haloPaint = Paint()
+      ..color = const Color(0xFF00E5FF).withValues(alpha: 0.20)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, 18, haloPaint);
+
+    // Target reticle circle
+    final ringPaint = Paint()
+      ..color = const Color(0xFF00E5FF).withValues(alpha: 0.85)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawCircle(center, 10, ringPaint);
+
+    // High-precision center dot
+    final dotPaint = Paint()
+      ..color = const Color(0xFF00E5FF)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, 3.0, dotPaint);
+
+    // Crosshair ticks
+    final crossPaint = Paint()
+      ..color = const Color(0xFF00E5FF).withValues(alpha: 0.70)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+    canvas.drawLine(center - const Offset(20, 0), center - const Offset(5, 0), crossPaint);
+    canvas.drawLine(center + const Offset(5, 0), center + const Offset(20, 0), crossPaint);
+    canvas.drawLine(center - const Offset(0, 20), center - const Offset(0, 5), crossPaint);
+    canvas.drawLine(center + const Offset(0, 5), center + const Offset(0, 20), crossPaint);
   }
 
   @override
@@ -1370,6 +1408,20 @@ class _FloatingBoxSelectorBubbleState extends State<_FloatingBoxSelectorBubble> 
                                   behavior: SnackBarBehavior.floating,
                                 ),
                               );
+                            },
+                          ),
+                          const Divider(color: Colors.white12, height: 8),
+
+                          // Phase 15: Center Dot Alignment Diagnostic Guide
+                          _buildMenuItem(
+                            icon: Icons.center_focus_strong,
+                            title: drawing.showCenterGuide
+                                ? 'Center Alignment Dot: Visible (0.5, 0.5) ✓'
+                                : 'Center Alignment Dot: Hidden',
+                            color: drawing.showCenterGuide ? const Color(0xFF00E5FF) : Colors.white70,
+                            onTap: () {
+                              drawing.showCenterGuide = !drawing.showCenterGuide;
+                              setState(() {});
                             },
                           ),
                           const Divider(color: Colors.white12, height: 8),

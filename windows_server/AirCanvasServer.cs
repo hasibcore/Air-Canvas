@@ -802,6 +802,14 @@ namespace AirCanvas
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
@@ -835,6 +843,13 @@ namespace AirCanvas
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int X;
+            public int Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         public struct RECT
         {
             public int Left;
@@ -843,6 +858,60 @@ namespace AirCanvas
             public int Bottom;
             public int Width { get { return Right - Left; } }
             public int Height { get { return Bottom - Top; } }
+        }
+
+        /// <summary>
+        /// Authoritative canonical geometry model representing the active PC drawing viewport.
+        /// Handles mathematical invariant center mapping: Mobile (0.5, 0.5) -> PC Center (CenterX, CenterY).
+        /// </summary>
+        public class TargetGeometry
+        {
+            public int Left { get; set; }
+            public int Top { get; set; }
+            public int Width { get; set; }
+            public int Height { get; set; }
+            public int CenterX { get { return Left + Width / 2; } }
+            public int CenterY { get { return Top + Height / 2; } }
+            public int Right { get { return Left + Width; } }
+            public int Bottom { get { return Top + Height; } }
+            public double AspectRatio { get { return Height > 0 ? (double)Width / Height : (16.0 / 9.0); } }
+            public int MonitorId { get; set; }
+            public uint Dpi { get; set; }
+            public string TargetMode { get; set; }
+
+            public Rectangle Bounds
+            {
+                get { return new Rectangle(Left, Top, Math.Max(1, Width), Math.Max(1, Height)); }
+            }
+
+            public Point MapNormalized(double normX, double normY)
+            {
+                int tx;
+                int ty;
+
+                // Phase 5 Center Invariant: Mobile (0.5, 0.5) must strictly map to exact geometric center
+                if (Math.Abs(normX - 0.5) < 1e-5)
+                {
+                    tx = CenterX;
+                }
+                else
+                {
+                    tx = Left + (int)Math.Round(normX * Math.Max(1, Width - 1), MidpointRounding.AwayFromZero);
+                }
+
+                if (Math.Abs(normY - 0.5) < 1e-5)
+                {
+                    ty = CenterY;
+                }
+                else
+                {
+                    ty = Top + (int)Math.Round(normY * Math.Max(1, Height - 1), MidpointRounding.AwayFromZero);
+                }
+
+                tx = Math.Max(Left, Math.Min(Right - 1, tx));
+                ty = Math.Max(Top, Math.Min(Bottom - 1, ty));
+                return new Point(tx, ty);
+            }
         }
 
         public class MonitorInfoItem
@@ -923,30 +992,55 @@ namespace AirCanvas
             }
         }
 
-        public static Rectangle GetTargetDrawingArea(int monitorIndex = 0)
+        public static TargetGeometry GetTargetGeometry(int monitorIndex = 0)
         {
             try
             {
                 var monitors = GetPhysicalMonitors();
+                // Mode A: User explicitly selected a physical monitor (Entire Screen)
                 if (monitorIndex > 0 && monitorIndex <= monitors.Count)
                 {
-                    return monitors[monitorIndex - 1].Bounds;
+                    var m = monitors[monitorIndex - 1];
+                    return new TargetGeometry
+                    {
+                        Left = m.Bounds.Left,
+                        Top = m.Bounds.Top,
+                        Width = m.Bounds.Width,
+                        Height = m.Bounds.Height,
+                        MonitorId = monitorIndex,
+                        Dpi = 96,
+                        TargetMode = "Monitor"
+                    };
                 }
+                // Virtual Desktop
                 if (monitors.Count > 1 && monitorIndex == monitors.Count + 1)
                 {
                     int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
                     int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
                     int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
                     int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-                    if (vw > 0 && vh > 0) return new Rectangle(vx, vy, vw, vh);
+                    if (vw > 0 && vh > 0)
+                    {
+                        return new TargetGeometry
+                        {
+                            Left = vx,
+                            Top = vy,
+                            Width = vw,
+                            Height = vh,
+                            MonitorId = -1,
+                            Dpi = 96,
+                            TargetMode = "VirtualDesktop"
+                        };
+                    }
                 }
             }
             catch { }
 
-            return GetTargetDrawingAreaAuto();
+            // Mode B: Auto (Active App Client Area / Fullscreen Monitor)
+            return GetTargetGeometryAuto();
         }
 
-        public static Rectangle GetTargetDrawingAreaAuto()
+        public static TargetGeometry GetTargetGeometryAuto()
         {
             try
             {
@@ -959,6 +1053,9 @@ namespace AirCanvas
                     mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
                     if (GetMonitorInfo(hMon, ref mi))
                     {
+                        int monW = mi.rcMonitor.Right - mi.rcMonitor.Left;
+                        int monH = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
+
                         if (fgHwnd != IntPtr.Zero)
                         {
                             StringBuilder sb = new StringBuilder(256);
@@ -968,49 +1065,94 @@ namespace AirCanvas
 
                             if (!isDesktopOrShell)
                             {
-                                RECT fgRect;
-                                if (GetWindowRect(fgHwnd, out fgRect))
+                                RECT winRect;
+                                if (GetWindowRect(fgHwnd, out winRect))
                                 {
-                                    int winW = fgRect.Right - fgRect.Left;
-                                    int winH = fgRect.Bottom - fgRect.Top;
-
-                                    bool isFullScreen = (fgRect.Left <= mi.rcMonitor.Left &&
-                                                         fgRect.Top <= mi.rcMonitor.Top &&
-                                                         fgRect.Right >= mi.rcMonitor.Right &&
-                                                         fgRect.Bottom >= mi.rcMonitor.Bottom);
+                                    bool isFullScreen = (winRect.Left <= mi.rcMonitor.Left &&
+                                                         winRect.Top <= mi.rcMonitor.Top &&
+                                                         winRect.Right >= mi.rcMonitor.Right &&
+                                                         winRect.Bottom >= mi.rcMonitor.Bottom);
                                     if (isFullScreen)
                                     {
-                                        return new Rectangle(mi.rcMonitor.Left, mi.rcMonitor.Top,
-                                            mi.rcMonitor.Right - mi.rcMonitor.Left, mi.rcMonitor.Bottom - mi.rcMonitor.Top);
+                                        return new TargetGeometry
+                                        {
+                                            Left = mi.rcMonitor.Left,
+                                            Top = mi.rcMonitor.Top,
+                                            Width = monW,
+                                            Height = monH,
+                                            MonitorId = 0,
+                                            TargetMode = "Fullscreen"
+                                        };
                                     }
 
-                                    if (IsZoomed(fgHwnd))
+                                    // Phase 6: Use true client drawing rectangle in screen coordinates
+                                    // to eliminate title bar, tab bar, and invisible DWM resize frame border offsets
+                                    RECT clientRect;
+                                    if (GetClientRect(fgHwnd, out clientRect))
                                     {
-                                        return new Rectangle(mi.rcWork.Left, mi.rcWork.Top,
-                                            mi.rcWork.Right - mi.rcWork.Left, mi.rcWork.Bottom - mi.rcWork.Top);
-                                    }
+                                        POINT pt = new POINT { X = 0, Y = 0 };
+                                        if (ClientToScreen(fgHwnd, ref pt))
+                                        {
+                                            int clientW = clientRect.Right - clientRect.Left;
+                                            int clientH = clientRect.Bottom - clientRect.Top;
 
-                                    if (winW > 120 && winH > 120)
-                                    {
-                                        return new Rectangle(fgRect.Left, fgRect.Top, winW, winH);
+                                            if (clientW > 120 && clientH > 120)
+                                            {
+                                                return new TargetGeometry
+                                                {
+                                                    Left = pt.X,
+                                                    Top = pt.Y,
+                                                    Width = clientW,
+                                                    Height = clientH,
+                                                    MonitorId = 0,
+                                                    TargetMode = IsZoomed(fgHwnd) ? "MaximizedClient" : "WindowedClient"
+                                                };
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        return new Rectangle(mi.rcWork.Left, mi.rcWork.Top,
-                            mi.rcWork.Right - mi.rcWork.Left, mi.rcWork.Bottom - mi.rcWork.Top);
+                        // Fallback to monitor bounds
+                        return new TargetGeometry
+                        {
+                            Left = mi.rcMonitor.Left,
+                            Top = mi.rcMonitor.Top,
+                            Width = monW,
+                            Height = monH,
+                            MonitorId = 0,
+                            TargetMode = "MonitorFallback"
+                        };
                     }
                 }
             }
             catch { }
 
-            // Fallback: system physical metrics
+            // System physical fallback
             int sw = GetSystemMetrics(0); // SM_CXSCREEN
             int sh = GetSystemMetrics(1); // SM_CYSCREEN
             if (sw <= 0) sw = 1920;
             if (sh <= 0) sh = 1080;
-            return new Rectangle(0, 0, sw, sh);
+            return new TargetGeometry
+            {
+                Left = 0,
+                Top = 0,
+                Width = sw,
+                Height = sh,
+                MonitorId = 0,
+                TargetMode = "SystemMetricsFallback"
+            };
+        }
+
+        public static Rectangle GetTargetDrawingArea(int monitorIndex = 0)
+        {
+            return GetTargetGeometry(monitorIndex).Bounds;
+        }
+
+        public static Rectangle GetTargetDrawingAreaAuto()
+        {
+            return GetTargetGeometryAuto().Bounds;
         }
 
         public static Size GetPhysicalScreenSize()
@@ -1061,6 +1203,7 @@ namespace AirCanvas
         //
         private uint activeButtonDownFlag = 0;
         private int lastPacketTick = Environment.TickCount;
+        private static TargetGeometry _lastTargetGeo = null;
 
         public MainForm()
         {
@@ -1078,12 +1221,12 @@ namespace AirCanvas
         private void PopulateMonitors()
         {
             cmbMonitor.Items.Clear();
-            cmbMonitor.Items.Add("Auto (Active App)");
+            cmbMonitor.Items.Add("Auto (Active App Client Area)");
             var monitors = GetPhysicalMonitors();
             for (int i = 0; i < monitors.Count; i++)
             {
                 var m = monitors[i];
-                string name = string.Format("Display {0} ({1}x{2}{3})",
+                string name = string.Format("Display {0} ({1}x{2}{3}) - Entire Screen",
                     i + 1, m.Bounds.Width, m.Bounds.Height, m.IsPrimary ? " Primary" : "");
                 cmbMonitor.Items.Add(name);
             }
@@ -1645,13 +1788,25 @@ namespace AirCanvas
             {
                 try
                 {
-                    Rectangle drawArea = GetTargetDrawingArea(selectedMonitorIndex);
-                    int targetX = drawArea.Left + (int)Math.Round(x * Math.Max(1, drawArea.Width - 1));
-                    int targetY = drawArea.Top + (int)Math.Round(y * Math.Max(1, drawArea.Height - 1));
+                    TargetGeometry geo = GetTargetGeometry(selectedMonitorIndex);
 
-                    // Bounds clamping to target drawing area without artificial edge insets
-                    targetX = Math.Max(drawArea.Left, Math.Min(drawArea.Right - 1, targetX));
-                    targetY = Math.Max(drawArea.Top, Math.Min(drawArea.Bottom - 1, targetY));
+                    // Phase 17: In-Flight Resize Guard
+                    // If target geometry changed while stroke is in contact, terminate stroke to prevent pointer jump
+                    if (_lastTargetGeo != null &&
+                        (_lastTargetGeo.Left != geo.Left || _lastTargetGeo.Top != geo.Top ||
+                         _lastTargetGeo.Width != geo.Width || _lastTargetGeo.Height != geo.Height))
+                    {
+                        if (syntheticPenBackend != null && syntheticPenBackend.IsInContact)
+                        {
+                            syntheticPenBackend.ForcePenUp();
+                        }
+                        ReleaseHeldButton();
+                    }
+                    _lastTargetGeo = geo;
+
+                    Point targetPt = geo.MapNormalized(x, y);
+                    int targetX = targetPt.X;
+                    int targetY = targetPt.Y;
 
                     bool isRightClick = (buttons & 2) != 0 || tool.Equals("eraser", StringComparison.OrdinalIgnoreCase) || pointerType == 3;
 
