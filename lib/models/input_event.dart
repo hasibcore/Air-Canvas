@@ -17,10 +17,11 @@ enum InputEventType {
 }
 
 class InputEvent {
-  /// Binary format length (13 bytes per event)
-  /// Format: [type:1][x:2][y:2][pressure:1][pointerType:1][pointerId:1][tiltX:1][tiltY:1][buttons:1][version:1][checksum:1]
+  /// Binary format length (13 bytes per event for v1, 17 bytes for v2 with sequence number)
   static const int binaryPacketLength = 13;
+  static const int binaryPacketLengthV2 = 17;
   static const int protocolVersion = 1;
+  static const int protocolVersionV2 = 2;
 
   final InputEventType type;
   final double x;          // normalized 0.0 - 1.0 (clamped)
@@ -31,6 +32,7 @@ class InputEvent {
   final double tiltX;      // stylus tilt (degrees, -90 to 90)
   final double tiltY;      // stylus tilt (degrees, -90 to 90)
   final int buttons;       // button state bitmask (1=primary, 2=secondary, 4=middle)
+  final int sequenceNumber;// monotonic packet sequence number
   final DateTime timestamp;
 
   InputEvent({
@@ -43,6 +45,7 @@ class InputEvent {
     double tiltX = 0.0,
     double tiltY = 0.0,
     this.buttons = 0,
+    this.sequenceNumber = 0,
     DateTime? timestamp,
   })  : x = x.isNaN || x.isInfinite ? 0.0 : x.clamp(0.0, 1.0), // Bug 43: Coordinate bounds
         y = y.isNaN || y.isInfinite ? 0.0 : y.clamp(0.0, 1.0), // Bug 43: Coordinate bounds
@@ -63,6 +66,7 @@ class InputEvent {
     'tx': _roundCoordinate(tiltX),
     'ty': _roundCoordinate(tiltY),
     'b': buttons,
+    'seq': sequenceNumber,
     'ts': timestamp.millisecondsSinceEpoch,
   };
 
@@ -98,6 +102,7 @@ class InputEvent {
     final txVal = _toDouble(json['tx']);
     final tyVal = _toDouble(json['ty']);
     final bVal = _toInt(json['b']);
+    final seqVal = _toInt(json['seq']);
 
     // Bug 44: Timestamp bounds validation
     DateTime timeVal = DateTime.now();
@@ -120,12 +125,13 @@ class InputEvent {
       tiltX: txVal,
       tiltY: tyVal,
       buttons: bVal,
+      sequenceNumber: seqVal,
       timestamp: timeVal,
     );
   }
 
   /// Binary format for ultra-low-latency mode (Bug 45: Endianness independent)
-  List<int> toBinary() {
+  List<int> toBinary({bool v2 = false}) {
     final list = [
       type.index,
       ..._floatToUint16(x),
@@ -136,32 +142,39 @@ class InputEvent {
       ((tiltX + 90) / 180 * 255).round().clamp(0, 255),
       ((tiltY + 90) / 180 * 255).round().clamp(0, 255),
       buttons.clamp(0, 255),
-      protocolVersion, // Byte 11: Version field (Bug 46)
+      v2 ? protocolVersionV2 : protocolVersion,
     ];
 
-    // Byte 12: Checksum (Bug 47: corrupted packet detection)
+    if (v2) {
+      final s = sequenceNumber.clamp(0, 0xFFFFFFFF);
+      list.addAll([
+        (s >> 24) & 0xFF,
+        (s >> 16) & 0xFF,
+        (s >> 8) & 0xFF,
+        s & 0xFF,
+      ]);
+    }
+
+    // Checksum byte
     final sum = list.reduce((a, b) => a + b);
     list.add(sum & 0xFF);
     return list;
   }
 
-  /// Deserialization from binary format (Bug 45: Endianness independent)
+  /// Deserialization from binary format (supports v1 13-byte and v2 17-byte)
   static InputEvent fromBinary(List<int> data) {
     if (data.length < binaryPacketLength) {
-      throw FormatException('Binary packet length too short (expected $binaryPacketLength, got ${data.length})');
+      throw FormatException('Binary packet length too short (expected >= $binaryPacketLength, got ${data.length})');
     }
+
+    final isV2 = data.length >= binaryPacketLengthV2 && data[11] == protocolVersionV2;
+    final expectedLen = isV2 ? binaryPacketLengthV2 : binaryPacketLength;
 
     // Bug 47: Verify Checksum
-    final expectedSum = data.take(binaryPacketLength - 1).reduce((a, b) => a + b) & 0xFF;
-    final actualSum = data[binaryPacketLength - 1];
+    final expectedSum = data.take(expectedLen - 1).reduce((a, b) => a + b) & 0xFF;
+    final actualSum = data[expectedLen - 1];
     if (expectedSum != actualSum) {
       throw FormatException('Checksum mismatch: expected $expectedSum, got $actualSum');
-    }
-
-    // Bug 46: Verify protocol version
-    final version = data[11];
-    if (version != protocolVersion) {
-      // Future versions would parse differently. Currently we fallback gracefully.
     }
 
     // Bug 41: Graceful fallback for indices
@@ -175,6 +188,11 @@ class InputEvent {
         ? PointerType.values[ptIdx]
         : PointerType.finger;
 
+    int seqVal = 0;
+    if (isV2) {
+      seqVal = (data[12] << 24) | (data[13] << 16) | (data[14] << 8) | data[15];
+    }
+
     return InputEvent(
       type: typeVal,
       x: _uint16ToFloat(data[1], data[2]),
@@ -185,24 +203,43 @@ class InputEvent {
       tiltX: (data[8] / 255.0 * 180) - 90,
       tiltY: (data[9] / 255.0 * 180) - 90,
       buttons: data[10],
+      sequenceNumber: seqVal,
     );
   }
 
-  /// Reconstructs complete 13-byte protocol frames from a partial or coalesced byte stream.
-  /// Handles stream boundaries, partial packets, and stream resynchronization.
+  /// Reconstructs complete protocol frames (v1 13-byte or v2 17-byte) from a partial or coalesced stream.
   static ({List<InputEvent> events, List<int> remainder}) extractBinaryFrames(List<int> buffer) {
     final List<InputEvent> events = [];
     int offset = 0;
-    while (offset + binaryPacketLength <= buffer.length) {
-      final chunk = buffer.sublist(offset, offset + binaryPacketLength);
-      final expectedSum = chunk.take(binaryPacketLength - 1).reduce((a, b) => a + b) & 0xFF;
-      if (expectedSum == chunk[binaryPacketLength - 1] && chunk[0] < InputEventType.values.length) {
-        try {
-          events.add(fromBinary(chunk));
-          offset += binaryPacketLength;
-          continue;
-        } catch (_) {}
+    while (offset < buffer.length) {
+      // Try v2 17-byte frame first if enough bytes exist
+      if (offset + binaryPacketLengthV2 <= buffer.length && buffer[offset + 11] == protocolVersionV2) {
+        final chunk = buffer.sublist(offset, offset + binaryPacketLengthV2);
+        final expectedSum = chunk.take(binaryPacketLengthV2 - 1).reduce((a, b) => a + b) & 0xFF;
+        if (expectedSum == chunk[binaryPacketLengthV2 - 1] && chunk[0] < InputEventType.values.length) {
+          try {
+            events.add(fromBinary(chunk));
+            offset += binaryPacketLengthV2;
+            continue;
+          } catch (_) {}
+        }
       }
+
+      // Try v1 13-byte frame
+      if (offset + binaryPacketLength <= buffer.length) {
+        final chunk = buffer.sublist(offset, offset + binaryPacketLength);
+        final expectedSum = chunk.take(binaryPacketLength - 1).reduce((a, b) => a + b) & 0xFF;
+        if (expectedSum == chunk[binaryPacketLength - 1] && chunk[0] < InputEventType.values.length) {
+          try {
+            events.add(fromBinary(chunk));
+            offset += binaryPacketLength;
+            continue;
+          } catch (_) {}
+        }
+      }
+
+      // If neither matches, break or slide forward
+      if (offset + binaryPacketLength > buffer.length) break;
       offset++; // Slide forward to re-synchronize stream framing
     }
     final remainder = offset < buffer.length ? buffer.sublist(offset) : <int>[];
@@ -298,6 +335,7 @@ class InputEvent {
     double? tiltX,
     double? tiltY,
     int? buttons,
+    int? sequenceNumber,
     DateTime? timestamp,
   }) {
     return InputEvent(
@@ -310,6 +348,7 @@ class InputEvent {
       tiltX: tiltX ?? this.tiltX,
       tiltY: tiltY ?? this.tiltY,
       buttons: buttons ?? this.buttons,
+      sequenceNumber: sequenceNumber ?? this.sequenceNumber,
       timestamp: timestamp ?? this.timestamp,
     );
   }
@@ -329,6 +368,7 @@ class InputEvent {
           tiltX == other.tiltX &&
           tiltY == other.tiltY &&
           buttons == other.buttons &&
+          sequenceNumber == other.sequenceNumber &&
           timestamp.millisecondsSinceEpoch == other.timestamp.millisecondsSinceEpoch;
 
   // Bug 48: HashCode override
@@ -343,6 +383,7 @@ class InputEvent {
       tiltX.hashCode ^
       tiltY.hashCode ^
       buttons.hashCode ^
+      sequenceNumber.hashCode ^
       timestamp.millisecondsSinceEpoch.hashCode;
 
   @override

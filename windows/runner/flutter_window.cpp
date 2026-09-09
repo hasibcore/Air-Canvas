@@ -126,6 +126,8 @@ static DestroySyntheticPointerDevice_t pDestroySyntheticPointerDevice = nullptr;
 static HSYNTHETICPOINTERDEVICE g_penDevice = nullptr;
 static bool g_apisAttempted = false;
 static bool g_apisLoaded = false;
+static bool g_penIsHovering = false;
+static bool g_penIsInContact = false;
 
 static bool LoadPointerInjectionAPIs() {
   if (g_apisAttempted) return g_apisLoaded;
@@ -244,45 +246,21 @@ bool FlutterWindow::OnCreate() {
 
             // Try pointer injection if available
             if (InitializePenDevice()) {
+              int virtual_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+              int virtual_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+
               POINTER_TYPE_INFO pointerInfo = {};
               pointerInfo.type = PT_PEN;
 
               POINTER_PEN_INFO& penInfo = pointerInfo.penInfo;
               penInfo.pointerInfo.pointerType = PT_PEN;
-              // Synthethic devices with maxContacts=1 require pointerId to be exactly 0.
+              // Synthetic devices with maxContacts=1 require pointerId to be exactly 0.
               // Passing Flutter's raw pointerId (>0) causes ERROR_INVALID_PARAMETER (87).
               penInfo.pointerInfo.pointerId = 0;
-              penInfo.pointerInfo.ptPixelLocation.x = target_x;
-              penInfo.pointerInfo.ptPixelLocation.y = target_y;
-
-              DWORD pointerFlags = POINTER_FLAG_INRANGE;
-
-              // type mapping: 0 = down, 1 = move, 2 = up, 3 = cancel, 4 = hover
-              if (type == 0) {
-                pointerFlags |= POINTER_FLAG_DOWN | POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON;
-              } else if (type == 1) {
-                pointerFlags |= POINTER_FLAG_UPDATE | POINTER_FLAG_INCONTACT;
-                if (buttons & 1) {
-                  pointerFlags |= POINTER_FLAG_FIRSTBUTTON;
-                }
-              } else if (type == 2) {
-                pointerFlags |= POINTER_FLAG_UP;
-              } else if (type == 3) {
-                pointerFlags |= POINTER_FLAG_UP | POINTER_FLAG_CANCELED;
-              } else if (type == 4) {
-                pointerFlags |= POINTER_FLAG_UPDATE;
-              }
-
-              if (buttons & 2) {
-                pointerFlags |= POINTER_FLAG_SECONDBUTTON;
-                penInfo.penFlags |= PEN_FLAG_BARREL;
-              }
-
-              if (pointerType == 3) { // Eraser
-                penInfo.penFlags |= PEN_FLAG_ERASER | PEN_FLAG_INVERTED;
-              }
-
-              penInfo.pointerInfo.pointerFlags = pointerFlags;
+              // InjectSyntheticPointerInput expects coordinates relative to virtual desktop bounding box
+              // Subtract virtual screen origin to support negative multi-monitor layouts
+              penInfo.pointerInfo.ptPixelLocation.x = target_x - virtual_left;
+              penInfo.pointerInfo.ptPixelLocation.y = target_y - virtual_top;
 
               // Set Pressure (Pro 1024-level high-precision rounding)
               penInfo.pressure = static_cast<UINT32>(std::lround(clamped_pressure * 1024.0));
@@ -292,6 +270,67 @@ bool FlutterWindow::OnCreate() {
               penInfo.tiltX = static_cast<INT32>(tiltX);
               penInfo.tiltY = static_cast<INT32>(tiltY);
               penInfo.penMask |= PEN_MASK_TILT_X | PEN_MASK_TILT_Y;
+
+              if (buttons & 2) {
+                penInfo.penFlags |= PEN_FLAG_BARREL;
+              }
+              if (pointerType == 3) { // Eraser
+                penInfo.penFlags |= PEN_FLAG_ERASER | PEN_FLAG_INVERTED;
+              }
+
+              DWORD pointerFlags = POINTER_FLAG_INRANGE;
+
+              // type mapping: 0 = down, 1 = move, 2 = up, 3 = cancel, 4 = hover
+              if (type == 0) {
+                // Pre-hover arrival: Windows Ink requires pen in range before down contact
+                if (!g_penIsHovering && !g_penIsInContact) {
+                  POINTER_TYPE_INFO hoverInfo = pointerInfo;
+                  hoverInfo.penInfo.pointerInfo.pointerFlags = POINTER_FLAG_INRANGE | POINTER_FLAG_UPDATE;
+                  hoverInfo.penInfo.pressure = 0;
+                  pInjectSyntheticPointerInput(g_penDevice, &hoverInfo, 1);
+                }
+                pointerFlags |= POINTER_FLAG_DOWN | POINTER_FLAG_INCONTACT | POINTER_FLAG_FIRSTBUTTON;
+                g_penIsInContact = true;
+                g_penIsHovering = true;
+              } else if (type == 1) {
+                pointerFlags |= POINTER_FLAG_UPDATE | POINTER_FLAG_INCONTACT;
+                if (buttons & 1) {
+                  pointerFlags |= POINTER_FLAG_FIRSTBUTTON;
+                }
+                g_penIsInContact = true;
+                g_penIsHovering = true;
+              } else if (type == 2) {
+                // Pen up: release contact while remaining in hover range
+                pointerFlags |= POINTER_FLAG_UP;
+                penInfo.pressure = 0;
+                g_penIsInContact = false;
+                g_penIsHovering = true;
+              } else if (type == 3) {
+                // Cancel: two-step release (lift contact then leave proximity)
+                pointerFlags |= POINTER_FLAG_UP | POINTER_FLAG_CANCELED;
+                penInfo.pressure = 0;
+                penInfo.pointerInfo.pointerFlags = pointerFlags;
+                pInjectSyntheticPointerInput(g_penDevice, &pointerInfo, 1);
+
+                pointerInfo.penInfo.pointerInfo.pointerFlags = POINTER_FLAG_UPDATE;
+                pInjectSyntheticPointerInput(g_penDevice, &pointerInfo, 1);
+                g_penIsInContact = false;
+                g_penIsHovering = false;
+                result->Success(flutter::EncodableValue(true));
+                return;
+              } else if (type == 4) {
+                // Hover event (in proximity without surface contact)
+                pointerFlags |= POINTER_FLAG_UPDATE;
+                penInfo.pressure = 0;
+                g_penIsInContact = false;
+                g_penIsHovering = true;
+              }
+
+              if (buttons & 2) {
+                pointerFlags |= POINTER_FLAG_SECONDBUTTON;
+              }
+
+              penInfo.pointerInfo.pointerFlags = pointerFlags;
 
               BOOL success = pInjectSyntheticPointerInput(g_penDevice, &pointerInfo, 1);
               if (success) {

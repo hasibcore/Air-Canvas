@@ -68,6 +68,343 @@ namespace AirCanvas
         }
     }
 
+    public enum InputInjectionBackend
+    {
+        SyntheticPen = 0,
+        LegacyMouse = 1
+    }
+
+    /// <summary>
+    /// Professional Windows Synthetic Pen Digitizer Backend.
+    /// Uses Win32 Synthetic Pointer APIs (CreateSyntheticPointerDevice / InjectSyntheticPointerInput)
+    /// to inject true pen pressure (0..1024), tilt (-90..90°), and hover into creative apps
+    /// (OneNote, Whiteboard, Photoshop, Krita, Clip Studio Paint, Blender, etc.).
+    /// </summary>
+    public class WindowsSyntheticPenBackend : IDisposable
+    {
+        public const uint PT_PEN = 3;
+        public const uint POINTER_FEEDBACK_DEFAULT = 1;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT { public int X; public int Y; }
+
+        [Flags]
+        public enum PointerFlags : uint
+        {
+            POINTER_FLAG_NONE = 0x00000000,
+            POINTER_FLAG_NEW = 0x00000001,
+            POINTER_FLAG_INRANGE = 0x00000002,
+            POINTER_FLAG_INCONTACT = 0x00000004,
+            POINTER_FLAG_FIRSTBUTTON = 0x00000010,
+            POINTER_FLAG_SECONDBUTTON = 0x00000020,
+            POINTER_FLAG_PRIMARY = 0x00002000,
+            POINTER_FLAG_DOWN = 0x00010000,
+            POINTER_FLAG_UPDATE = 0x00020000,
+            POINTER_FLAG_UP = 0x00040000,
+            POINTER_FLAG_WHEEL = 0x00080000,
+            POINTER_FLAG_HWHEEL = 0x00100000,
+            POINTER_FLAG_CAPTURECHANGED = 0x00200000,
+            POINTER_FLAG_HASTRANSFORM = 0x00400000
+        }
+
+        [Flags]
+        public enum PenFlags : uint
+        {
+            None = 0x00000000,
+            Barrel = 0x00000001,
+            Inverted = 0x00000002,
+            Eraser = 0x00000004
+        }
+
+        [Flags]
+        public enum PenMask : uint
+        {
+            None = 0x00000000,
+            Pressure = 0x00000001,
+            Rotation = 0x00000002,
+            TiltX = 0x00000004,
+            TiltY = 0x00000008
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINTER_INFO
+        {
+            public uint pointerType;
+            public uint pointerId;
+            public uint frameId;
+            public PointerFlags pointerFlags;
+            public IntPtr sourceDevice;
+            public IntPtr hwndTarget;
+            public POINT ptPixelLocation;
+            public POINT ptHimetricLocation;
+            public POINT ptPixelLocationRaw;
+            public POINT ptHimetricLocationRaw;
+            public uint dwTime;
+            public uint historyCount;
+            public int inputData;
+            public uint dwKeyStates;
+            public ulong PerformanceCount;
+            public uint ButtonChangeType;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINTER_PEN_INFO
+        {
+            public POINTER_INFO pointerInfo;
+            public PenFlags penFlags;
+            public PenMask penMask;
+            public uint pressure;
+            public uint rotation;
+            public int tiltX;
+            public int tiltY;
+        }
+
+        [StructLayout(LayoutKind.Explicit, Size = 152)]
+        public struct POINTER_TYPE_INFO
+        {
+            [FieldOffset(0)] public uint type;
+            [FieldOffset(8)] public POINTER_PEN_INFO penInfo;
+        }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr CreateSyntheticPointerDevice(uint pointerType, uint maxCount, uint mode);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool InjectSyntheticPointerInput(IntPtr device, [In] ref POINTER_TYPE_INFO pointerInfo, uint count);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DestroySyntheticPointerDevice(IntPtr device);
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+
+        private const int SM_XVIRTUALSCREEN = 76;
+        private const int SM_YVIRTUALSCREEN = 77;
+        private const int SM_CXVIRTUALSCREEN = 78;
+        private const int SM_CYVIRTUALSCREEN = 79;
+
+        private IntPtr _device = IntPtr.Zero;
+        private bool _isInitialized = false;
+        private bool _isSupported = true;
+        private bool _isInContact = false;
+        private bool _isInRange = false;
+        private int _lastX = 0;
+        private int _lastY = 0;
+        private bool _hasLoggedUipiWarning = false;
+        private readonly object _lock = new object();
+
+        public bool IsInitialized { get { return _isInitialized; } }
+        public bool IsSupported { get { return _isSupported; } }
+        public bool IsInContact { get { return _isInContact; } }
+        public bool IsInRange { get { return _isInRange; } }
+
+        public bool Initialize()
+        {
+            lock (_lock)
+            {
+                if (_device != IntPtr.Zero) return true;
+                try
+                {
+                    _device = CreateSyntheticPointerDevice(PT_PEN, 1, POINTER_FEEDBACK_DEFAULT);
+                    if (_device == IntPtr.Zero)
+                    {
+                        _isSupported = false;
+                        return false;
+                    }
+                    _isInitialized = true;
+                    _isSupported = true;
+                    return true;
+                }
+                catch
+                {
+                    _isSupported = false;
+                    return false;
+                }
+            }
+        }
+
+        public bool Inject(int screenX, int screenY, double pressure, string eventType, int buttons, int pointerType, double tiltX, double tiltY)
+        {
+            lock (_lock)
+            {
+                if (!_isSupported) return false;
+                if (_device == IntPtr.Zero && !Initialize()) return false;
+
+                try
+                {
+                    // Coordinates relative to virtual desktop bounding box
+                    int virtualLeft = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                    int virtualTop = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                    int relX = screenX - virtualLeft;
+                    int relY = screenY - virtualTop;
+                    _lastX = relX;
+                    _lastY = relY;
+
+                    uint pVal = (uint)Math.Max(0, Math.Min(1024, (int)Math.Round(pressure * 1024.0)));
+                    int tx = Math.Max(-90, Math.Min(90, (int)Math.Round(tiltX)));
+                    int ty = Math.Max(-90, Math.Min(90, (int)Math.Round(tiltY)));
+
+                    PenFlags pFlags = PenFlags.None;
+                    if ((buttons & 2) != 0) pFlags |= PenFlags.Barrel;
+                    if (pointerType == 3) pFlags |= PenFlags.Eraser | PenFlags.Inverted;
+
+                    POINTER_TYPE_INFO p = new POINTER_TYPE_INFO();
+                    p.type = PT_PEN;
+                    p.penInfo.pointerInfo.pointerType = PT_PEN;
+                    p.penInfo.pointerInfo.pointerId = 0;
+                    p.penInfo.pointerInfo.ptPixelLocation.X = relX;
+                    p.penInfo.pointerInfo.ptPixelLocation.Y = relY;
+                    p.penInfo.penFlags = pFlags;
+                    p.penInfo.penMask = PenMask.Pressure | PenMask.TiltX | PenMask.TiltY;
+                    p.penInfo.pressure = pVal;
+                    p.penInfo.tiltX = tx;
+                    p.penInfo.tiltY = ty;
+
+                    if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Pre-hover arrival frame if not currently in range or relocated
+                        if (!_isInRange || _lastX != relX || _lastY != relY)
+                        {
+                            POINTER_TYPE_INFO hover = p;
+                            hover.penInfo.pointerInfo.pointerFlags = PointerFlags.POINTER_FLAG_INRANGE | PointerFlags.POINTER_FLAG_UPDATE;
+                            hover.penInfo.pressure = 0;
+                            InjectSyntheticPointerInput(_device, ref hover, 1);
+                        }
+
+                        PointerFlags flags = PointerFlags.POINTER_FLAG_INRANGE | PointerFlags.POINTER_FLAG_INCONTACT | PointerFlags.POINTER_FLAG_DOWN | PointerFlags.POINTER_FLAG_FIRSTBUTTON;
+                        if ((buttons & 2) != 0) flags |= PointerFlags.POINTER_FLAG_SECONDBUTTON;
+                        p.penInfo.pointerInfo.pointerFlags = flags;
+                        bool ok = InjectSyntheticPointerInput(_device, ref p, 1);
+                        if (ok)
+                        {
+                            _isInContact = true;
+                            _isInRange = true;
+                            return true;
+                        }
+                        CheckUipiError();
+                        return false;
+                    }
+                    else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
+                    {
+                        PointerFlags flags = PointerFlags.POINTER_FLAG_INRANGE | PointerFlags.POINTER_FLAG_INCONTACT | PointerFlags.POINTER_FLAG_UPDATE;
+                        if ((buttons & 1) != 0 || _isInContact) flags |= PointerFlags.POINTER_FLAG_FIRSTBUTTON;
+                        if ((buttons & 2) != 0) flags |= PointerFlags.POINTER_FLAG_SECONDBUTTON;
+                        p.penInfo.pointerInfo.pointerFlags = flags;
+                        bool ok = InjectSyntheticPointerInput(_device, ref p, 1);
+                        if (ok)
+                        {
+                            _isInContact = true;
+                            _isInRange = true;
+                            return true;
+                        }
+                        CheckUipiError();
+                        return false;
+                    }
+                    else if (eventType.Equals("hover", StringComparison.OrdinalIgnoreCase))
+                    {
+                        PointerFlags flags = PointerFlags.POINTER_FLAG_INRANGE | PointerFlags.POINTER_FLAG_UPDATE;
+                        p.penInfo.pressure = 0;
+                        p.penInfo.pointerInfo.pointerFlags = flags;
+                        bool ok = InjectSyntheticPointerInput(_device, ref p, 1);
+                        if (ok)
+                        {
+                            _isInContact = false;
+                            _isInRange = true;
+                            return true;
+                        }
+                        CheckUipiError();
+                        return false;
+                    }
+                    else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase))
+                    {
+                        PointerFlags flags = PointerFlags.POINTER_FLAG_INRANGE | PointerFlags.POINTER_FLAG_UP;
+                        p.penInfo.pressure = 0;
+                        p.penInfo.pointerInfo.pointerFlags = flags;
+                        bool ok = InjectSyntheticPointerInput(_device, ref p, 1);
+                        _isInContact = false;
+                        _lastX = relX;
+                        _lastY = relY;
+                        return ok;
+                    }
+                    else if (eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ForcePenUp();
+                        return true;
+                    }
+                }
+                catch
+                {
+                    return false;
+                }
+                return false;
+            }
+        }
+
+        private void CheckUipiError()
+        {
+            int err = Marshal.GetLastWin32Error();
+            if (err == 5 && !_hasLoggedUipiWarning) // ERROR_ACCESS_DENIED
+            {
+                _hasLoggedUipiWarning = true;
+                Trace.WriteLine("AirCanvas: Synthetic pointer injection blocked by UIPI (Target window elevated). Fallback to mouse emulation.");
+            }
+        }
+
+        public void ForcePenUp()
+        {
+            lock (_lock)
+            {
+                if (_device == IntPtr.Zero) return;
+                try
+                {
+                    POINTER_TYPE_INFO p = new POINTER_TYPE_INFO();
+                    p.type = PT_PEN;
+                    p.penInfo.pointerInfo.pointerType = PT_PEN;
+                    p.penInfo.pointerInfo.pointerId = 0;
+                    p.penInfo.pointerInfo.ptPixelLocation.X = _lastX;
+                    p.penInfo.pointerInfo.ptPixelLocation.Y = _lastY;
+
+                    if (_isInContact)
+                    {
+                        p.penInfo.pointerInfo.pointerFlags = PointerFlags.POINTER_FLAG_INRANGE | PointerFlags.POINTER_FLAG_UP;
+                        p.penInfo.pressure = 0;
+                        InjectSyntheticPointerInput(_device, ref p, 1);
+                        _isInContact = false;
+                    }
+
+                    if (_isInRange)
+                    {
+                        p.penInfo.pointerInfo.pointerFlags = PointerFlags.POINTER_FLAG_UPDATE;
+                        p.penInfo.pressure = 0;
+                        InjectSyntheticPointerInput(_device, ref p, 1);
+                        _isInRange = false;
+                    }
+                }
+                catch { }
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_lock)
+            {
+                if (_device != IntPtr.Zero)
+                {
+                    try
+                    {
+                        ForcePenUp();
+                        DestroySyntheticPointerDevice(_device);
+                    }
+                    catch { }
+                    _device = IntPtr.Zero;
+                    _isInitialized = false;
+                }
+            }
+        }
+    }
+
     public class MainForm : Form
     {
         // UI Controls
@@ -112,6 +449,16 @@ namespace AirCanvas
         private Icon idleIcon = null;
         private Icon activeIcon = null;
         private double lastClientAspect = 16.0 / 9.0;
+        private Label lblElevation;
+        private Label lblMonitor;
+        private ComboBox cmbMonitor;
+        private Label lblBackend;
+        private ComboBox cmbBackend;
+        private Button btnEmergencyRelease;
+
+        private WindowsSyntheticPenBackend syntheticPenBackend = null;
+        private InputInjectionBackend activeBackend = InputInjectionBackend.SyntheticPen;
+        private int selectedMonitorIndex = 0;
 
         // Server State (Pure Socket TCP)
         private TcpListener tcpServer;
@@ -158,6 +505,9 @@ namespace AirCanvas
             public string ColorHex = "#38bdf8";
             public double StrokeWidth = 3.0;
             public double ClientAspect = 0.0;
+
+            public uint LastSequenceNumber = 0;
+            public bool HasSequenceNumber = false;
 
             // Secure channel through which all frames flow after authentication.
             // Session key derived inside channel.
@@ -451,6 +801,18 @@ namespace AirCanvas
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsZoomed(IntPtr hWnd);
+
+        private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
+
         [DllImport("user32.dll")]
         private static extern int GetSystemMetrics(int nIndex);
 
@@ -482,6 +844,60 @@ namespace AirCanvas
             public int Height { get { return Bottom - Top; } }
         }
 
+        public class MonitorInfoItem
+        {
+            public int Index;
+            public Rectangle Bounds;
+            public Rectangle WorkArea;
+            public bool IsPrimary;
+            public string DeviceName;
+        }
+
+        public static List<MonitorInfoItem> GetPhysicalMonitors()
+        {
+            var list = new List<MonitorInfoItem>();
+            int idx = 0;
+            try
+            {
+                EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, delegate(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData)
+                {
+                    MONITORINFOEX mi = new MONITORINFOEX();
+                    mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
+                    if (GetMonitorInfo(hMonitor, ref mi))
+                    {
+                        var item = new MonitorInfoItem();
+                        item.Index = idx++;
+                        item.Bounds = new Rectangle(mi.rcMonitor.Left, mi.rcMonitor.Top,
+                            mi.rcMonitor.Right - mi.rcMonitor.Left, mi.rcMonitor.Bottom - mi.rcMonitor.Top);
+                        item.WorkArea = new Rectangle(mi.rcWork.Left, mi.rcWork.Top,
+                            mi.rcWork.Right - mi.rcWork.Left, mi.rcWork.Bottom - mi.rcWork.Top);
+                        item.IsPrimary = (mi.dwFlags & 1) != 0; // MONITORINFOF_PRIMARY
+                        item.DeviceName = mi.szDevice ?? "";
+                        list.Add(item);
+                    }
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch { }
+
+            if (list.Count == 0)
+            {
+                int sw = GetSystemMetrics(0); // SM_CXSCREEN
+                int sh = GetSystemMetrics(1); // SM_CYSCREEN
+                if (sw <= 0) sw = 1920;
+                if (sh <= 0) sh = 1080;
+                list.Add(new MonitorInfoItem
+                {
+                    Index = 0,
+                    Bounds = new Rectangle(0, 0, sw, sh),
+                    WorkArea = new Rectangle(0, 0, sw, sh),
+                    IsPrimary = true,
+                    DeviceName = "Primary"
+                });
+            }
+            return list;
+        }
+
         private const int SM_XVIRTUALSCREEN = 76;
         private const int SM_YVIRTUALSCREEN = 77;
         private const int SM_CXVIRTUALSCREEN = 78;
@@ -490,7 +906,46 @@ namespace AirCanvas
         private const int DESKTOPHORZRES = 118;
         private const int DESKTOPVERTRES = 117;
 
-        public static Rectangle GetTargetDrawingArea()
+        public static bool IsAdministrator()
+        {
+            try
+            {
+                using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
+                {
+                    var principal = new System.Security.Principal.WindowsPrincipal(identity);
+                    return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static Rectangle GetTargetDrawingArea(int monitorIndex = 0)
+        {
+            try
+            {
+                var monitors = GetPhysicalMonitors();
+                if (monitorIndex > 0 && monitorIndex <= monitors.Count)
+                {
+                    return monitors[monitorIndex - 1].Bounds;
+                }
+                if (monitors.Count > 1 && monitorIndex == monitors.Count + 1)
+                {
+                    int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                    int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                    int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                    int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                    if (vw > 0 && vh > 0) return new Rectangle(vx, vy, vw, vh);
+                }
+            }
+            catch { }
+
+            return GetTargetDrawingAreaAuto();
+        }
+
+        public static Rectangle GetTargetDrawingAreaAuto()
         {
             try
             {
@@ -503,21 +958,41 @@ namespace AirCanvas
                     mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
                     if (GetMonitorInfo(hMon, ref mi))
                     {
-                        // If foreground window is fullscreen (e.g. PowerPoint slide show, presentation, full-screen canvas),
-                        // use entire physical monitor bounds rcMonitor. Otherwise use rcWork (protects Windows Taskbar).
                         if (fgHwnd != IntPtr.Zero)
                         {
-                            RECT fgRect;
-                            if (GetWindowRect(fgHwnd, out fgRect))
+                            StringBuilder sb = new StringBuilder(256);
+                            GetClassName(fgHwnd, sb, sb.Capacity);
+                            string cls = sb.ToString();
+                            bool isDesktopOrShell = (cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd");
+
+                            if (!isDesktopOrShell)
                             {
-                                bool isFullScreen = (fgRect.Left <= mi.rcMonitor.Left &&
-                                                     fgRect.Top <= mi.rcMonitor.Top &&
-                                                     fgRect.Right >= mi.rcMonitor.Right &&
-                                                     fgRect.Bottom >= mi.rcMonitor.Bottom);
-                                if (isFullScreen)
+                                RECT fgRect;
+                                if (GetWindowRect(fgHwnd, out fgRect))
                                 {
-                                    return new Rectangle(mi.rcMonitor.Left, mi.rcMonitor.Top,
-                                        mi.rcMonitor.Right - mi.rcMonitor.Left, mi.rcMonitor.Bottom - mi.rcMonitor.Top);
+                                    int winW = fgRect.Right - fgRect.Left;
+                                    int winH = fgRect.Bottom - fgRect.Top;
+
+                                    bool isFullScreen = (fgRect.Left <= mi.rcMonitor.Left &&
+                                                         fgRect.Top <= mi.rcMonitor.Top &&
+                                                         fgRect.Right >= mi.rcMonitor.Right &&
+                                                         fgRect.Bottom >= mi.rcMonitor.Bottom);
+                                    if (isFullScreen)
+                                    {
+                                        return new Rectangle(mi.rcMonitor.Left, mi.rcMonitor.Top,
+                                            mi.rcMonitor.Right - mi.rcMonitor.Left, mi.rcMonitor.Bottom - mi.rcMonitor.Top);
+                                    }
+
+                                    if (IsZoomed(fgHwnd))
+                                    {
+                                        return new Rectangle(mi.rcWork.Left, mi.rcWork.Top,
+                                            mi.rcWork.Right - mi.rcWork.Left, mi.rcWork.Bottom - mi.rcWork.Top);
+                                    }
+
+                                    if (winW > 120 && winH > 120)
+                                    {
+                                        return new Rectangle(fgRect.Left, fgRect.Top, winW, winH);
+                                    }
                                 }
                             }
                         }
@@ -541,18 +1016,12 @@ namespace AirCanvas
         {
             try
             {
-                IntPtr hMon = MonitorFromWindow(IntPtr.Zero, 1); // MONITOR_DEFAULTTOPRIMARY
-                if (hMon != IntPtr.Zero)
+                var monitors = GetPhysicalMonitors();
+                foreach (var m in monitors)
                 {
-                    MONITORINFOEX mi = new MONITORINFOEX();
-                    mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
-                    if (GetMonitorInfo(hMon, ref mi))
-                    {
-                        int w = mi.rcMonitor.Right - mi.rcMonitor.Left;
-                        int h = mi.rcMonitor.Bottom - mi.rcMonitor.Top;
-                        if (w > 0 && h > 0) return new Size(w, h);
-                    }
+                    if (m.IsPrimary) return m.Bounds.Size;
                 }
+                if (monitors.Count > 0) return monitors[0].Bounds.Size;
             }
             catch { }
 
@@ -594,21 +1063,55 @@ namespace AirCanvas
 
         public MainForm()
         {
+            syntheticPenBackend = new WindowsSyntheticPenBackend();
+            if (!syntheticPenBackend.Initialize())
+            {
+                activeBackend = InputInjectionBackend.LegacyMouse;
+            }
             InitializeComponent();
             GetLocalIPAddress();
             InitCanvas();
             StartServer();
         }
 
+        private void PopulateMonitors()
+        {
+            cmbMonitor.Items.Clear();
+            cmbMonitor.Items.Add("Auto (Active App)");
+            var monitors = GetPhysicalMonitors();
+            for (int i = 0; i < monitors.Count; i++)
+            {
+                var m = monitors[i];
+                string name = string.Format("Display {0} ({1}x{2}{3})",
+                    i + 1, m.Bounds.Width, m.Bounds.Height, m.IsPrimary ? " Primary" : "");
+                cmbMonitor.Items.Add(name);
+            }
+            if (monitors.Count > 1)
+            {
+                int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                cmbMonitor.Items.Add(string.Format("Virtual Desktop ({0}x{1})", vw, vh));
+            }
+            cmbMonitor.SelectedIndex = 0;
+        }
+
         private void InitializeComponent()
         {
-            this.Text = "AirCanvas Server — PC Graphics Tablet Receiver";
-            this.Size = new Size(820, 640);
+            this.Text = "AirCanvas Server — Windows Synthetic Pen & Digitizer";
+            this.Size = new Size(840, 680);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
             this.BackColor = Color.FromArgb(15, 23, 42); // Slate 900
             this.ForeColor = Color.White;
+            this.KeyPreview = true;
+            this.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Escape)
+                {
+                    ReleaseAllPointersAndButtons();
+                }
+            };
 
             // Header Panel
             pnlHeader = new Panel
@@ -620,57 +1123,69 @@ namespace AirCanvas
 
             lblTitle = new Label
             {
-                Text = "🎨 AirCanvas PC Server & Live Canvas",
-                Font = new Font("Segoe UI", 15, FontStyle.Bold),
+                Text = "🎨 AirCanvas PC Server & Windows Ink Tablet",
+                Font = new Font("Segoe UI", 14, FontStyle.Bold),
                 ForeColor = Color.FromArgb(56, 189, 248), // Sky 400
-                Location = new Point(20, 12),
+                Location = new Point(18, 12),
                 AutoSize = true
             };
 
+            bool isPenSupported = (syntheticPenBackend != null && syntheticPenBackend.IsSupported);
             lblStatus = new Label
             {
-                Text = "● Server Running — Ready for Tablets",
+                Text = isPenSupported ? "● Ready — Synthetic Pen & Windows Ink Active" : "● Ready — Legacy Mouse Emulation",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(74, 222, 128), // Green 400
-                Location = new Point(24, 44),
+                Location = new Point(22, 44),
+                AutoSize = true
+            };
+
+            bool isAdmin = IsAdministrator();
+            lblElevation = new Label
+            {
+                Text = isAdmin ? "🛡️ Admin (Elevated)" : "⚠️ Standard User (UIPI Protected)",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                ForeColor = isAdmin ? Color.FromArgb(74, 222, 128) : Color.FromArgb(251, 191, 36),
+                Location = new Point(530, 44),
                 AutoSize = true
             };
 
             pnlHeader.Controls.Add(lblTitle);
             pnlHeader.Controls.Add(lblStatus);
+            pnlHeader.Controls.Add(lblElevation);
             this.Controls.Add(pnlHeader);
 
             // Left Card Panel (Server Info & Controls)
             pnlCard = new Panel
             {
                 Location = new Point(15, 88),
-                Size = new Size(340, 530),
+                Size = new Size(335, 552),
                 BackColor = Color.FromArgb(30, 41, 59)
             };
 
             lblIp = new Label
             {
                 Text = "🌐 Server IP: Detecting...",
-                Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
+                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(248, 250, 252),
-                Location = new Point(15, 12),
+                Location = new Point(15, 10),
                 AutoSize = true
             };
 
             lblPort = new Label
             {
                 Text = "🔌 Port: 9090 | Discovery: 9091",
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(15, 38),
+                Location = new Point(15, 32),
                 AutoSize = true
             };
 
             // Pairing PIN Card
             pnlPinBox = new Panel
             {
-                Location = new Point(15, 64),
-                Size = new Size(305, 40),
+                Location = new Point(15, 54),
+                Size = new Size(305, 36),
                 BackColor = Color.FromArgb(15, 23, 42),
                 BorderStyle = BorderStyle.FixedSingle
             };
@@ -678,18 +1193,18 @@ namespace AirCanvas
             lblPinTitle = new Label
             {
                 Text = "🔑 Pairing PIN:",
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(226, 232, 240),
-                Location = new Point(10, 9),
+                Location = new Point(8, 8),
                 AutoSize = true
             };
 
             lblPinValue = new Label
             {
                 Text = serverPin,
-                Font = new Font("Consolas", 15f, FontStyle.Bold),
+                Font = new Font("Consolas", 14f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(56, 189, 248),
-                Location = new Point(135, 5),
+                Location = new Point(130, 5),
                 AutoSize = true
             };
 
@@ -699,39 +1214,104 @@ namespace AirCanvas
             lblClients = new Label
             {
                 Text = "📱 Connected: 0",
-                Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(74, 222, 128), // Green 400
-                Location = new Point(15, 112),
+                Location = new Point(15, 96),
                 AutoSize = true
             };
 
             lblPackets = new Label
             {
-                Text = "⚡ Packets Processed: 0",
-                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+                Text = "⚡ Packets: 0",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Location = new Point(15, 138),
+                Location = new Point(180, 97),
                 AutoSize = true
+            };
+
+            // Monitor Selection Dropdown
+            lblMonitor = new Label
+            {
+                Text = "🖥️ Screen:",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(226, 232, 240),
+                Location = new Point(15, 124),
+                AutoSize = true
+            };
+
+            cmbMonitor = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 8.5f),
+                Location = new Point(90, 120),
+                Size = new Size(230, 24),
+                BackColor = Color.FromArgb(15, 23, 42),
+                ForeColor = Color.White
+            };
+            PopulateMonitors();
+            cmbMonitor.SelectedIndexChanged += (s, e) =>
+            {
+                selectedMonitorIndex = cmbMonitor.SelectedIndex;
+            };
+
+            // Backend Selection Dropdown
+            lblBackend = new Label
+            {
+                Text = "🖊️ Backend:",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(226, 232, 240),
+                Location = new Point(15, 154),
+                AutoSize = true
+            };
+
+            cmbBackend = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 8.5f),
+                Location = new Point(90, 150),
+                Size = new Size(230, 24),
+                BackColor = Color.FromArgb(15, 23, 42),
+                ForeColor = Color.White
+            };
+            cmbBackend.Items.Add("Windows Synthetic Pen (Direct Digitizer)");
+            cmbBackend.Items.Add("Legacy Mouse Emulation");
+            cmbBackend.SelectedIndex = isPenSupported ? 0 : 1;
+            cmbBackend.SelectedIndexChanged += (s, e) =>
+            {
+                activeBackend = (cmbBackend.SelectedIndex == 0) ? InputInjectionBackend.SyntheticPen : InputInjectionBackend.LegacyMouse;
             };
 
             chkEnableInjection = new CheckBox
             {
-                Text = "Draw in PowerPoint / OneNote / Photoshop / Paint",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
+                Text = "Inject into Windows Apps (Photoshop, OneNote, Paint)",
+                Font = new Font("Segoe UI", 8f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(226, 232, 240),
-                Location = new Point(15, 164),
-                Size = new Size(310, 24),
+                Location = new Point(15, 180),
+                Size = new Size(310, 20),
                 Checked = true
             };
             isInjectionEnabled = true;
             chkEnableInjection.CheckedChanged += (s, e) => { isInjectionEnabled = chkEnableInjection.Checked; };
 
+            // Emergency Pen Release Button
+            btnEmergencyRelease = new Button
+            {
+                Text = "🛑 Emergency Release Pen / Stop (ESC)",
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                Location = new Point(15, 204),
+                Size = new Size(305, 26),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(185, 28, 28), // Red 700
+                ForeColor = Color.White
+            };
+            btnEmergencyRelease.Click += (s, e) => ReleaseAllPointersAndButtons();
+
             btnPptPen = new Button
             {
                 Text = "🖊️ PPT Pen (Ctrl+P)",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                Location = new Point(15, 194),
-                Size = new Size(145, 28),
+                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                Location = new Point(15, 236),
+                Size = new Size(150, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(37, 99, 235), // Blue 600
                 ForeColor = Color.White
@@ -741,9 +1321,9 @@ namespace AirCanvas
             btnPptLaser = new Button
             {
                 Text = "🔴 Laser (Ctrl+L)",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                Location = new Point(165, 194),
-                Size = new Size(150, 28),
+                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                Location = new Point(170, 236),
+                Size = new Size(150, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(220, 38, 38), // Red 600
                 ForeColor = Color.White
@@ -753,9 +1333,9 @@ namespace AirCanvas
             btnPptEraser = new Button
             {
                 Text = "🧹 Eraser (Ctrl+E)",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(15, 226),
-                Size = new Size(145, 28),
+                Font = new Font("Segoe UI", 8f, FontStyle.Regular),
+                Location = new Point(15, 266),
+                Size = new Size(150, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(71, 85, 105),
                 ForeColor = Color.White
@@ -765,9 +1345,9 @@ namespace AirCanvas
             btnUndo = new Button
             {
                 Text = "↩️ Undo (Ctrl+Z)",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(165, 226),
-                Size = new Size(150, 28),
+                Font = new Font("Segoe UI", 8f, FontStyle.Regular),
+                Location = new Point(170, 266),
+                Size = new Size(150, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(71, 85, 105),
                 ForeColor = Color.White
@@ -777,9 +1357,9 @@ namespace AirCanvas
             btnTestInput = new Button
             {
                 Text = "🧪 Test Stroke",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(15, 258),
-                Size = new Size(145, 28),
+                Font = new Font("Segoe UI", 8f, FontStyle.Regular),
+                Location = new Point(15, 296),
+                Size = new Size(150, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(51, 65, 85),
                 ForeColor = Color.White
@@ -789,9 +1369,9 @@ namespace AirCanvas
             btnClearCanvas = new Button
             {
                 Text = "🗑 Clear Canvas",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                Location = new Point(165, 258),
-                Size = new Size(150, 28),
+                Font = new Font("Segoe UI", 8f, FontStyle.Regular),
+                Location = new Point(170, 296),
+                Size = new Size(150, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(71, 85, 105),
                 ForeColor = Color.White
@@ -802,8 +1382,8 @@ namespace AirCanvas
             {
                 Text = "🔓 Allow Firewall (Fix Connection)",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                Location = new Point(15, 292),
-                Size = new Size(300, 30),
+                Location = new Point(15, 326),
+                Size = new Size(305, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(16, 185, 129), // Emerald 500
                 ForeColor = Color.White
@@ -814,9 +1394,9 @@ namespace AirCanvas
             lblDrawingApps = new Label
             {
                 Text = "🎨 Stylus & Drawing Apps",
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(56, 189, 248),
-                Location = new Point(15, 330),
+                Location = new Point(15, 356),
                 AutoSize = true
             };
 
@@ -824,8 +1404,8 @@ namespace AirCanvas
             {
                 Text = "🖊️ Stylus Pen Menu (Floating Toolbar)",
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                Location = new Point(15, 352),
-                Size = new Size(300, 30),
+                Location = new Point(15, 376),
+                Size = new Size(305, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(37, 99, 235), // Blue 600
                 ForeColor = Color.White
@@ -836,8 +1416,8 @@ namespace AirCanvas
             {
                 Text = "📝 OneNote",
                 Font = new Font("Segoe UI", 8f, FontStyle.Bold),
-                Location = new Point(15, 386),
-                Size = new Size(95, 28),
+                Location = new Point(15, 406),
+                Size = new Size(98, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(123, 45, 142),
                 ForeColor = Color.White
@@ -848,8 +1428,8 @@ namespace AirCanvas
             {
                 Text = "📊 PowerPoint",
                 Font = new Font("Segoe UI", 8f, FontStyle.Bold),
-                Location = new Point(115, 386),
-                Size = new Size(100, 28),
+                Location = new Point(118, 406),
+                Size = new Size(98, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(208, 68, 35),
                 ForeColor = Color.White
@@ -860,8 +1440,8 @@ namespace AirCanvas
             {
                 Text = "🖌 Studio",
                 Font = new Font("Segoe UI", 8f, FontStyle.Bold),
-                Location = new Point(220, 386),
-                Size = new Size(95, 28),
+                Location = new Point(222, 406),
+                Size = new Size(98, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(0, 180, 216),
                 ForeColor = Color.White
@@ -872,8 +1452,8 @@ namespace AirCanvas
             {
                 Text = "🎨 MS Paint",
                 Font = new Font("Segoe UI", 8f, FontStyle.Bold),
-                Location = new Point(15, 418),
-                Size = new Size(145, 28),
+                Location = new Point(15, 436),
+                Size = new Size(150, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(2, 132, 199),
                 ForeColor = Color.White
@@ -884,8 +1464,8 @@ namespace AirCanvas
             {
                 Text = "✂️ Snipping Tool",
                 Font = new Font("Segoe UI", 8f, FontStyle.Bold),
-                Location = new Point(165, 418),
-                Size = new Size(150, 28),
+                Location = new Point(170, 436),
+                Size = new Size(150, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(225, 29, 72),
                 ForeColor = Color.White
@@ -895,9 +1475,9 @@ namespace AirCanvas
             btnToggleServer = new Button
             {
                 Text = "⏹ Stop Server",
-                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
-                Location = new Point(15, 458),
-                Size = new Size(300, 36),
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                Location = new Point(15, 468),
+                Size = new Size(305, 34),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(239, 68, 68),
                 ForeColor = Color.White
@@ -913,7 +1493,12 @@ namespace AirCanvas
             pnlCard.Controls.Add(pnlPinBox);
             pnlCard.Controls.Add(lblClients);
             pnlCard.Controls.Add(lblPackets);
+            pnlCard.Controls.Add(lblMonitor);
+            pnlCard.Controls.Add(cmbMonitor);
+            pnlCard.Controls.Add(lblBackend);
+            pnlCard.Controls.Add(cmbBackend);
             pnlCard.Controls.Add(chkEnableInjection);
+            pnlCard.Controls.Add(btnEmergencyRelease);
             pnlCard.Controls.Add(btnPptPen);
             pnlCard.Controls.Add(btnPptLaser);
             pnlCard.Controls.Add(btnPptEraser);
@@ -934,8 +1519,8 @@ namespace AirCanvas
             // Right Panel: Live Drawing Canvas PictureBox
             pbCanvas = new PictureBox
             {
-                Location = new Point(370, 88),
-                Size = new Size(420, 530),
+                Location = new Point(365, 88),
+                Size = new Size(445, 552),
                 BackColor = Color.FromArgb(15, 23, 42),
                 BorderStyle = BorderStyle.FixedSingle
             };
@@ -966,10 +1551,11 @@ namespace AirCanvas
                         pbCanvas.Invalidate();
                     }
 
-                    // Inactivity Watchdog: Auto-release held button if client disconnected mid-stroke without FIN
-                    if (activeButtonDownFlag != 0 && unchecked(Environment.TickCount - lastPacketTick) > 2500)
+                    // Inactivity Watchdog: Auto-release held button or synthetic pen if client disconnected mid-stroke or packet flow paused
+                    bool isContactActive = (activeButtonDownFlag != 0) || (syntheticPenBackend != null && syntheticPenBackend.IsInContact);
+                    if (isContactActive && unchecked(Environment.TickCount - lastPacketTick) > 500)
                     {
-                        ReleaseHeldButtonAtCursor();
+                        ReleaseAllPointersAndButtons();
                     }
                 };
                 canvasRepaintTimer.Start();
@@ -1042,7 +1628,7 @@ namespace AirCanvas
             catch { }
         }
 
-        private void InjectAndDrawInput(double x, double y, double pressure, string eventType, int buttons = 1, int pointerType = 0, string tool = "pen", string colorHex = "#38bdf8", double strokeWidth = 3.0, double clientAspect = 0.0)
+        private void InjectAndDrawInput(double x, double y, double pressure, string eventType, int buttons = 1, int pointerType = 0, string tool = "pen", string colorHex = "#38bdf8", double strokeWidth = 3.0, double clientAspect = 0.0, double tiltX = 0.0, double tiltY = 0.0)
         {
             // Clamp normalized coords
             x = Math.Max(0.0, Math.Min(1.0, x));
@@ -1058,7 +1644,7 @@ namespace AirCanvas
             {
                 try
                 {
-                    Rectangle drawArea = GetTargetDrawingArea();
+                    Rectangle drawArea = GetTargetDrawingArea(selectedMonitorIndex);
                     int targetX = drawArea.Left + (int)Math.Round(x * Math.Max(1, drawArea.Width - 1));
                     int targetY = drawArea.Top + (int)Math.Round(y * Math.Max(1, drawArea.Height - 1));
 
@@ -1068,26 +1654,57 @@ namespace AirCanvas
 
                     bool isRightClick = (buttons & 2) != 0 || tool.Equals("eraser", StringComparison.OrdinalIgnoreCase) || pointerType == 3;
 
-                    if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
+                    bool injectedBySyntheticPen = false;
+                    if (activeBackend == InputInjectionBackend.SyntheticPen && syntheticPenBackend != null && syntheticPenBackend.IsSupported)
                     {
-                        ReleaseHeldButton();
-                        uint downFlag = isRightClick ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
-                        activeButtonDownFlag = downFlag;
-                        MoveCursorPhysical(targetX, targetY);
-                        mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
-                        lastInjectedPoint = new PointF((float)x, (float)y);
+                        injectedBySyntheticPen = syntheticPenBackend.Inject(targetX, targetY, pressure, eventType, buttons, pointerType, tiltX, tiltY);
                     }
-                    else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
+
+                    // Fallback to legacy mouse emulation if synthetic pen is inactive, unsupported, or failed (e.g. UIPI)
+                    if (!injectedBySyntheticPen)
                     {
-                        MoveCursorPhysical(targetX, targetY);
-                        mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, UIntPtr.Zero);
-                        lastInjectedPoint = new PointF((float)x, (float)y);
-                    }
-                    else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
-                    {
-                        MoveCursorPhysical(targetX, targetY);
-                        ReleaseHeldButton();
-                        lastInjectedPoint = PointF.Empty;
+                        // Calculate Windows absolute mouse coordinates (0..65535 across virtual desktop)
+                        int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                        int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                        int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                        int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                        if (vw <= 0) vw = 1920;
+                        if (vh <= 0) vh = 1080;
+
+                        uint absX = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetX - vx) / Math.Max(1, vw - 1)) * 65535.0)));
+                        uint absY = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetY - vy) / Math.Max(1, vh - 1)) * 65535.0)));
+                        uint baseMoveFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+
+                        if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
+                        {
+                            ReleaseHeldButton();
+                            uint downFlag = isRightClick ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
+                            activeButtonDownFlag = downFlag;
+                            MoveCursorPhysical(targetX, targetY);
+                            mouse_event(baseMoveFlags | downFlag, absX, absY, 0, UIntPtr.Zero);
+                            lastInjectedPoint = new PointF((float)x, (float)y);
+                        }
+                        else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
+                        {
+                            MoveCursorPhysical(targetX, targetY);
+                            mouse_event(baseMoveFlags, absX, absY, 0, UIntPtr.Zero);
+                            lastInjectedPoint = new PointF((float)x, (float)y);
+                        }
+                        else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
+                        {
+                            MoveCursorPhysical(targetX, targetY);
+                            uint upFlag = (activeButtonDownFlag == MOUSEEVENTF_RIGHTDOWN)
+                                ? MOUSEEVENTF_RIGHTUP
+                                : (activeButtonDownFlag == MOUSEEVENTF_LEFTDOWN ? MOUSEEVENTF_LEFTUP : (MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP));
+                            activeButtonDownFlag = 0;
+                            mouse_event(baseMoveFlags | upFlag, absX, absY, 0, UIntPtr.Zero);
+                            lastInjectedPoint = PointF.Empty;
+                        }
+                        else if (eventType.Equals("hover", StringComparison.OrdinalIgnoreCase))
+                        {
+                            MoveCursorPhysical(targetX, targetY);
+                            mouse_event(baseMoveFlags, absX, absY, 0, UIntPtr.Zero);
+                        }
                     }
                 }
                 catch { }
@@ -1099,28 +1716,55 @@ namespace AirCanvas
         /// </summary>
         private void ReleaseHeldButton()
         {
+            if (activeButtonDownFlag == 0) return;
             uint upFlag = (activeButtonDownFlag == MOUSEEVENTF_RIGHTDOWN)
                 ? MOUSEEVENTF_RIGHTUP
                 : (activeButtonDownFlag == MOUSEEVENTF_LEFTDOWN ? MOUSEEVENTF_LEFTUP : (MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP));
             activeButtonDownFlag = 0;
             try
             {
-                mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
+                int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                if (vw <= 0) vw = 1920;
+                if (vh <= 0) vh = 1080;
+                Point cur = Cursor.Position;
+                uint absX = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(cur.X - vx) / Math.Max(1, vw - 1)) * 65535.0)));
+                uint absY = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(cur.Y - vy) / Math.Max(1, vh - 1)) * 65535.0)));
+                mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | upFlag, absX, absY, 0, UIntPtr.Zero);
             }
             catch { }
         }
 
         /// <summary>
-        /// Invoked upon client disconnection or server stop to prevent stuck mouse state.
+        /// Emergency and lifecycle safety release: immediately forces pen up and releases all mouse buttons.
+        /// </summary>
+        public void ReleaseAllPointersAndButtons()
+        {
+            try
+            {
+                if (syntheticPenBackend != null)
+                {
+                    syntheticPenBackend.ForcePenUp();
+                }
+                ReleaseHeldButton();
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Invoked upon client disconnection or server stop to prevent stuck pointer/mouse state.
         /// </summary>
         private void ReleaseHeldButtonAtCursor()
         {
-            ReleaseHeldButton();
+            ReleaseAllPointersAndButtons();
         }
 
         private void DrawOnAppCanvas(double x, double y, double pressure, string eventType, string tool = "pen", string colorHex = "#38bdf8", double strokeWidth = 3.0, double clientAspect = 0.0)
         {
             if (canvasGraphics == null || pbCanvas == null) return;
+            if (eventType.Equals("hover", StringComparison.OrdinalIgnoreCase)) return;
 
             try
             {
@@ -1825,9 +2469,19 @@ namespace AirCanvas
                         }
                         else if (frame.Opcode == 2) // Binary Input Event or Encrypted Payload
                         {
-                            if (frame.Payload != null && frame.Payload.Length >= 13 && frame.Payload.Length % 13 == 0 && frame.Payload[0] <= 5)
+                            if (frame.Payload != null && frame.Payload.Length >= 17 && frame.Payload.Length % 17 == 0 && frame.Payload[0] <= 5 && frame.Payload[11] == 2)
                             {
-                                // Handle coalesced batch frames without dropping intermediate points
+                                // Handle coalesced batch frames for v2
+                                for (int offset = 0; offset < frame.Payload.Length; offset += 17)
+                                {
+                                    byte[] subFrame = new byte[17];
+                                    Buffer.BlockCopy(frame.Payload, offset, subFrame, 0, 17);
+                                    if (!ProcessBinaryPacket(subFrame, 17, stream, session)) break;
+                                }
+                            }
+                            else if (frame.Payload != null && frame.Payload.Length >= 13 && frame.Payload.Length % 13 == 0 && frame.Payload[0] <= 5)
+                            {
+                                // Handle coalesced batch frames for v1
                                 for (int offset = 0; offset < frame.Payload.Length; offset += 13)
                                 {
                                     byte[] subFrame = new byte[13];
@@ -1865,19 +2519,36 @@ namespace AirCanvas
                     byte[] readBuffer = new byte[4096];
                     while (client.Connected && !token.IsCancellationRequested)
                     {
-                        // Extract all complete 13-byte frames with framing recovery
+                        // Extract complete frames (support both v2 17-byte and v1 13-byte) with framing recovery
                         while (streamBuffer.Count >= 13)
                         {
                             int startIdx = -1;
+                            int frameLen = 0;
+
                             for (int i = 0; i <= streamBuffer.Count - 13; i++)
                             {
                                 if (streamBuffer[i] <= 5) // Valid type index
                                 {
+                                    // Check v2 (17 bytes) first if enough bytes available
+                                    if (streamBuffer.Count - i >= 17 && streamBuffer[i + 11] == 2)
+                                    {
+                                        int sum2 = 0;
+                                        for (int j = 0; j < 16; j++) sum2 += streamBuffer[i + j];
+                                        if ((sum2 & 0xFF) == streamBuffer[i + 16])
+                                        {
+                                            startIdx = i;
+                                            frameLen = 17;
+                                            break;
+                                        }
+                                    }
+
+                                    // Check v1 (13 bytes)
                                     int sum = 0;
                                     for (int j = 0; j < 12; j++) sum += streamBuffer[i + j];
                                     if ((sum & 0xFF) == streamBuffer[i + 12])
                                     {
                                         startIdx = i;
+                                        frameLen = 13;
                                         break;
                                     }
                                 }
@@ -1885,9 +2556,9 @@ namespace AirCanvas
 
                             if (startIdx == -1)
                             {
-                                if (streamBuffer.Count > 12)
+                                if (streamBuffer.Count > 16)
                                 {
-                                    streamBuffer.RemoveRange(0, streamBuffer.Count - 12);
+                                    streamBuffer.RemoveRange(0, streamBuffer.Count - 16);
                                 }
                                 break;
                             }
@@ -1897,11 +2568,11 @@ namespace AirCanvas
                                 streamBuffer.RemoveRange(0, startIdx);
                             }
 
-                            byte[] frameData = new byte[13];
-                            streamBuffer.CopyTo(0, frameData, 0, 13);
-                            streamBuffer.RemoveRange(0, 13);
+                            byte[] frameData = new byte[frameLen];
+                            streamBuffer.CopyTo(0, frameData, 0, frameLen);
+                            streamBuffer.RemoveRange(0, frameLen);
 
-                            ProcessBinaryPacket(frameData, 13, stream, session);
+                            ProcessBinaryPacket(frameData, frameLen, stream, session);
                             Interlocked.Increment(ref packetsReceived);
                             if (packetsReceived % 10 == 0)
                             {
@@ -2542,14 +3213,28 @@ namespace AirCanvas
 
         private static bool IsValidBinaryPacket(byte[] data)
         {
-            if (data == null || data.Length != 13) return false;
-            if (data[0] > 5) return false;
-            int sum = 0;
-            for (int i = 0; i < 12; i++)
+            if (data == null) return false;
+            if (data.Length == 13)
             {
-                sum += data[i];
+                if (data[0] > 5) return false;
+                int sum = 0;
+                for (int i = 0; i < 12; i++)
+                {
+                    sum += data[i];
+                }
+                return (sum & 0xFF) == data[12];
             }
-            return (sum & 0xFF) == data[12];
+            else if (data.Length == 17)
+            {
+                if (data[0] > 5) return false;
+                int sum = 0;
+                for (int i = 0; i < 16; i++)
+                {
+                    sum += data[i];
+                }
+                return (sum & 0xFF) == data[16];
+            }
+            return false;
         }
 
         /// <summary>
@@ -2560,7 +3245,7 @@ namespace AirCanvas
         ///  - All frames verified via SecureChannel (AES-256-CBC + HMAC-SHA256).
         ///  - Frames with mismatched MAC are discarded immediately.
         ///  - Unencrypted fallback is completely disabled.
-        ///  - Plaintext 13-byte packets rejected (minimum frame size 48 bytes).
+        ///  - Supports v1 (13-byte) and v2 (17-byte with seq, tilt, pressure) packets.
         /// </summary>
         private bool ProcessBinaryPacket(byte[] data, int count, NetworkStream stream, ClientSession session)
         {
@@ -2599,6 +3284,7 @@ namespace AirCanvas
                 else if (typeByte == 1) eventType = "move";
                 else if (typeByte == 2) eventType = "up";
                 else if (typeByte == 3) eventType = "cancel";
+                else if (typeByte == 4) eventType = "hover";
                 else if (typeByte == 5) eventType = "clear";
 
                 if (eventType == "clear")
@@ -2617,10 +3303,33 @@ namespace AirCanvas
                 double pressure = (double)packet[5] / 255.0;
 
                 int pointerType = packet.Length > 6 ? packet[6] : 0;
+                int pointerId = packet.Length > 7 ? packet[7] : 0;
+
+                double tiltX = 0.0;
+                double tiltY = 0.0;
+                if (packet.Length > 9)
+                {
+                    tiltX = ((double)packet[8] / 255.0) * 180.0 - 90.0;
+                    tiltY = ((double)packet[9] / 255.0) * 180.0 - 90.0;
+                }
+
                 int buttons = packet.Length > 10 ? packet[10] : 1;
 
+                // Protocol v2 sequence number deduplication
+                if (packet.Length >= 17 && packet[11] == 2)
+                {
+                    uint seq = ((uint)packet[12] << 24) | ((uint)packet[13] << 16) | ((uint)packet[14] << 8) | (uint)packet[15];
+                    if (session.HasSequenceNumber && seq <= session.LastSequenceNumber)
+                    {
+                        // Duplicate or out-of-order packet rejected
+                        return true;
+                    }
+                    session.HasSequenceNumber = true;
+                    session.LastSequenceNumber = seq;
+                }
+
                 lastPacketTick = Environment.TickCount;
-                InjectAndDrawInput(x, y, pressure, eventType, buttons, pointerType, session.Tool, session.ColorHex, session.StrokeWidth, session.ClientAspect);
+                InjectAndDrawInput(x, y, pressure, eventType, buttons, pointerType, session.Tool, session.ColorHex, session.StrokeWidth, session.ClientAspect, tiltX, tiltY);
             }
             catch { }
             return true;
@@ -3253,6 +3962,11 @@ namespace AirCanvas
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             ReleaseHeldButtonAtCursor();
+            if (syntheticPenBackend != null)
+            {
+                syntheticPenBackend.Dispose();
+                syntheticPenBackend = null;
+            }
             StopServer();
             if (penMenuForm != null && !penMenuForm.IsDisposed)
             {

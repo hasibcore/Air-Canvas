@@ -185,6 +185,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
                           onPointerMove: _onPointerMove,
                           onPointerUp: _onPointerUp,
                           onPointerCancel: _onPointerCancel,
+                          onPointerHover: _onPointerHover,
                           child: Container(
                             decoration: BoxDecoration(
                               color: const Color(0xFF0A0A12),
@@ -660,6 +661,35 @@ class _DrawingScreenState extends State<DrawingScreen> {
       tiltX: tiltX,
       tiltY: tiltY,
       buttons: event.buttons,
+    );
+  }
+
+  void _onPointerHover(PointerHoverEvent event) {
+    final drawing = context.read<DrawingProvider>();
+    final pointerType = _getPointerType(event.kind);
+
+    // Optimized stylus detection (Bug 92)
+    if (pointerType == PointerType.stylus && !_stylusSupportDetected) {
+      _stylusSupportDetected = true;
+      final connection = context.read<ConnectionProvider>();
+      if (!connection.hasStylusSupportSetting) {
+        connection.setStylusSupport(true);
+      }
+    }
+
+    double tiltX = 0.0;
+    double tiltY = 0.0;
+    if (event.tilt > 0) {
+      tiltX = (event.tilt * math.cos(event.orientation)) * (180 / math.pi);
+      tiltY = (event.tilt * math.sin(event.orientation)) * (180 / math.pi);
+    }
+
+    drawing.onPointerHover(
+      event.localPosition,
+      pointerType: pointerType,
+      pointerId: event.pointer,
+      tiltX: tiltX,
+      tiltY: tiltY,
     );
   }
 

@@ -343,6 +343,7 @@ class DrawingProvider extends ChangeNotifier {
   double _lastPressure = 0.0;
   PenState _penState = PenState.idle;
   PenState get penState => _penState;
+  int _sequenceCounter = 0;
 
   // Pro Precision & Jitter Filter Engine (1-Euro Filter)
   PrecisionMode _precisionMode = PrecisionMode.proAdaptive;
@@ -883,6 +884,7 @@ class DrawingProvider extends ChangeNotifier {
         tiltX: tiltX,
         tiltY: tiltY,
         buttons: buttons,
+        sequenceNumber: ++_sequenceCounter,
         timestamp: timestamp,
       );
       onInputGenerated?.call(event);
@@ -921,9 +923,31 @@ class DrawingProvider extends ChangeNotifier {
       tiltX: tiltX,
       tiltY: tiltY,
       buttons: buttons,
+      sequenceNumber: ++_sequenceCounter,
       timestamp: timestamp,
     );
     onInputGenerated?.call(event);
+  }
+
+  /// Stylus Hover (proximity detection without surface contact for Windows Ink)
+  void onPointerHover(Offset position, {
+    PointerType pointerType = PointerType.stylus,
+    int pointerId = 0,
+    double tiltX = 0.0,
+    double tiltY = 0.0,
+  }) {
+    if (_isDrawing) return;
+    _lastStylusActivity = DateTime.now();
+    _emitInputEvent(
+      InputEventType.hover,
+      position,
+      0.0,
+      pointerType,
+      pointerId,
+      DateTime.now(),
+      tiltX: tiltX,
+      tiltY: tiltY,
+    );
   }
 
   /// Touch/Pen down - starts new stroke
