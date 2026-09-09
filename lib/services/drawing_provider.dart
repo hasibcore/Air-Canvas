@@ -380,7 +380,7 @@ class DrawingProvider extends ChangeNotifier {
 
   // --- Custom Drawing Box (Active Work Area / ROI) ---
   bool _customBoxEnabled = false;
-  Rect _customBoxNormalized = const Rect.fromLTRB(0.12, 0.12, 0.88, 0.88);
+  Rect _customBoxNormalized = const Rect.fromLTRB(0.0, 0.0, 1.0, 1.0);
   bool _isEditingCustomBox = false;
   bool _isSnippingBox = false;
   bool _boxMapsToFullScreen = false;
@@ -878,56 +878,15 @@ class DrawingProvider extends ChangeNotifier {
     double rawNormX = (position.dx / w).clamp(0.0, 1.0);
     double rawNormY = (position.dy / h).clamp(0.0, 1.0);
 
-    // If Custom Drawing Box is active and maps to full PC screen, re-normalize
-    if (_customBoxEnabled && _boxMapsToFullScreen) {
-      final boxW = _customBoxNormalized.width <= 0 ? 1.0 : _customBoxNormalized.width;
-      final boxH = _customBoxNormalized.height <= 0 ? 1.0 : _customBoxNormalized.height;
-      final boxNormX = ((rawNormX - _customBoxNormalized.left) / boxW).clamp(0.0, 1.0);
-      final boxNormY = ((rawNormY - _customBoxNormalized.top) / boxH).clamp(0.0, 1.0);
-
-      final event = InputEvent(
-        type: type,
-        x: boxNormX,
-        y: boxNormY,
-        pressure: pressure,
-        pointerType: pointerType,
-        pointerId: pointerId,
-        tiltX: tiltX,
-        tiltY: tiltY,
-        buttons: buttons,
-        sequenceNumber: ++_sequenceCounter,
-        timestamp: timestamp,
-      );
-      onInputGenerated?.call(event);
-      return;
-    }
-
-    // Authoritative Single Transform Contract:
-    // 1. Full-screen Graphics Tablet Mode (Default writingScale == 1.0):
-    //    Mobile [0.0..1.0] maps 1:1 directly to PC [0.0..1.0].
-    //    Left (0.0) -> Left (0.0), Center (0.5) -> Center (0.5), Right (1.0) -> Right (1.0).
-    //    Entire PC screen is 100% reachable without arbitrary offsets.
-    // 2. Scaled Note Mode (writingScale < 0.99):
-    //    Scales stroke within selected anchor for compact handwriting when explicitly chosen.
-    double normalizedX = rawNormX;
-    double normalizedY = rawNormY;
-
-    if (_writingScale < 0.99) {
-      final scale = _writingScale.clamp(0.25, 1.0);
-      double offsetX = 0.0;
-      double offsetY = 0.0;
-      if (_writingAnchor == WritingAnchor.center) {
-        offsetX = ((1.0 - scale) / 2.0).clamp(0.0, 1.0);
-        offsetY = ((1.0 - scale) / 2.0).clamp(0.0, 1.0);
-      }
-      normalizedX = (offsetX + rawNormX * scale).clamp(0.0, 1.0);
-      normalizedY = (offsetY + rawNormY * scale).clamp(0.0, 1.0);
-    }
-
+    // v2.2.5 Authoritative Single Transform Contract:
+    // Mobile ALWAYS sends pure normalized [0.0..1.0] coordinates across the ENTIRE screen.
+    // No mobile-side box gating, no re-normalization, no writing scale transform.
+    // The PC server is solely responsible for target mapping (Full Display or PC Box Mode).
+    // Mobile (0.0, 0.0) -> top-left, (0.5, 0.5) -> exact center, (1.0, 1.0) -> bottom-right.
     final event = InputEvent(
       type: type,
-      x: normalizedX,
-      y: normalizedY,
+      x: rawNormX,
+      y: rawNormY,
       pressure: pressure,
       pointerType: pointerType,
       pointerId: pointerId,
@@ -983,10 +942,9 @@ class DrawingProvider extends ChangeNotifier {
     final normX = (position.dx / w).clamp(0.0, 1.0);
     final normY = (position.dy / h).clamp(0.0, 1.0);
 
-    // Custom Drawing Box gating: ignore touches outside the designated box
-    if (_customBoxEnabled && !_customBoxNormalized.contains(Offset(normX, normY))) {
-      return;
-    }
+    // v2.2.5: Custom Drawing Box gating REMOVED from mobile.
+    // Mobile is ALWAYS 100% full-screen drawing tablet — no mobile-side box boundaries.
+    // PC Box Mode (if enabled) only constrains the PC target rectangle.
 
     // Pen State Machine: ensure clean transition from idle BEFORE acquiring slot
     if (_penState != PenState.idle && _pendingUpSlots.isEmpty) {
@@ -1084,20 +1042,11 @@ class DrawingProvider extends ChangeNotifier {
     final now = DateTime.now();
     _recordInputSample();
 
-    // Custom Drawing Box gating & boundary clamping
+    // v2.2.5: Custom Drawing Box boundary clamping REMOVED from mobile.
+    // Mobile always uses full unclamped position across entire screen.
     final w = _canvasWidth <= 0 ? 1.0 : _canvasWidth;
     final h = _canvasHeight <= 0 ? 1.0 : _canvasHeight;
     Offset boundedPosition = position;
-    if (_customBoxEnabled) {
-      final minX = _customBoxNormalized.left * w;
-      final maxX = _customBoxNormalized.right * w;
-      final minY = _customBoxNormalized.top * h;
-      final maxY = _customBoxNormalized.bottom * h;
-      boundedPosition = Offset(
-        position.dx.clamp(minX, maxX),
-        position.dy.clamp(minY, maxY),
-      );
-    }
 
     // 1. Pro Precision filtering (1-Euro Adaptive vs Studio Smooth vs Raw Direct)
     // Preserves 100% of raw digitizer points without artificial threshold dropping

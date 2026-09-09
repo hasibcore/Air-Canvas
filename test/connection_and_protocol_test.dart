@@ -347,7 +347,7 @@ void main() {
       }
     });
 
-    test('WritingScale compact mode (0.50x) reduces PC output span by 50%', () {
+    test('v2.2.5: WritingScale state exists but mobile always sends pure normalized coords', () {
       final provider = DrawingProvider();
       provider.updateCanvasSize(800.0, 400.0);
       provider.setWritingScalePreset(WritingScalePreset.compact);
@@ -359,14 +359,13 @@ void main() {
       // Start stroke at mobile center (400, 200) -> normalized is (0.5, 0.5)
       provider.onPointerDown(const Offset(400.0, 200.0));
       expect(emitted, isNotNull);
-      // At center anchor with 0.5 scale, center should map to center (0.5, 0.5)
-      expect(emitted!.x, closeTo(0.5, 0.05));
-      expect(emitted!.y, closeTo(0.5, 0.05));
+      // v2.2.5: Mobile always sends pure normalized coords regardless of writingScale
+      expect(emitted!.x, closeTo(0.5, 0.01));
+      expect(emitted!.y, closeTo(0.5, 0.01));
 
-      // Move by 200px horizontally on mobile (which is 25% of mobile canvas)
+      // Move to 75% of mobile width (600, 200) -> pure normalized 0.75
       provider.onPointerMove(const Offset(600.0, 200.0));
-      // In 0.50x scale mode, the emitted span should be 25% * 0.50 = 12.5%
-      expect(emitted!.x - 0.5, closeTo(0.125, 0.02));
+      expect(emitted!.x, closeTo(0.75, 0.01));
     });
 
     test('Full-screen mobile edge-to-edge drawing preserves 1:1 circle geometry on 16:9 PC', () {
@@ -408,7 +407,7 @@ void main() {
       expect(provider.isEditingCustomBox, isFalse);
     });
 
-    test('Custom Box gating blocks touches outside the box', () {
+    test('v2.2.5: Custom Box enabled does NOT gate or block touches on mobile', () {
       final provider = DrawingProvider();
       provider.updateCanvasSize(1000.0, 1000.0);
       provider.customBoxEnabled = true;
@@ -418,51 +417,47 @@ void main() {
       InputEvent? emitted;
       provider.onInputGenerated = (ev) => emitted = ev;
 
-      // Touch outside box at (100, 100) -> normalized (0.1, 0.1)
+      // v2.2.5: Touch outside box at (100, 100) is now ACCEPTED (mobile is always full screen)
       provider.onPointerDown(const Offset(100.0, 100.0));
-      expect(provider.isDrawing, isFalse);
-      expect(provider.currentStroke, isNull);
-      expect(emitted, isNull);
-
-      // Touch inside box at (500, 500) -> normalized (0.5, 0.5)
-      provider.onPointerDown(const Offset(500.0, 500.0));
       expect(provider.isDrawing, isTrue);
       expect(provider.currentStroke, isNotNull);
       expect(emitted, isNotNull);
+      expect(emitted!.x, closeTo(0.1, 0.01));
+      expect(emitted!.y, closeTo(0.1, 0.01));
     });
 
-    test('Custom Box clamps movement to box boundaries', () {
+    test('v2.2.5: Custom Box does NOT clamp movement on mobile', () {
       final provider = DrawingProvider();
       provider.updateCanvasSize(1000.0, 1000.0);
       provider.customBoxEnabled = true;
       provider.setCustomBoxNormalized(const Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
 
       provider.onPointerDown(const Offset(500.0, 500.0));
-      // Move far outside the right boundary (1200, 500)
-      provider.onPointerMove(const Offset(1200.0, 500.0));
+      // Move far outside the right boundary (900, 500)
+      provider.onPointerMove(const Offset(900.0, 500.0));
 
-      // Last position should be clamped to maxX = 0.8 * 1000 = 800.0
-      expect(provider.lastPosition!.dx, closeTo(800.0, 0.1));
+      // v2.2.5: Position is NOT clamped — full mobile screen is usable
+      expect(provider.lastPosition!.dx, closeTo(900.0, 1.0));
     });
 
-    test('Custom Box re-normalizes coordinates to full screen when boxMapsToFullScreen is true', () {
+    test('v2.2.5: boxMapsToFullScreen has no effect — mobile sends pure coords', () {
       final provider = DrawingProvider();
       provider.updateCanvasSize(1000.0, 1000.0);
       provider.customBoxEnabled = true;
       provider.boxMapsToFullScreen = true;
-      // Box is 200..800 in X and Y
       provider.setCustomBoxNormalized(const Rect.fromLTRB(0.2, 0.2, 0.8, 0.8));
 
       InputEvent? emitted;
       provider.onInputGenerated = (ev) => emitted = ev;
 
-      // Touch at the left edge of the box (200, 500) -> should map to 0.0 in X
+      // Touch at (200, 500) -> raw normalized (0.2, 0.5)
       provider.onPointerDown(const Offset(200.0, 500.0));
-      expect(emitted!.x, closeTo(0.0, 0.01));
+      // v2.2.5: Mobile sends raw normalized coords, NOT box-remapped
+      expect(emitted!.x, closeTo(0.2, 0.01));
 
-      // Touch at the right edge of the box (800, 500) -> should map to 1.0 in X
+      // Touch at (800, 500) -> raw normalized (0.8, 0.5)
       provider.onPointerMove(const Offset(800.0, 500.0));
-      expect(emitted!.x, closeTo(1.0, 0.01));
+      expect(emitted!.x, closeTo(0.8, 0.01));
     });
 
     test('Custom Box presets set correct normalized bounds', () {
