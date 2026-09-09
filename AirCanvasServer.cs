@@ -408,8 +408,26 @@ namespace AirCanvas
         }
 
         // Win32 Native Input & Keyboard Injection
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetPhysicalCursorPos(int X, int Y);
+
         [DllImport("user32.dll")]
         private static extern bool SetCursorPos(int X, int Y);
+
+        private static void MoveCursorPhysical(int x, int y)
+        {
+            try
+            {
+                if (!SetPhysicalCursorPos(x, y))
+                {
+                    SetCursorPos(x, y);
+                }
+            }
+            catch
+            {
+                SetCursorPos(x, y);
+            }
+        }
 
         [DllImport("user32.dll")]
         private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
@@ -1048,38 +1066,27 @@ namespace AirCanvas
                     targetX = Math.Max(drawArea.Left, Math.Min(drawArea.Right - 1, targetX));
                     targetY = Math.Max(drawArea.Top, Math.Min(drawArea.Bottom - 1, targetY));
 
-                    // Multi-Monitor Virtual Desktop Normalization
-                    int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-                    int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-                    int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-                    int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-                    if (vw <= 0) vw = drawArea.Width;
-                    if (vh <= 0) vh = drawArea.Height;
-
-                    uint absX = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetX - vx) / Math.Max(1, vw - 1)) * 65535.0)));
-                    uint absY = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(targetY - vy) / Math.Max(1, vh - 1)) * 65535.0)));
                     bool isRightClick = (buttons & 2) != 0 || tool.Equals("eraser", StringComparison.OrdinalIgnoreCase) || pointerType == 3;
-                    uint baseFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE;
 
                     if (eventType.Equals("down", StringComparison.OrdinalIgnoreCase))
                     {
-                        ReleaseHeldButton(absX, absY);
+                        ReleaseHeldButton();
                         uint downFlag = isRightClick ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
                         activeButtonDownFlag = downFlag;
-                        SetCursorPos(targetX, targetY);
-                        mouse_event(baseFlags | downFlag, absX, absY, 0, UIntPtr.Zero);
+                        MoveCursorPhysical(targetX, targetY);
+                        mouse_event(downFlag, 0, 0, 0, UIntPtr.Zero);
                         lastInjectedPoint = new PointF((float)x, (float)y);
                     }
                     else if (eventType.Equals("move", StringComparison.OrdinalIgnoreCase))
                     {
-                        SetCursorPos(targetX, targetY);
-                        mouse_event(baseFlags, absX, absY, 0, UIntPtr.Zero);
+                        MoveCursorPhysical(targetX, targetY);
+                        mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, UIntPtr.Zero);
                         lastInjectedPoint = new PointF((float)x, (float)y);
                     }
                     else if (eventType.Equals("up", StringComparison.OrdinalIgnoreCase) || eventType.Equals("cancel", StringComparison.OrdinalIgnoreCase))
                     {
-                        SetCursorPos(targetX, targetY);
-                        ReleaseHeldButton(absX, absY);
+                        MoveCursorPhysical(targetX, targetY);
+                        ReleaseHeldButton();
                         lastInjectedPoint = PointF.Empty;
                     }
                 }
@@ -1089,9 +1096,8 @@ namespace AirCanvas
 
         /// <summary>
         /// Releases currently pressed mouse buttons (if any). Idempotent.
-        /// Uses MOUSEEVENTF_VIRTUALDESK for complete multi-monitor compatibility.
         /// </summary>
-        private void ReleaseHeldButton(uint absX, uint absY)
+        private void ReleaseHeldButton()
         {
             uint upFlag = (activeButtonDownFlag == MOUSEEVENTF_RIGHTDOWN)
                 ? MOUSEEVENTF_RIGHTUP
@@ -1099,7 +1105,7 @@ namespace AirCanvas
             activeButtonDownFlag = 0;
             try
             {
-                mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE | upFlag, absX, absY, 0, UIntPtr.Zero);
+                mouse_event(upFlag, 0, 0, 0, UIntPtr.Zero);
             }
             catch { }
         }
@@ -1109,23 +1115,7 @@ namespace AirCanvas
         /// </summary>
         private void ReleaseHeldButtonAtCursor()
         {
-            try
-            {
-                Point p = Cursor.Position;
-                int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-                int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-                int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-                int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-                if (vw <= 0) vw = Screen.PrimaryScreen.Bounds.Width;
-                if (vh <= 0) vh = Screen.PrimaryScreen.Bounds.Height;
-                uint absX = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(p.X - vx) / Math.Max(1, vw - 1)) * 65535.0)));
-                uint absY = (uint)Math.Max(0, Math.Min(65535, Math.Round(((double)(p.Y - vy) / Math.Max(1, vh - 1)) * 65535.0)));
-                ReleaseHeldButton(absX, absY);
-            }
-            catch
-            {
-                activeButtonDownFlag = 0;
-            }
+            ReleaseHeldButton();
         }
 
         private void DrawOnAppCanvas(double x, double y, double pressure, string eventType, string tool = "pen", string colorHex = "#38bdf8", double strokeWidth = 3.0, double clientAspect = 0.0)
