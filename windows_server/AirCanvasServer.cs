@@ -460,6 +460,7 @@ namespace AirCanvas
         private WindowsSyntheticPenBackend syntheticPenBackend = null;
         private InputInjectionBackend activeBackend = InputInjectionBackend.SyntheticPen;
         private int selectedMonitorIndex = 0;
+        private static readonly uint _ownProcessId = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
 
         // Server State (Pure Socket TCP)
         private TcpListener tcpServer;
@@ -828,6 +829,9 @@ namespace AirCanvas
         [DllImport("user32.dll")]
         private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
 
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
 
@@ -1062,6 +1066,21 @@ namespace AirCanvas
                             GetClassName(fgHwnd, sb, sb.Capacity);
                             string cls = sb.ToString();
                             bool isDesktopOrShell = (cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd");
+
+                            // Phase 18: Self-Window Exclusion — if the foreground window belongs to
+                            // our own process (AirCanvas server, PenMenu, etc.), skip client-rect
+                            // targeting and fall through to monitor bounds. Prevents cursor injection
+                            // from targeting the server's own small 840x680 window instead of the
+                            // actual user application / full monitor.
+                            if (!isDesktopOrShell)
+                            {
+                                uint fgPid = 0;
+                                GetWindowThreadProcessId(fgHwnd, out fgPid);
+                                if (fgPid == _ownProcessId)
+                                {
+                                    isDesktopOrShell = true; // Treat own windows like desktop — use monitor bounds
+                                }
+                            }
 
                             if (!isDesktopOrShell)
                             {
