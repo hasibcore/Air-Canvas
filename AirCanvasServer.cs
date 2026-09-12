@@ -461,6 +461,55 @@ namespace AirCanvas
         private InputInjectionBackend activeBackend = InputInjectionBackend.SyntheticPen;
         private int selectedMonitorIndex = 0;
         private static readonly uint _ownProcessId = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+        private static readonly List<NetworkStream> _activeWebStreams = new List<NetworkStream>();
+        private static readonly object _webStreamsLock = new object();
+
+        private static void RegisterWebStream(NetworkStream stream)
+        {
+            if (stream == null) return;
+            lock (_webStreamsLock)
+            {
+                if (!_activeWebStreams.Contains(stream))
+                    _activeWebStreams.Add(stream);
+            }
+        }
+
+        private static void UnregisterWebStream(NetworkStream stream)
+        {
+            if (stream == null) return;
+            lock (_webStreamsLock)
+            {
+                _activeWebStreams.Remove(stream);
+            }
+        }
+
+        private void BroadcastInputEventToWebClients(double x, double y, double pressure, string eventType, string tool, string colorHex, double strokeWidth, double clientAspect, NetworkStream senderStream = null)
+        {
+            List<NetworkStream> targets;
+            lock (_webStreamsLock)
+            {
+                if (_activeWebStreams.Count == 0) return;
+                targets = new List<NetworkStream>(_activeWebStreams);
+            }
+
+            string json = string.Format(CultureInfo.InvariantCulture,
+                "{{\"type\":\"broadcast_input\",\"t\":\"{0}\",\"x\":{1:F5},\"y\":{2:F5},\"p\":{3:F3},\"tool\":\"{4}\",\"color\":\"{5}\",\"w\":{6:F1},\"aspect\":{7:F4}}}",
+                eventType, x, y, pressure, tool ?? "pen", colorHex ?? "#00e5ff", strokeWidth > 0 ? strokeWidth : 4.0, clientAspect > 0.05 ? clientAspect : 1.7777);
+            byte[] payload = Encoding.UTF8.GetBytes(json);
+
+            foreach (var st in targets)
+            {
+                if (senderStream != null && st == senderStream) continue;
+                try
+                {
+                    SendWebSocketFrame(st, 1, payload);
+                }
+                catch
+                {
+                    UnregisterWebStream(st);
+                }
+            }
+        }
 
         // Server State (Pure Socket TCP)
         private TcpListener tcpServer;
@@ -1067,11 +1116,11 @@ namespace AirCanvas
                             string cls = sb.ToString();
                             bool isDesktopOrShell = (cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd");
 
-                            // Phase 18: Self-Window Exclusion — if the foreground window belongs to
-                            // our own process (AirCanvas server, PenMenu, etc.), skip client-rect
+                            // Phase 18: Self-Window & Emulator Exclusion — if the foreground window belongs to
+                            // our own process (AirCanvas server, PenMenu, etc.) or an Android emulator
+                            // (qemu-system, emulator, Nox, BlueStacks, etc.), skip client-rect
                             // targeting and fall through to monitor bounds. Prevents cursor injection
-                            // from targeting the server's own small 840x680 window instead of the
-                            // actual user application / full monitor.
+                            // from targeting the server's own small 840x680 window or the emulator window itself.
                             if (!isDesktopOrShell)
                             {
                                 uint fgPid = 0;
@@ -1079,6 +1128,21 @@ namespace AirCanvas
                                 if (fgPid == _ownProcessId)
                                 {
                                     isDesktopOrShell = true; // Treat own windows like desktop — use monitor bounds
+                                }
+                                else
+                                {
+                                    try
+                                    {
+                                        Process fgProc = Process.GetProcessById((int)fgPid);
+                                        string pName = fgProc != null ? fgProc.ProcessName.ToLowerInvariant() : "";
+                                        if (pName.Contains("qemu") || pName.Contains("emulator") || pName.Contains("nox") ||
+                                            pName.Contains("dnplayer") || pName.Contains("hd-player") || pName.Contains("bluestacks") ||
+                                            pName.Contains("memu") || pName.Contains("ldplayer") || pName.Contains("androidstudio"))
+                                        {
+                                            isDesktopOrShell = true; // Treat emulator windows like desktop — do NOT inject into emulator itself!
+                                        }
+                                    }
+                                    catch { }
                                 }
                             }
 
@@ -1791,13 +1855,16 @@ namespace AirCanvas
             catch { }
         }
 
-        private void InjectAndDrawInput(double x, double y, double pressure, string eventType, int buttons = 1, int pointerType = 0, string tool = "pen", string colorHex = "#38bdf8", double strokeWidth = 3.0, double clientAspect = 0.0, double tiltX = 0.0, double tiltY = 0.0)
+        private void InjectAndDrawInput(double x, double y, double pressure, string eventType, int buttons = 1, int pointerType = 0, string tool = "pen", string colorHex = "#38bdf8", double strokeWidth = 3.0, double clientAspect = 0.0, double tiltX = 0.0, double tiltY = 0.0, NetworkStream senderStream = null)
         {
             // Clamp normalized coords
             x = Math.Max(0.0, Math.Min(1.0, x));
             y = Math.Max(0.0, Math.Min(1.0, y));
             pressure = Math.Max(0.0, Math.Min(1.0, pressure));
             if (clientAspect > 0.1) lastClientAspect = clientAspect;
+
+            // 0. Real-time direct WebSocket broadcast to connected web drawing studios (100% loss-free, exact center)
+            BroadcastInputEventToWebClients(x, y, pressure, eventType, tool, colorHex, strokeWidth, lastClientAspect, senderStream);
 
             // 1. Draw live on in-app PC Canvas (with aspect ratio preservation and color/tool fidelity)
             DrawOnAppCanvas(x, y, pressure, eventType, tool, colorHex, strokeWidth, lastClientAspect);
@@ -1949,35 +2016,20 @@ namespace AirCanvas
                     return;
                 }
 
-                int pbW = pbCanvas.Width > 0 ? pbCanvas.Width : 420;
-                int pbH = pbCanvas.Height > 0 ? pbCanvas.Height : 530;
-                double aspect = (clientAspect > 0.1) ? clientAspect : lastClientAspect;
-                if (aspect <= 0.1) aspect = 16.0 / 9.0;
+                int pbW = pbCanvas.Width > 0 ? pbCanvas.Width : 445;
+                int pbH = pbCanvas.Height > 0 ? pbCanvas.Height : 552;
 
-                // Compute aspect-ratio contain rectangle inside pbCanvas
-                float drawW, drawH, drawOffsetX, drawOffsetY;
-                if ((double)pbW / pbH > aspect)
-                {
-                    drawH = pbH;
-                    drawW = (float)(drawH * aspect);
-                    drawOffsetX = (pbW - drawW) / 2.0f;
-                    drawOffsetY = 0;
-                }
-                else
-                {
-                    drawW = pbW;
-                    drawH = (float)(drawW / aspect);
-                    drawOffsetX = 0;
-                    drawOffsetY = (pbH - drawH) / 2.0f;
-                }
-
-                float canvasX = drawOffsetX + (float)(x * drawW);
-                float canvasY = drawOffsetY + (float)(y * drawH);
+                // 1:1 Full-canvas mapping for mobile tablet & emulator:
+                // Mobile (0.0, 0.0) -> (0, 0), (1.0, 1.0) -> (pbW, pbH), (0.5, 0.5) -> (CenterX, CenterY)
+                float canvasX = (float)(x * (pbW - 1));
+                float canvasY = (float)(y * (pbH - 1));
+                if (Math.Abs(x - 0.5) < 1e-5) canvasX = pbW / 2.0f;
+                if (Math.Abs(y - 0.5) < 1e-5) canvasY = pbH / 2.0f;
                 PointF currentPt = new PointF(canvasX, canvasY);
 
                 // Proportional stroke width based on canvas dimension
                 float basePenWidth = strokeWidth > 0 ? (float)strokeWidth : 3.0f;
-                float penWidth = Math.Max(1.5f, basePenWidth * (Math.Min(drawW, drawH) / 380.0f) * (float)(0.35f + pressure * 0.65f));
+                float penWidth = Math.Max(1.5f, basePenWidth * (Math.Min(pbW, pbH) / 380.0f) * (float)(0.35f + pressure * 0.65f));
 
                 Color drawColor = Color.FromArgb(56, 189, 248);
                 if (!string.IsNullOrEmpty(colorHex))
@@ -2619,6 +2671,7 @@ namespace AirCanvas
                     {
                         return;
                     }
+                    RegisterWebStream(stream);
 
                     // Send Auth Challenge frame immediately
                     SendWebSocketText(stream, "{\"type\":\"auth_challenge\"}");
@@ -2767,6 +2820,7 @@ namespace AirCanvas
             catch { }
             finally
             {
+                UnregisterWebStream(stream);
                 session.CurrentPenState = PenState.Idle;
                 ReleaseHeldButtonAtCursor();
                 try { if (stream != null) stream.Close(); } catch { }
@@ -2831,7 +2885,7 @@ namespace AirCanvas
                     // Serve full-featured HTML5 Touch Drawing Studio Web App!
                     string html = GetWebDrawingAppHtml();
                     byte[] htmlBytes = Encoding.UTF8.GetBytes(html);
-                    string httpResp = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + htmlBytes.Length + "\r\nConnection: close\r\n\r\n";
+                    string httpResp = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\nContent-Length: " + htmlBytes.Length + "\r\nConnection: close\r\n\r\n";
                     byte[] respHead = Encoding.UTF8.GetBytes(httpResp);
                     stream.Write(respHead, 0, respHead.Length);
                     stream.Write(htmlBytes, 0, htmlBytes.Length);
@@ -3037,7 +3091,7 @@ namespace AirCanvas
             }
             else if (json.Contains("\"type\":\"aircanvas_input\"") || json.Contains("\"type\":\"input\"") || json.Contains("\"type\":\"input_event\""))
             {
-                ParseJsonInputEvent(json, session);
+                ParseJsonInputEvent(json, stream, session);
             }
             else if (json.Contains("\"type\":\"ping\""))
             {
@@ -3101,7 +3155,7 @@ namespace AirCanvas
         }
 
 
-        private void ParseJsonInputEvent(string json, ClientSession session = null)
+        private void ParseJsonInputEvent(string json, NetworkStream stream = null, ClientSession session = null)
         {
             lastPacketTick = Environment.TickCount;
             try
@@ -3110,7 +3164,7 @@ namespace AirCanvas
                 if (json.Contains("\"clear\""))
                 {
                     ReleaseHeldButtonAtCursor();
-                    InjectAndDrawInput(0, 0, 0, "clear", 1, 0);
+                    InjectAndDrawInput(0, 0, 0, "clear", 1, 0, senderStream: stream);
                     return;
                 }
                 if (json.Contains("\"undo\""))
@@ -3321,7 +3375,7 @@ namespace AirCanvas
                                         double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out py);
                                         if (parts.Length >= 3)
                                             double.TryParse(parts[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out pp);
-                                        InjectAndDrawInput(px, py, pp, eventType, buttons, 0, tool, color, strokeWidth, clientAspect);
+                                        InjectAndDrawInput(px, py, pp, eventType, buttons, 0, tool, color, strokeWidth, clientAspect, senderStream: stream);
                                     }
                                     pStart = pEnd + 1;
                                 }
@@ -3381,7 +3435,7 @@ namespace AirCanvas
                     if (clientAspect > 0.05) session.ClientAspect = clientAspect;
                 }
 
-                InjectAndDrawInput(x, y, pressure, eventType, buttons, 0, tool, color, strokeWidth, clientAspect);
+                InjectAndDrawInput(x, y, pressure, eventType, buttons, 0, tool, color, strokeWidth, clientAspect, senderStream: stream);
             }
             catch { }
         }
@@ -3465,7 +3519,7 @@ namespace AirCanvas
                 if (eventType == "clear")
                 {
                     ReleaseHeldButtonAtCursor();
-                    InjectAndDrawInput(0, 0, 0, "clear", 1, 0);
+                    InjectAndDrawInput(0, 0, 0, "clear", 1, 0, senderStream: stream);
                     return true;
                 }
 
@@ -3505,7 +3559,7 @@ namespace AirCanvas
                 }
 
                 lastPacketTick = Environment.TickCount;
-                InjectAndDrawInput(x, y, pressure, eventType, buttons, pointerType, session.Tool, session.ColorHex, session.StrokeWidth, session.ClientAspect, tiltX, tiltY);
+                InjectAndDrawInput(x, y, pressure, eventType, buttons, pointerType, session.Tool, session.ColorHex, session.StrokeWidth, session.ClientAspect, tiltX, tiltY, senderStream: stream);
             }
             catch { }
             return true;
